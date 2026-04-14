@@ -451,3 +451,65 @@ test "comment/multiline 吞至 EOF 与 CRLF 包 \r 值钉；裸 @/单反斜杠�
         try expectTok(t3, s3, 1, .ascii_word, "x");
     }
 }
+
+// 护栏（第 183 轮证伪撤号落位）：`isAsciiWordChar`（L43）零直调增量审计——词边界同族第五面
+// （111 mangle.isIdentByte / 175 diag.translate.isIdentChar / 178 args.isWordCharByte /
+// 179 translate.isAsciiAlphaByte）。L128/L130 词首词内与 L142 `src[i] >= 0x80 or` 组合后
+// 恰为 178 所钉 `[0-9A-Za-z_] ∪ [0x80..0xFF]` 全等集（跨模块对称不变量，本文件不可直测、注此登记）。
+// 关键盲点：既有 9 测皆经 scan 端到端形、**`_` 臂全库零喂入 scan**（demo `.zz` 无 `_`；
+// translate 测 `[_]i64` 系 `[` 后置 `_` 不成词内形且 punct/word 重发文本同形；
+// `zigHasMainFn` 纯行判不经词法器）——`_` 臂失守则 `变量_1`/`a_b` 被拆、CJK+ASCII 尾原子性
+// 与防拼接撞名（L136-140 注）经 `_` 静默失能、无任何防线。另钉恰集边界逐格（ranges 界外一格）。
+test "isAsciiWordChar 全 256 字节 iff 穷举 + 边界点名 + `_` 经 scan 词首/词内/CJK 尾吸收形钉（第 183 轮）" {
+    const gpa = std.testing.allocator;
+
+    // ① 独立 oracle（手写区间判据、与被审函数同款但独立书写）全 256 字节 iff 穷举钉恰集 [0-9A-Za-z_]。
+    var c: u8 = 0;
+    while (true) {
+        const oracle = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or (c == '_');
+        try std.testing.expectEqual(oracle, isAsciiWordChar(c));
+        if (c == 0xFF) break;
+        c += 1;
+    }
+    // ② 逐区间端点与界外一格点名（同 173/178/179 手法：每臂上下界各钉一格）。
+    try std.testing.expect(isAsciiWordChar('0')); // 数字区间下界
+    try std.testing.expect(isAsciiWordChar('9')); // 数字区间上界
+    try std.testing.expect(isAsciiWordChar('A')); // 大写区间下界
+    try std.testing.expect(isAsciiWordChar('Z')); // 大写区间上界
+    try std.testing.expect(isAsciiWordChar('a')); // 小写区间下界
+    try std.testing.expect(isAsciiWordChar('z')); // 小写区间上界
+    try std.testing.expect(isAsciiWordChar('_')); // 独立字符臂
+    try std.testing.expect(!isAsciiWordChar('/')); // 0x2F 数字下界外一格
+    try std.testing.expect(!isAsciiWordChar(':')); // 0x3A 数字上界外一格
+    try std.testing.expect(!isAsciiWordChar('@')); // 0x40 大写下界外一格
+    try std.testing.expect(!isAsciiWordChar('[')); // 0x5B 大写上界外一格
+    try std.testing.expect(!isAsciiWordChar('`')); // 0x60 小写下界外一格
+    try std.testing.expect(!isAsciiWordChar('{')); // 0x7B 小写上界外一格
+    try std.testing.expect(!isAsciiWordChar(0x7F)); // DEL 界外
+    try std.testing.expect(!isAsciiWordChar(0x80)); // 高字节首格归 nonascii 分支、不入本集
+    try std.testing.expect(!isAsciiWordChar(0xFF)); // 高字节末格同上
+    // ③ `_` firing 面经 scan 钉（L128 词首 / L130 词内 / L142 CJK 后吸收尾）——全库此前零喂入形。
+    {
+        const s1 = "a_b"; // ASCII 词内 `_`：一个词元，断开即拆三
+        const t1 = try scan(gpa, s1);
+        defer gpa.free(t1);
+        try std.testing.expectEqual(@as(usize, 1), t1.len);
+        try expectTok(t1, s1, 0, .ascii_word, "a_b");
+    }
+    {
+        const s2 = "_tmp x"; // `_` 词首（Zig 合法下划线开头标识符形）
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try std.testing.expectEqual(@as(usize, 2), t2.len);
+        try expectTok(t2, s2, 0, .ascii_word, "_tmp");
+        try expectTok(t2, s2, 1, .ascii_word, "x");
+    }
+    {
+        const s3 = "变量_1 甲_"; // CJK 名后 `_` 开吸收尾整体一词元（防拆名撞名）
+        const t3 = try scan(gpa, s3);
+        defer gpa.free(t3);
+        try std.testing.expectEqual(@as(usize, 2), t3.len);
+        try expectTok(t3, s3, 0, .nonascii_word, "变量_1");
+        try expectTok(t3, s3, 1, .nonascii_word, "甲_");
+    }
+}
