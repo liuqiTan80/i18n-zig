@@ -2237,3 +2237,100 @@ test "isExtendedDeclNamePos：四分支分发核直调钉——真词流 A/B/C/D
         try std.testing.expectEqualStrings("文本", table.unmangle("z_3").?); // 点后词整词登记为名、绝非类型残体
     }
 }
+
+// 护栏（第 185 轮增量审计·证伪撤号）：`matchAliasChain`（L307·翻译链第 1 步点分别名链贪心匹配核）
+// 系本文件唯一从未被直调的翻译语义函数——109/179/180/184 历轮钉的都是其同分支避让/回扫谓词，
+// 本体零直测直调（调用位仅 L244 nonascii_word 第 1 步）。零喂入坐实：空格分隔链形（doc 注 L305-306
+// 声明「拼接键时忽略空白」）、回溯形（前缀命中+更长 miss 时 best 保留）、ASCII 成员断链（pack L72-73
+// 声明「链止于 ASCII 成员、成员原样保留」）、字符串/非点 punct 断链、尾孤点、链尾恰在词元流末尾
+// （j+1 < toks.len 边界）、初始 miss+扩展 hit（P.丁 形）——皆全库零喂入，既有 e2e 仅紧凑三段全链 hit。
+// 探针即测以本测首跑承担，一次绿坐实真形皆符声明行为→证伪撤号不占 D 号。
+test "matchAliasChain：链贪心匹配核直调钉——初始/扩展/回溯 best 保留 + 空格拼接 + ASCII·字符串·非点断链 + 流尾边界 + 首词防御门 + e2e 空格与回溯形（第 185 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const chain_pack =
+        "[keywords]\n" ++
+        "变量 = var\n" ++
+        "[aliases]\n" ++
+        "甲 = alpha\n" ++
+        "甲.乙 = alpha.beta\n" ++
+        "甲.乙.丙 = alpha.beta.gamma\n" ++
+        "戊.丁 = pascal.q\n";
+    var lang = try Pack.parse(gpa, chain_pack);
+    defer lang.deinit();
+
+    // 直调助手：scan 源后从词元 0（首词元必为非 ASCII 词）起匹配。
+    const M = struct {
+        fn match(g: std.mem.Allocator, l: Pack, s: []const u8) !?ChainMatch {
+            const toks = try lexer.scan(g, s);
+            defer g.free(toks);
+            return matchAliasChain(g, l, s, toks, 0);
+        }
+        fn hit(g: std.mem.Allocator, l: Pack, s: []const u8, last: usize, repl: []const u8) !void {
+            const m = (try match(g, l, s)).?;
+            try std.testing.expectEqual(last, m.last);
+            try std.testing.expectEqualStrings(repl, m.repl);
+        }
+        fn miss(g: std.mem.Allocator, l: Pack, s: []const u8) !void {
+            try std.testing.expect((try match(g, l, s)) == null);
+        }
+    };
+
+    // ---- 初始单段 hit（后继词元 `=` 非 `.`、链不扩展）----
+    try M.hit(gpa, lang, "甲 = 1;", 0, "alpha");
+    // ---- 初始 miss（表无此单段词、无扩展）----
+    try M.miss(gpa, lang, "子 = 1;");
+    // ---- 两段 hit（紧凑链·loop 内扩展更新 best）----
+    try M.hit(gpa, lang, "甲.乙", 2, "alpha.beta"); // 链尾恰在流末尾：j+1<toks.len 边界形
+    // ---- 三段全链 hit ----
+    try M.hit(gpa, lang, "甲.乙.丙;", 4, "alpha.beta.gamma");
+    // ---- 回溯形：更长 miss、前缀 best 保留（贪心最长命中的独防形·全库零喂入）----
+    try M.hit(gpa, lang, "甲.乙.东", 2, "alpha.beta");
+    try M.hit(gpa, lang, "甲.乙.丙.东", 4, "alpha.beta.gamma");
+    // ---- 初始 miss + 扩展 hit（首段无键、两段有键）----
+    try M.hit(gpa, lang, "戊.丁)", 2, "pascal.q");
+    // ---- 空格分隔链形（doc 注声明「拼接键时忽略空白」·全库零喂入）----
+    try M.hit(gpa, lang, "甲 . 乙", 2, "alpha.beta");
+    // ---- 断链形：非 `.` punct / ASCII 成员 / 字符串词元 ----
+    try M.hit(gpa, lang, "甲 + 乙", 0, "alpha");
+    try M.hit(gpa, lang, "甲.乙.std)", 2, "alpha.beta"); // pack L72-73 声明形：链止于 ASCII 成员
+    try M.hit(gpa, lang, "甲.\"令\"", 0, "alpha");
+    // ---- 尾孤点（`j + 1 < toks.len` 假臂坠出、单段 best 保留）----
+    try M.hit(gpa, lang, "甲.", 0, "alpha");
+    // ---- 首词防御门：非 nonascii_word 直返 null（生产调用位不可达、防御形钉）----
+    {
+        const s = ".甲";
+        const toks = [_]lexer.Token{
+            .{ .kind = .punct, .off = 0, .len = 1 },
+            .{ .kind = .nonascii_word, .off = 1, .len = 3 },
+        };
+        try std.testing.expect((try matchAliasChain(gpa, lang, s, &toks, 0)) == null);
+    }
+    {
+        const s = "x.甲";
+        const toks = [_]lexer.Token{
+            .{ .kind = .ascii_word, .off = 0, .len = 1 },
+            .{ .kind = .punct, .off = 1, .len = 1 },
+            .{ .kind = .nonascii_word, .off = 2, .len = 3 },
+        };
+        try std.testing.expect((try matchAliasChain(gpa, lang, s, &toks, 0)) == null);
+    }
+
+    // ---- e2e 行为钉：回溯形（前缀链替换 + 尾段照旧走第 2/3 步）----
+    {
+        var table = Mangle.init(gpa);
+        defer table.deinit();
+        const res = try translate(gpa, "变量 n = 甲.乙.东;\n", lang, &table);
+        try std.testing.expectEqualStrings("var n = alpha.beta.z_1;\n", res.zig_str);
+        try std.testing.expectEqualStrings("东", table.unmangle("z_1").?);
+    }
+    // ---- e2e 行为钉：空格分隔链形（替换跨空白、链内空白被吞）----
+    {
+        var table = Mangle.init(gpa);
+        defer table.deinit();
+        const res = try translate(gpa, "变量 n = 甲 . 乙;\n", lang, &table);
+        try std.testing.expectEqualStrings("var n = alpha.beta;\n", res.zig_str);
+    }
+}
