@@ -3,6 +3,7 @@
 //! 主程序侧保留同名封装绑定 `io_`/`gpa_` 全局、并把超限反馈为母语提示，调用点零改动。
 
 const std = @import("std");
+const builtin = @import("builtin");
 const Io = std.Io;
 const translate = @import("transpiler/translate.zig");
 
@@ -146,7 +147,54 @@ test "pathIsSymlink：普通文件与不存在路径均回 false（R8 守卫假�
     try std.testing.expect(!pathIsSymlink(io, probe));
     // 不存在路径保守回 false（交后续 readFileRaw catch-continue 处理）。
     try std.testing.expect(!pathIsSymlink(io, ".zig-cache/zzc_no_such_link_xyz"));
-    // 边界：真符号链接→true 分支需 POSIX/管理员权限造链接，Windows 环内不可靠、不在此测（同台账 R8 真链接面待验）。
+    // 真符号链接→true 分支系 POSIX 面：另见下方「pathIsSymlink 真链接」平台门控测（第 177 轮消台账 R8 真链接面待验）。
+}
+
+// 护栏（第 177 轮·消台账 R8「真链接→true 分支待验」）：上方测仅钉 pathIsSymlink 的两条**假分支**
+// （普通文件 / 不存在路径）；`.sym_link == true` 这条**正分支**历轮因「Windows 非管理员建链接不可靠」
+// 而挂起为待验——恰是 stageEmbedAssets 拒拷「树内链接指向树外」赖以生效的判据，全仓零 fired。
+// 本环境为 POSIX：以平台门控（Windows 早退、ubuntu CI 矩阵真跑）建**真实符号链接**永久锁死该支。
+// load-bearing 反证：把 statFile 的 `follow_symlinks = false` 误改为 `true` → 跟随链接见其目标（普通文件）
+// → kind 不为 .sym_link → 本测 `expect(true)` 即红（证本测确实钉的是「不跟随地认出链接本体」这一语义、非空跑）。
+test "pathIsSymlink：POSIX 真符号链接→true（链接指向文件/目录/悬空皆 .sym_link；目标本体为假；R8 真链接面）" {
+    if (builtin.os.tag == .windows) return; // 非管理员建链接不可靠——跳过以保 windows CI 矩阵绿
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
+    const base = ".zig-cache/zzc_r177";
+    const target = base ++ "/real.txt"; // 工程内真实文件（链接目标）
+    const link_file = base ++ "/link_to_file"; // 指向上面真实文件的链接
+    const link_dir = base ++ "/link_to_dir"; // 指向目录的链接（main.zig「树内链接指向树外」最危险形）
+    const link_dangling = base ++ "/link_dangling"; // 悬空链接（目标不存在仍应是 .sym_link）
+    const dir_target = base ++ "/adir";
+
+    // 清历史残留，使前置确定性成立。
+    cwd.deleteFile(io, link_file) catch {};
+    cwd.deleteFile(io, link_dir) catch {};
+    cwd.deleteFile(io, link_dangling) catch {};
+    cwd.deleteTree(io, dir_target) catch {};
+    cwd.deleteFile(io, target) catch {};
+    cwd.deleteTree(io, base) catch {};
+    defer cwd.deleteTree(io, base) catch {};
+
+    try writeWhole(io, target, "real"); // 建目录 + 真实文件
+    try cwd.createDirPath(io, dir_target);
+
+    // ① 指向文件的链接 → pathIsSymlink true（正分支首次 fired）。
+    try cwd.symLink(io, target, link_file, .{});
+    try std.testing.expect(pathIsSymlink(io, link_file));
+    // ② 链接的**目标本体**（普通文件）仍为 false——证判据认的是「这个路径本身是不是链接」，
+    //    非「路径是否可达文件」；误把 follow_symlinks=true 时 link_file 会被读成 real.txt→false。
+    try std.testing.expect(!pathIsSymlink(io, target));
+    // ③ 指向目录的链接 → true（main 的拒拷守卫正是要拦这一「树内链接指向树外」形）。
+    try cwd.symLink(io, dir_target, link_dir, .{ .is_directory = true });
+    try std.testing.expect(pathIsSymlink(io, link_dir));
+    // ④ 悬空链接（目标不存在）→ 仍 true：`follow_symlinks=false` 的 lstat 只认链接元数据、
+    //    不要求目标存在；这条钉死「不存在路径保守回 false」与「链接指向不存在回 true」的边界分野。
+    try cwd.symLink(io, base ++ "/no_such_target", link_dangling, .{});
+    try std.testing.expect(pathIsSymlink(io, link_dangling));
 }
 
 test "D37：readWhole 编码封口错误路径不泄已分配缓冲（裸 testing.allocator 直调·不 arena 包裹）" {
