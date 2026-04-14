@@ -431,3 +431,97 @@ test "snippets.isLanguageConstant：恰四真 + near-miss 全假（第 168 轮�
     asserts += 1;
     std.debug.print("T4 asserts={d}\n", .{asserts});
 }
+
+// 第 187 轮审计注：`entryLess`（L49·sort 比较器）系 168 轮钉尽同文件 classify/
+// snippetBodyStr/jsonEscape/jsonStr/isLanguageConstant、155 轮四枚 generate e2e 落位后，
+// 唯一仍零直调的核。既有 generate 测全序盲——合法性/确定性（两次生成自比，排序摘除仍复现
+// 一致）/键唯一/空包四测皆不钉条目先后；且 check-editor-snippets 系独立 CI step 不入
+// zig build test（同 186 轮 check-editor-syntax 形制）——排序方向/字段选错/大小写折叠诸变异
+// 于既有测试面皆漏抓。探针即测以本测首跑承担，一次绿坐实真形皆符声明→证伪撤号不占 D 号。
+test "snippets.entryLess：直调钉——对象键字节升序比较器契约 + sort 接线 + e2e 序位（第 187 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var asserts: usize = 0;
+
+    const T = struct {
+        fn e(name: []const u8, word: []const u8) Entry {
+            return .{ .name = name, .word = word, .group = "组", .value = "值" };
+        }
+        // 独立 oracle：手写逐字节升序（不依赖 std.mem.lessThan，钉比较器语义定义性）。
+        fn oracleLess(a: []const u8, b: []const u8) bool {
+            const n = @min(a.len, b.len);
+            var i: usize = 0;
+            while (i < n) : (i += 1) {
+                if (a[i] != b[i]) return a[i] < b[i];
+            }
+            return a.len < b.len;
+        }
+    };
+
+    // ---- 自反性 + 名同即等价（word/group/value 异字段不参与比较，双向皆假）----
+    try testing.expect(!entryLess({}, T.e("k", "甲"), T.e("k", "甲")));
+    asserts += 1;
+    try testing.expect(!entryLess({}, T.e("k", "甲"), T.e("k", "乙")));
+    asserts += 1;
+    try testing.expect(!entryLess({}, T.e("k", "乙"), T.e("k", "甲")));
+    asserts += 1;
+
+    // ---- 独立 oracle iff 穷举：11 名全交叉 121 对（空前缀/前缀形/大小写/高字节/CJK）----
+    const names = [_][]const u8{
+        "", "a", "aa", "ab", "b", "B", "kw-a", "kw-B", "kw-\xFF",
+        "kw-甲",
+        "al-标准库.调试",
+    };
+    for (names) |x| {
+        for (names) |y| {
+            try testing.expectEqual(T.oracleLess(x, y), entryLess({}, T.e(x, "w"), T.e(y, "w")));
+            asserts += 1;
+        }
+    }
+
+    // ---- 点名语义钉：命名空间隔离 `al-`<`kw-`；前缀形短者先；大小写边界字节序
+    //      `B`(0x42)<`a`(0x61)（防「顺手大小写折叠」——现包 ASCII 成员恒小写、折叠形
+    //      生产不可观测·真隐缝）；CJK 按 UTF-8 字节序 乙(U+4E59 E4..)<甲(U+7532 E7..)--
+    try testing.expect(entryLess({}, T.e("al-x", "x"), T.e("kw-y", "y")));
+    asserts += 1;
+    try testing.expect(!entryLess({}, T.e("kw-y", "y"), T.e("al-x", "x")));
+    asserts += 1;
+    try testing.expect(entryLess({}, T.e("kw-a", "a"), T.e("kw-aa", "aa")));
+    asserts += 1;
+    try testing.expect(entryLess({}, T.e("kw-B", "B"), T.e("kw-a", "a")));
+    asserts += 1;
+    try testing.expect(entryLess({}, T.e("kw-乙", "乙"), T.e("kw-甲", "甲")));
+    asserts += 1;
+
+    // ---- sort 接线钉：乱序四条目经 std.mem.sort(Entry, …, entryLess) 归正字节升序----
+    var list = [_]Entry{ T.e("kw-甲", "甲"), T.e("kw-b", "b"), T.e("al-z", "z"), T.e("kw-乙", "乙") };
+    std.mem.sort(Entry, &list, {}, entryLess);
+    try testing.expectEqualStrings("al-z", list[0].name);
+    asserts += 1;
+    try testing.expectEqualStrings("kw-b", list[1].name);
+    asserts += 1;
+    try testing.expectEqualStrings("kw-乙", list[2].name);
+    asserts += 1;
+    try testing.expectEqualStrings("kw-甲", list[3].name);
+    asserts += 1;
+
+    // ---- e2e 序位钉：经 generate 钉条目在输出字节中的先后（补既有四 generate 测序盲面）----
+    var lang = try Pack.parse(gpa,
+        \\ [keywords]
+        \\ 甲 = var
+        \\ 乙 = var
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+        \\
+    );
+    defer lang.deinit();
+    const json_bytes = try generate(gpa, lang);
+    defer gpa.free(json_bytes);
+    const p_al = std.mem.indexOf(u8, json_bytes, "\"al-标准库.调试\"") orelse return error.MissingAl;
+    const p_yi = std.mem.indexOf(u8, json_bytes, "\"kw-乙\"") orelse return error.MissingKwYi;
+    const p_jia = std.mem.indexOf(u8, json_bytes, "\"kw-甲\"") orelse return error.MissingKwJia;
+    try testing.expect(p_al < p_yi and p_yi < p_jia); // al- 先、CJK 字节序乙先甲后
+    asserts += 1;
+    std.debug.print("T1 asserts={d}\n", .{asserts});
+}
