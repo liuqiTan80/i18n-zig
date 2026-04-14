@@ -1864,3 +1864,233 @@ test "isPunctAt 四守卫 + prevIsColon i==0 下溢门：合成词元与真词�
         try std.testing.expect(!prevIsColon(s, toks, 2));
     }
 }
+
+// 护栏（第 180 轮增量审计·证伪撤号）：`isImportOperand`（L43·D2 `.zz`→`.zig` 改写只作用导入
+// 参数面的判定核：`(` punct 三门 + 非 ASCII 词形 keywords→aliases **两级**回退 + 直通 `@` `import`
+// 形 i>=3 门）、`prevIsDeclKeyword`（L76·D1 声明位避让上层：i==0 门 + 非 ASCII 查 keywords **单级**
+// /ASCII 原文两路）、`mappedIs`（L127·D42 组首领 enum/union/error 与 D47 入口位前词 fn 的共享核，
+// 同 keywords-only）与 `punctChar`（L138·179 轮 isPunctAt 同族四守卫的 `?u8` 返回变体，109 轮仅
+// 推演证伪）皆同文件私有纯谓词、全库零直调（grep 坐实仅 L285/L261+L896/L207+L269/L154+L172+L202
+// 生产位内部调用）。关键缺口：①`isImportOperand` 的 `orelse lang.aliases.get(hw)` fallback 臂——现网
+// zh 包 `导入 = @import` 居 [keywords] 段（包 L110-111 明注「刻意为之」），此臂于任何现包/端到端测
+// 恒不 fired，真隐缝，唯合成包 aliases 形可钉；②其与 prevIsDeclKeyword/mappedIs 的**查链不对称契约**
+// （后二者 keywords-only、词在 aliases 亦拒）从未两面对钉——「顺手统一」三查链即让别名链吞掉声明位
+// 避让语义；③直通形 i>=3 门（裸 `import("x")` 于 i==2 必拒、防 toks[i-3] 下溢回读）零钉；④punctChar
+// 越界/词类/多字符/空文本四臂唯合成词元可 fired。探针先行即以本测首跑承担，一次绿坐实真形皆符
+// 声明行为、无在线缺陷→不占 D 号（同 111/170-179 判例）。
+test "isImportOperand：aliases fallback 臂（现包恒不 fired·真隐缝）+ 直通 i>=3 门 + `(` 三门（D2 改写判定核，第 180 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 方言形 `导入("x")`：非 ASCII 词 keywords 命中 `@import` → 字符串词元位 true。
+    {
+        const s = "导入(\"x\")";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 4), toks.len); // 导入 | ( | "x" | )
+        try std.testing.expect(isImportOperand(lang, s, toks, 2));
+        // i<2 下溢门：前两词元不回读 toks[i-1]/toks[i-2]。
+        try std.testing.expect(!isImportOperand(lang, s, toks, 0));
+        try std.testing.expect(!isImportOperand(lang, s, toks, 1));
+    }
+    // `(` 词类门：字符串紧邻前词为非 punct 词元（`变量 导入 "x"`）→ false、不达查表。
+    {
+        const s = "变量 导入 \"x\"";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isImportOperand(lang, s, toks, 2));
+    }
+    // 直通形 `@import("x")`（词流 @ | import | ( | "x" | )、与 114 轮分词护栏交叉）；裸 `import(`
+    // 于 i==2 坠 i>=3 门拒（toks[i-3] 下溢防御）；`x import("s")` 的 i-3 位非 `@` 拒（词类+字符门）。
+    {
+        const s = "@import(\"x\")";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isImportOperand(lang, s, toks, 3));
+        const s2 = "import(\"x\")";
+        const toks2 = try lexer.scan(gpa, s2);
+        defer gpa.free(toks2);
+        try std.testing.expect(!isImportOperand(lang, s2, toks2, 2));
+        const s3 = "x import(\"s\")";
+        const toks3 = try lexer.scan(gpa, s3);
+        defer gpa.free(toks3);
+        try std.testing.expect(!isImportOperand(lang, s3, toks3, 3));
+    }
+    // aliases fallback 臂（真隐缝）：zh 包 `导入` 居 keywords 段、现网形恒不 fired 此臂——
+    // 合成包词形只入 [aliases] 映射 `@import`，钉其被回退命中（非 zh 包合法形制、D2 改写门对该包生效）。
+    {
+        const synthetic =
+            \\$name = eo
+            \\$code = eo
+            \\[aliases]
+            \\导入 = @import
+        ;
+        var lang2 = try Pack.parse(gpa, synthetic);
+        defer lang2.deinit();
+        const s = "导入(\"x\")";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isImportOperand(lang2, s, toks, 2));
+    }
+    // 查表命中但映射值非 `@import`：全等门拒（`kusto = const`）。
+    {
+        const synthetic =
+            \\$name = ii
+            \\$code = ii
+            \\[keywords]
+            \\kusto = const
+        ;
+        var lang3 = try Pack.parse(gpa, synthetic);
+        defer lang3.deinit();
+        const s = "kusto(\"x\")";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isImportOperand(lang3, s, toks, 2));
+    }
+}
+
+test "prevIsDeclKeyword：D1 避让查链两形——非 ASCII keywords-only（与 isImportOperand 两级回退不对称）+ i==0 门 + ASCII 直通恰集流转（第 180 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // `常数 x 变量 y 函数 f`：三声明词后各 true；声明词自身居非 ASCII 词后（x）走 isDeclVerb("x")
+    // 假；i==0 下溢门假。
+    {
+        const s = "常数 x 变量 y 函数 f";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 6), toks.len);
+        try std.testing.expect(prevIsDeclKeyword(lang, s, toks, 1));
+        try std.testing.expect(prevIsDeclKeyword(lang, s, toks, 3));
+        try std.testing.expect(prevIsDeclKeyword(lang, s, toks, 5));
+        try std.testing.expect(!prevIsDeclKeyword(lang, s, toks, 2));
+        try std.testing.expect(!prevIsDeclKeyword(lang, s, toks, 0));
+    }
+    // ASCII 直通：`const x` true（原文进 isDeclVerb 同一恰集核）；`pub x` false（超集防卫流转）。
+    {
+        const s = "const x pub f";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(prevIsDeclKeyword(lang, s, toks, 1));
+        try std.testing.expect(!prevIsDeclKeyword(lang, s, toks, 3));
+    }
+    // 前词 punct/其它词类 → 两 if 皆不中、末端 false。
+    {
+        const s = "= x";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!prevIsDeclKeyword(lang, s, toks, 1));
+    }
+    // keywords-only 不对称契约：词形只入 [aliases]（`甲 = const`）→ keywords 查空即返 false、
+    // **不回退 aliases**（isImportOperand 反形）——若误加回退即吞掉声明位避让语义（别名链无条件先行）。
+    {
+        const synthetic =
+            \\$name = eo
+            \\$code = eo
+            \\[aliases]
+            \\甲 = const
+        ;
+        var lang2 = try Pack.parse(gpa, synthetic);
+        defer lang2.deinit();
+        const s = "甲 x";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!prevIsDeclKeyword(lang2, s, toks, 1));
+    }
+}
+
+test "mappedIs：词元映射值目标词全等——非 ASCII keywords-only / ASCII 全等 / 非词类拒（D42·D47 共享核，第 180 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    {
+        const s = "枚举 enumx";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        // 包内 `枚举 = enum`：命中目标词 true、异目标词/短前缀 false；ASCII 近邻超串全等拒。
+        try std.testing.expect(mappedIs(lang, s, toks[0], "enum"));
+        try std.testing.expect(!mappedIs(lang, s, toks[0], "union"));
+        try std.testing.expect(!mappedIs(lang, s, toks[0], "enu"));
+        try std.testing.expect(!mappedIs(lang, s, toks[1], "enum"));
+    }
+    {
+        const s = "enum 枚举";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        // ASCII 直通原文全等 true（D42 形：直通 `enum` 首领亦入避让判定）。
+        try std.testing.expect(mappedIs(lang, s, toks[0], "enum"));
+    }
+    // 词类门（合成方钉）：punct 词元指向 "enum" 字节 → false（仅词类可查、与文本碰巧相等无关）。
+    {
+        const s = "enum";
+        const toks = [_]lexer.Token{.{ .kind = .punct, .off = 0, .len = 4 }};
+        try std.testing.expect(!mappedIs(lang, s, toks[0], "enum"));
+    }
+    // keywords-only：词形只入 [aliases] → 不回退 aliases（与 isImportOperand 不对称契约同面二钉）。
+    {
+        const synthetic =
+            \\$name = eo
+            \\$code = eo
+            \\[aliases]
+            \\枚举 = enum
+        ;
+        var lang2 = try Pack.parse(gpa, synthetic);
+        defer lang2.deinit();
+        const s = "枚举";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!mappedIs(lang2, s, toks[0], "enum"));
+    }
+}
+
+test "punctChar：?u8 返回形单 punct 判据——越界/词类/多字符/空文本四臂合成直钉 + 真词流基线（回扫配对共享核，第 180 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    // 合成词元钉四防御臂（真 lexer 流永不产这些形、179 轮同族形）。
+    {
+        const s = ":->:"; // 0 ':' | 1..2 "->"（多字符 punct）| 3 ':'（ascii_word 含冒号）
+        const toks = [_]lexer.Token{
+            .{ .kind = .punct, .off = 0, .len = 1 },
+            .{ .kind = .punct, .off = 1, .len = 2 },
+            .{ .kind = .ascii_word, .off = 3, .len = 1 },
+            .{ .kind = .punct, .off = 0, .len = 0 }, // 空文本 punct：s.len == 1 不满足
+        };
+        try std.testing.expectEqual(@as(?u8, ':'), punctChar(&toks, s, 0)); // 基线命中返字符本体
+        try std.testing.expectEqual(@as(?u8, null), punctChar(&toks, s, 1)); // 多字符 len 门
+        try std.testing.expectEqual(@as(?u8, null), punctChar(&toks, s, 2)); // 词类门
+        try std.testing.expectEqual(@as(?u8, null), punctChar(&toks, s, 4)); // 越界 k>=len
+        try std.testing.expectEqual(@as(?u8, null), punctChar(&toks, s, 3)); // 空文本
+        const empty: []const lexer.Token = &.{};
+        try std.testing.expectEqual(@as(?u8, null), punctChar(empty, s, 0)); // 空词流
+    }
+    // 真词流基线：单字符 punct 返字符、词元位 null；CJK 全角标点（多字节 punct 或其它词类）
+    // 恒不落单字符语义——两面皆 null、如实登记非择一分支钉。
+    {
+        const s = "(x)";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(?u8, '('), punctChar(toks, s, 0));
+        try std.testing.expectEqual(@as(?u8, ')'), punctChar(toks, s, 2));
+        try std.testing.expectEqual(@as(?u8, null), punctChar(toks, s, 1));
+    }
+    {
+        const s = "。";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(?u8, null), punctChar(toks, s, 0));
+    }
+}
