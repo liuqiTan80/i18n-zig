@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack;
+const zzc_paths = @import("../zzc_paths.zig");
 
 const zh_pack = @embedFile("../lang/packs/中文.txt");
 
@@ -50,7 +51,10 @@ pub const Whitelist = struct {
 /// 全库测试仍绿，因该字段零消费者；而改 main 侧字面量则 192 块抓红），同时
 /// `docs/纯母语过滤器架构设计.md` 又把该字段作为可配项公开。现两侧同取本常量，双源漂移面消除；
 /// 实例级生效边界见 `Config.log_path` 注。
-pub const default_log_path: []const u8 = "logs/untranslated_phrases.json";
+/// 第 202 轮 D70 再下沉一层：目录段与文件名改取 `zzc_paths` 的落盘族真值（编译期拼接、产物字节不变）——
+/// 该路径的**目录段**必须与仓根 `.gitignore` 的忽略面条目对得上，否则我方落盘产物会出现在 `git status` 里；
+/// 族根真值与跨文件覆盖自此归一管（判据见 `zzc_paths.dirIgnored`，守卫见 `zig build check-ignore-coverage`）。
+pub const default_log_path: []const u8 = zzc_paths.logs_dir ++ "/" ++ zzc_paths.log_file_name;
 
 /// 纯母语过滤器配置
 pub const Config = struct {
@@ -682,9 +686,11 @@ test "第 197 轮 T1 未翻译落盘路径单一真值：真值字面量钉 + Co
     // A2 Config 默认与真值同源：有人把默认写回独立字面量且值不同即红（双源漂移面的运行侧防线）。
     try std.testing.expectEqualStrings(default_log_path, (Config{}).log_path);
 
-    // A3 路径形制契约：相对 cwd、正斜杠、`logs/` 目录段——三条各有跨面依赖：`.gitignore` 以 `logs/`
-    //   条目兼容、`file_io.writeWhole` 自动建父目录只对**相对**路径与正斜杠分段成立、`main.zig` 192 T1
-    //   的回清走 `cwd().deleteTree("logs")`。真值被改成绝对路径/反斜杠/换目录则此处先红。
+    // A3 路径形制契约：相对 cwd、正斜杠、`logs/` 目录段——三条各有跨面依赖：`logs/` 目录段须与仓根
+    //   `.gitignore` 的忽略条目对得上（该跨文件耦合自 202 轮 D70 由 `zig build check-ignore-coverage` 守卫，
+    //   旧注仅口头声明、全仓无测读过该文件，已据实更正）、`file_io.writeWhole` 自动建父目录只对**相对**
+    //   路径与正斜杠分段成立、测图内的落盘点经 198 轮 D66 的 seam 覆写到进程私有根（`/tmp/zzc198-log-`，
+    //   **不是** `logs`）以免并跑进程互删。真值被改成绝对路径/反斜杠/换目录则此处先红。
     try std.testing.expect(std.mem.startsWith(u8, default_log_path, "logs/"));
     try std.testing.expect(std.mem.indexOfScalar(u8, default_log_path, '\\') == null);
     try std.testing.expect(!std.fs.path.isAbsolute(default_log_path));

@@ -2555,3 +2555,23 @@ test "第 198 轮 T1 状态路径 seam 契约：起始态/默认真值字面量�
     flushUntranslated();
     try std.testing.expect(!pathExists(lpath));
 }
+
+test "第 202 轮 T1 真实落盘默认路径 ∈ 落盘族清单：守卫核对集不漏生产产物 + 两族根分流" {
+    // A1/A2 组合锚（199/200/201 的配对契约形制：经成员核对而非同值引用）：
+    //   `zig build check-ignore-coverage` 只核 `zzc.disk_family` 里的成员，故 main 层**真正落盘**的两条默认
+    //   路径必须在清单内——生产侧若把目录段写回独立字面量并改名（或新增落盘面不登清单），该产物就此游离
+    //   在忽略面核对之外、只以脏工作树形制现形，本锚先红。
+    for ([_][]const u8{ symbols_path_default, untranslated_log_path_default }) |p| {
+        var hit = false;
+        for (zzc.disk_family) |q| {
+            if (std.mem.eql(u8, p, q)) hit = true;
+        }
+        try std.testing.expect(hit);
+    }
+
+    // A3 两族根分流（字面量判据、不引常量）：符号表落**内部树** `.zzc`（对用户隐藏、由 `isInternalPath`
+    //   过滤），未翻译清单落**可见产出面** `logs`（CI/语言包作者在仓外读该清单）。两者归到同一根即要么
+    //   把内部位置泄给方言用户、要么让对外契约的产出面消失，本钉把这条分流写死。
+    try std.testing.expectEqualStrings(".zzc", std.fs.path.dirname(symbols_path_default).?);
+    try std.testing.expectEqualStrings("logs", std.fs.path.dirname(untranslated_log_path_default).?);
+}

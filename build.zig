@@ -108,6 +108,27 @@ pub fn build(b: *std.Build) void {
     const check_snip_run = b.addRunArtifact(gen_snippets_exe);
     check_snip_run.addArg("check");
     check_snippets_step.dependOn(&check_snip_run.step);
+
+    // 第 202 轮 D70：落盘族 ↔ 仓根 `.gitignore` 覆盖守卫（跨文件同步守卫形制，同上面的 syntax/snippets）。
+    // 为什么必须是独立构建步而不是测试图内读盘：`@embedFile("../.gitignore")` 被 zig 0.17 的 module 包路径
+    // 拦死（包路径＝模块根源文件目录 `src/`，报 `embed of file outside package path`），而测试里 `cwd()` 偷读
+    // 的文件不入构建步骤清单——改忽略面不会触发重跑，即 202 t2 探针 P3 实锤的假绿形制。`addFileArg` 会把该
+    // 文件的内容哈希计入本步依赖，忽略面一变即重跑并转红；本步挂在 `test` 上，故 CI 的 `zig build test` 即覆盖。
+    const check_ignore_exe = b.addExecutable(.{
+        .name = "check-ignore-coverage",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check/ignore_coverage_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+
+    const check_ignore_step = b.step("check-ignore-coverage", "校验 .gitignore 覆盖我方落盘族（CI 守卫）");
+    const check_ignore_run = b.addRunArtifact(check_ignore_exe);
+    check_ignore_run.addFileArg(b.path(".gitignore"));
+    check_ignore_step.dependOn(&check_ignore_run.step);
+    test_step.dependOn(&check_ignore_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②）

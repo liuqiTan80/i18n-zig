@@ -25,6 +25,25 @@
 //! 单点破坏后 505/505 全绿）。后果面是写/读配对契约断裂：`cmdInit` 按自己的字面量建工程、`pickEntry`
 //! 按另一枚字面量认工程，两者一旦漂移，新建工程跑 `zzc run`/`zzc check` 即报「找不到工程目录/未找到
 //! 方言源文件」——报错指向目录而非指向失配的字面量，用户无从看出是自己用法问题还是工具坏了。
+//!
+//! 第 202 轮 D70 再并**忽略面**一维：族根（`.zzc`、`logs`）改名、或仓根 `.gitignore` 删掉对应条目，两侧都
+//! 不报错也不转红，只让我方落盘的产物从此出现在 `git status` 里（脏工作树、易被误提交）。旧形制下该耦合
+//! 仅在 197 轮 T1 的注释里被**口头声明**为既有依赖（「`.gitignore` 以 `logs/` 条目兼容」）而全仓无任何测读过
+//! 该文件。t2 探针实锤（`.scratch202/probe202.sh`）：P1 把 `logs` 整体改名（含 5 枚字面量钉同步）→ 509/509
+//! 全绿；P2 删 `.gitignore` 的 `logs/` 条目 → 全绿；P3 把 `**/.zzc/` 改名 → 全绿且测数行为**空**（该文件不是
+//! source dependency，`zig build test` 直接复用旧测试二进制、根本不重跑）；P4 只改真值 → 3 红（值侧原有钉）。
+//!
+//! 治法分两段（受一条硬约束所迫，本轮实跑坐实）：`@embedFile` 在 zig 0.17 里被 module **包路径**拦住——包路径
+//! 即模块根源文件所在目录（`src/`），`@embedFile("../.gitignore")` 无论走 build 系统还是直跑 `zig test` 都报
+//! `embed of file outside package path`，故「编译期内嵌忽略面」不可行；而测试图内 `cwd()` 运行期读盘虽能读到，
+//! 却复制 P3 的失效形制（运行期偷读的文件不入步骤清单，改它不会触发重跑＝假绿）。于是：
+//! - **值与形制**入测试图：本模块持落盘族清单 `disk_family` 与纯判据 `dirIgnored`，T0 钉住族根值、清单形制
+//!   （全员相对、正斜杠、首段必落在族根集内）与判据边界（三形目录规则各一枚命中、注释/无尾斜杠/近名/空输入不命中）；
+//!   `main.zig` 的 202 T1 钉住「真实落盘默认路径的目录段 ∈ `disk_family`」——生产侧产物入清单，不留漏项通道。
+//! - **跨文件覆盖**入构建守卫：`zig build check-ignore-coverage`（并挂在 `test` 步上，CI 即跑）以
+//!   `Run.addFileArg(b.path(".gitignore"))` 声明文件依赖——内容变更进步骤清单、必重跑；程序吃真忽略面对
+//!   `disk_family` 全员assert覆盖、并对源码目录 assert 不被覆盖。此即本仓既有的「跨文件同步守卫」形制
+//!   （154/155 轮 `check-editor-syntax`/`check-editor-snippets` 同构），探针 P2/P3 从此在该通道转红。
 
 const std = @import("std");
 
@@ -52,6 +71,42 @@ pub const check_root: []const u8 = root ++ "/tmp_check_root";
 /// 上者的完整 zig 旗标形（`-femit-bin=` 前缀与路径同源，不另立字面量）。
 pub const check_root_flag: []const u8 = "-femit-bin=" ++ check_root;
 
+/// 未翻译清单落盘目录的根（相对当前工作目录）——与 `root` 并列的**第二族根**（第 202 轮 D70）：
+/// `root` 树是我方内部状态/产物（对用户隐藏），本树是**用户/CI 可见的产出面**（语言包作者与 CI 在仓外
+/// 读该清单）。旧形制下该目录段只存于 `pure_filter.default_log_path` 一枚字面量里，而它与仓根
+/// `.gitignore` 的 `logs/` 条目构成跨文件耦合：改目录段（或删忽略条目）都不报错，只让我方落盘产物
+/// 从此出现在 `git status` 里（脏工作树、易被误提交）。t2 探针实锤（`.scratch202/probe202.sh`）：
+/// P1 把 `logs` 整体改为 `logz`（连同 197/198 四轮共 5 枚字面量钉同步）→ **509/509 全绿**；
+/// P2 删除 `.gitignore` 的 `logs/` 条目 → **全绿**；P3 把 `**/.zzc/` 改名为 `**/zzcx/` → **全绿**；
+/// P4 只改真值不改钉 → 3 红（值侧原有钉，本轮新增的是**忽略面耦合**防线）。
+/// 即：两侧任一脱离都不报错、不转红，全仓无任何测试读过 `.gitignore`。
+pub const logs_dir: []const u8 = "logs";
+
+/// 未翻译清单文件名（`logs_dir` 下的落点名；`pure_filter.default_log_path` 自此派生，第 197 轮 D64 的公开面位置不动）。
+pub const log_file_name: []const u8 = "untranslated_phrases.json";
+
+/// 我方**落盘族**全员（第 202 轮 D70）：凡我方会在工程根写出的目录/文件路径都须列在此处，
+/// 由 `zig build check-ignore-coverage` 逐个核对是否被仓根 `.gitignore` 覆盖——清单本身是守卫的输入，
+/// 故新增成员即自动进入覆盖核对；测试图另以「首段必落在族根集内」钉住其形制（202 T0 A2）。
+pub const disk_family = [_][]const u8{
+    root,
+    gen_dir,
+    gen_dir_prefix,
+    bin_dir,
+    lang_dir,
+    symbols_file,
+    check_root,
+    logs_dir,
+    logs_dir ++ "/" ++ log_file_name,
+};
+
+/// 源码面（忽略面**不得**吞掉的成员，第 202 轮 D70）：我方自己仓里的源码目录与语言包目录——与方言布局族
+/// 同名同形（我方吃自己的狗食），若有人为「消脏」把它们加进忽略条目，源码/语言包就不再入库。
+pub const source_family = [_][]const u8{
+    src_dir,
+    src_dir ++ "/lang/packs",
+};
+
 /// 方言源码扩展名（采集器筛源文件、入口选择判据、embed 资产豁免判据三处共用的唯一真值，第 201 轮 D69）。
 pub const dialect_ext: []const u8 = ".zz";
 
@@ -75,6 +130,47 @@ pub fn isDialectSource(p: []const u8) bool {
 /// 读侧（`pickEntry`/采集器）由 `default_entry`/`isDialectSource` 持同一真值，两侧不再各写字面量。
 pub fn initEntryPathFor(alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
     return std.fmt.allocPrint(alloc, "{s}/{s}", .{ name, default_entry });
+}
+
+/// 目录路径 `dir` 是否被 `.gitignore` 内容 `rules` 的某条**目录规则**覆盖（第 202 轮 D70 的守卫判据）。
+///
+/// 取首段比较：族成员的落盘根总在第一位（`.zzc/gen` → `.zzc`、`logs/x.json` → `logs`），而 git 的语义
+/// 正是「目录被忽略则整棵子树被忽略」，故子段随根。
+///
+/// 生效边界（刻意不做全 gitignore 语义）：本仓只用 `name/`、`**/name/`、`/name/` 三形目录规则，本判据只
+/// 认那三形且要求**尾斜杠**（无尾斜杠当文件规则处理、不覆盖目录）；`*` 通配族、`!` 否定规则、字符类均不实现——
+/// 忽略面若改用那些形制，本守卫会报红即提示须同步扩展判据（202 T0 A4 负例钉守此边界）。
+pub fn dirIgnored(rules: []const u8, dir: []const u8) bool {
+    const slash = std.mem.indexOfScalar(u8, dir, '/');
+    const seg = if (slash) |i| dir[0..i] else dir;
+    if (seg.len == 0) return false;
+    var it = std.mem.tokenizeScalar(u8, rules, '\n');
+    while (it.next()) |raw0| {
+        var line = std.mem.trim(u8, raw0, " \t\r");
+        if (line.len == 0 or line[0] == '#' or line[0] == '!') continue; // 空行/注释/否定规则不在守卫边界
+        if (std.mem.startsWith(u8, line, "**/")) line = line[3..];
+        if (line.len > 0 and line[0] == '/') line = line[1..];
+        if (!std.mem.endsWith(u8, line, "/")) continue; // 文件规则不覆盖目录
+        if (std.mem.eql(u8, line[0 .. line.len - 1], seg)) return true;
+    }
+    return false;
+}
+
+/// `disk_family` 中首个**未被**忽略面 `rules` 覆盖的成员（全盖则 null）——守卫步与测试图共用同一判据，
+/// 避免「守卫自持一套判断」的第二真值（第 202 轮 D70）。
+pub fn firstUncovered(rules: []const u8) ?[]const u8 {
+    for (disk_family) |p| {
+        if (!dirIgnored(rules, p)) return p;
+    }
+    return null;
+}
+
+/// `source_family` 中首个**被**忽略面 `rules` 误吞的成员（全未吞则 null）——上者的对偶臂。
+pub fn firstFalselyIgnored(rules: []const u8) ?[]const u8 {
+    for (source_family) |p| {
+        if (dirIgnored(rules, p)) return p;
+    }
+    return null;
 }
 
 test "第 200 轮 T0 .zzc 族单一真值：八枚字面量全员钉 + 形制契约（相对、正斜杠、前缀多一个分隔符）" {
@@ -120,4 +216,51 @@ test "第 201 轮 T0 方言工程布局族：四枚字面量全员钉 + 入口�
         try std.testing.expect(std.mem.indexOfScalar(u8, q, '\\') == null);
         try std.testing.expect(std.mem.indexOf(u8, q, root) == null);
     }
+}
+
+test "第 202 轮 T0 落盘族 ↔ .gitignore 忽略面：族根值钉 + 清单形制契约 + 判据小样 + 超边界负例" {
+    // A1 第二族根与落点名逐枚字面量钉（判据不复用常量，遵 196/197 通则）。
+    try std.testing.expectEqualStrings("logs", logs_dir);
+    try std.testing.expectEqualStrings("untranslated_phrases.json", log_file_name);
+    try std.testing.expectEqualStrings("logs/untranslated_phrases.json", logs_dir ++ "/" ++ log_file_name);
+
+    // A2 落盘族清单形制契约（独立字面量 oracle、不引常量）：全员必须是**相对**路径、正斜杠形，且首段
+    //    只能落在两枚族根上（`.zzc` 内部树 / `logs` 可见产出面）——新增成员若落到第三个目录（或族根被
+    //    改名而清单未同步），`check-ignore-coverage` 的核对集与真忽略面就此脱钩，本钉先红。
+    for (disk_family) |p| {
+        try std.testing.expect(!std.fs.path.isAbsolute(p));
+        try std.testing.expect(std.mem.indexOfScalar(u8, p, '\\') == null);
+        const seg = if (std.mem.indexOfScalar(u8, p, '/')) |i| p[0..i] else p;
+        try std.testing.expect(std.mem.eql(u8, ".zzc", seg) or std.mem.eql(u8, "logs", seg));
+    }
+    try std.testing.expectEqual(@as(usize, 9), disk_family.len);
+
+    // A3 判据形制小样（字面量给定、独立于真文件）：三形各一枚命中，注释行/无尾斜杠（文件规则）/近名/
+    //    空 rules/空段一律不覆盖——判据若被放宽（如「子串含即覆盖」）即在此现形。
+    try std.testing.expect(dirIgnored("logs/\n", "logs"));
+    try std.testing.expect(dirIgnored("**/.zzc/\n", ".zzc/gen/x"));
+    try std.testing.expect(dirIgnored("/logs/", "logs/x.json"));
+    try std.testing.expect(!dirIgnored("# logs/\n", "logs")); // 注释行不算规则
+    try std.testing.expect(!dirIgnored("logs\n", "logs")); // 无尾斜杠＝文件规则、不覆盖目录
+    try std.testing.expect(!dirIgnored("logz/\n", "logs")); // 近名不混
+    try std.testing.expect(!dirIgnored("logs/\n", "logsx"));
+    try std.testing.expect(!dirIgnored("", "logs"));
+    try std.testing.expect(!dirIgnored("logs/\n", ""));
+
+    // A4 超出生效边界的负例（守「判据只做本仓实用三形」的约定）：通配形不实现——忽略面若改用该形，守卫
+    //    会报覆盖不足而不是默默放过，本钉坐实这条边界不被当作已实现能力。
+    try std.testing.expect(!dirIgnored("build*/\n", "build"));
+    try std.testing.expect(!dirIgnored("logs/*\n", "logs/x.json"));
+
+    // A5 守卫两臂的组合判据（小样 rules、不读真文件）：缺一条条目即报那个成员、多一条源码规则即报被误
+    //    吞的成员——守卫步只负责读真 `.gitignore` 并报结果，判断全在此钉住。
+    try std.testing.expectEqualStrings(".zzc", firstUncovered("logs/\n").?); // 缺 `**/.zzc/` → 内部族报缺
+    try std.testing.expectEqualStrings("logs", firstUncovered("**/.zzc/\n").?); // 缺 `logs/` → 产出面报缺
+    try std.testing.expectEqual(@as(?[]const u8, null), firstUncovered(
+        \\logs/
+        \\**/.zzc/
+        \\**/standard/
+    ));
+    try std.testing.expectEqualStrings("src", firstFalselyIgnored("logs/\n**/.zzc/\nsrc/\n").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), firstFalselyIgnored("logs/\n**/.zzc/\n"));
 }
