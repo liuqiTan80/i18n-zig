@@ -1347,6 +1347,16 @@ pub fn main(init: std.process.Init) !void {
 // 契约两处已知分歧（空 message 函数拒、正则允；盘符绝对路径函数拒）——均为调用方
 // 实际不传此形、不构成在线缺陷，按契约钉住并登记观察面。
 
+// 测内私有路径构件（第 196 轮 D62）：本文件测块的盘上产物名一律带进程私有随机后缀——同一测试
+// 二进制被并跑（手工重跑、CI 与本机构建交叠、压力自验）时，编译期固定的同径名会互删对方正在
+// 读写的文件，表现为「串行恒绿、偶发红」的间歇假红（机理与实锤数见 src/test_priv.zig 头注）。
+// 在册观察（同族残留面·另轮治理）：`loadSymbols`/`saveSymbols` 与 `flushUntranslated` 把路径
+// 硬编在生产码里（`.zzc/symbols.txt` L199/L230、`logs/untranslated_phrases.json` L88），测块无从
+// 改名；因这三块只存在于 main 图（`zig build test` 每图只跑一份）故常规形制不红，本机 24 路并跑
+// 同一 main 图二进制时它们恰为唯一残红点名（修复后 core 图 0/24 红、main 图 20/24 红全属此族）。
+// 私有化需换 cwd（`std.os.linux.chdir` 断代 windows CI 矩阵）或把目录名做成生产入参——留待专轮。
+const tpriv = @import("test_priv.zig");
+
 test "第 181 轮 T1 parseMachineDiag：合法形提取 + 防御拒形全臂钉（直接命中的每个拒绝分支都喂一例）" {
     const d = parseMachineDiag("src/main.zz:5:10: 错误: 未声明标识符").?;
     try std.testing.expectEqualStrings("src/main.zz", d.file);
@@ -1526,7 +1536,14 @@ test "第 188 轮 T1 lspSemanticCall：接线钩子契约钉（ctx 往返/text �
         //   过滤链恰 1 项、字段逐一钉（kind 段后须 `: `、故行形为 `err: x`）：
         //   line/col 1 基转 0 基、kind=err 退 1、
         //   char_len=0、message=x。base 取错（如误喂整路径）则后缀前字节非 /=\ 而拒→红。
-        const probe_path = "/tmp/zzc188-probe.sh";
+        const priv = tpriv.Priv.init(io_); // D62：探针脚本名改进程私有（并跑同二进制时互删对方脚本）
+        var bpath: [96]u8 = undefined;
+        var buri: [112]u8 = undefined;
+        var buri2: [112]u8 = undefined;
+        var bbody: [512]u8 = undefined;
+        const probe_path = priv.path(&bpath, "/tmp/zzc188-probe-", ".sh");
+        // 脚本内 printf 的 file 段须与本次 uri 的尾基名相等（过滤链判据），故随私有后缀同步生成。
+        const script = std.fmt.bufPrint(&bbody, "#!/bin/sh\n[ \"$1\" = check ] && [ \"$2\" = --machine ] && printf 'zzc188-probe-{s}.sh:1:2: err: x\\n' 1>&2\n", .{priv.token()}) catch return error.TestUnexpectedResult;
         {
             var f = std.Io.Dir.createFileAbsolute(io_, probe_path, .{
                 .read = true,
@@ -1538,7 +1555,7 @@ test "第 188 轮 T1 lspSemanticCall：接线钩子契约钉（ctx 往返/text �
             defer f.close(io_);
             var buf: [512]u8 = undefined;
             var w = Io.File.Writer.init(f, io_, &buf);
-            w.interface.writeAll("#!/bin/sh\n[ \"$1\" = check ] && [ \"$2\" = --machine ] && printf 'zzc188-probe.sh:1:2: err: x\\n' 1>&2\n") catch |e| {
+            w.interface.writeAll(script) catch |e| {
                 std.debug.print("A6 探针脚本写入失败：{s}\n", .{@errorName(e)});
                 return error.TestUnexpectedResult;
             };
@@ -1547,7 +1564,7 @@ test "第 188 轮 T1 lspSemanticCall：接线钩子契约钉（ctx 往返/text �
         defer std.Io.Dir.cwd().deleteFile(io_, probe_path) catch {};
         var sem_probe = LspSemantic{ .exe = probe_path, .scratch = std.heap.ArenaAllocator.init(std.testing.allocator) };
         defer sem_probe.scratch.deinit();
-        const got = lspSemanticCall(&sem_probe, "file:///tmp/zzc188-probe.sh", "file:///bin/false");
+        const got = lspSemanticCall(&sem_probe, priv.path(&buri, "file:///tmp/zzc188-probe-", ".sh"), "file:///bin/false");
         try std.testing.expectEqual(@as(usize, 1), got.len);
         try std.testing.expectEqual(@as(usize, 0), got[0].line); // 1 基→0 基回映
         try std.testing.expectEqual(@as(usize, 1), got[0].character); // 2-1
@@ -1557,7 +1574,7 @@ test "第 188 轮 T1 lspSemanticCall：接线钩子契约钉（ctx 往返/text �
 
         // —— A7：同 exe、uri 换基名形——argv[3] 变了但脚本仍写固定 file 段（前两参门仍过），
         //   该行基名与本次 base 不等→fileMatchesDoc 拒→ 0 项（钉过滤链、而非只要 spawn 成功就产出）。
-        const got2 = lspSemanticCall(&sem_probe, "file:///tmp/zzc188-other.sh", "t");
+        const got2 = lspSemanticCall(&sem_probe, priv.path(&buri2, "file:///tmp/zzc188-other-", ".sh"), "t");
         try std.testing.expectEqual(@as(usize, 0), got2.len);
     }
 }
@@ -1703,8 +1720,13 @@ test "第 190 轮 T2 eject 三件套：回读命中/名闸/无字段/NotDir + sp
     defer arena.deinit();
     gpa_ = arena.allocator(); // 文件级 arena 接线（189 T2 同族形制）
 
-    const dir = "/tmp/zzc190proj";
-    const zon = "/tmp/zzc190proj/build.zig.zon";
+    const priv = tpriv.Priv.init(io_); // D62：工程目录/文件改进程私有
+    var bdir: [96]u8 = undefined;
+    var bzon: [96]u8 = undefined;
+    var bplain: [96]u8 = undefined;
+    const dpre = "/tmp/zzc190proj-";
+    const dir = priv.path(&bdir, dpre, "");
+    const zon = priv.path(&bzon, dpre, "/build.zig.zon");
     // 前置清理历史残留（保 A1 幂等：目录/文件不存在须为真前提而非巧合）。
     std.Io.Dir.cwd().deleteFile(io_, zon) catch {};
     std.Io.Dir.cwd().deleteDir(io_, dir) catch {};
@@ -1756,7 +1778,7 @@ test "第 190 轮 T2 eject 三件套：回读命中/名闸/无字段/NotDir + sp
     try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(dir, "pj"));
 
     // A5 dest 系普通文件：zon_path 落文件之下 → NotDir → readWhole catch → null（第三降级形）。
-    const file_path = "/tmp/zzc190plain";
+    const file_path = priv.path(&bplain, "/tmp/zzc190plain-", "");
     {
         var f = std.Io.Dir.createFileAbsolute(io_, file_path, .{ .read = true }) catch |e| {
             std.debug.print("T2 setup 建普通文件失败：{s}", .{@errorName(e)});
@@ -1794,7 +1816,9 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     gpa_ = arena.allocator(); // 189/190 同族形制：文件级 arena 接线
     // werr 接线（探针即测自捕：readWhole wrapper 的 D31 编码封口臂经 printErr 打
     //   母语提示，测试图 werr=undefined 直崩）：挂到盘上日志文件、用毕回 undefined。
-    const werr_path = "/tmp/zzc191-werr.log";
+    const priv = tpriv.Priv.init(io_); // D62：werr 日志名改进程私有
+    var wb: [96]u8 = undefined;
+    const werr_path = priv.path(&wb, "/tmp/zzc191-werr-", ".log");
     var wf: Io.File.Writer = undefined;
     var wbuf: [512]u8 = undefined;
     var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
@@ -1882,7 +1906,9 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     gpa_ = arena.allocator(); // 189/190/191 同族形制：文件级 arena 接线
     // werr 接线（静面 printErr 臂需实流；191 T2 同族形制）：函数帧作用域一次接线、
     //   defer 回置——B/C 段内块会重开 append 句柄复用法帧的 wf/wbuf。
-    const werr_path = "/tmp/zzc192-werr.log";
+    const priv = tpriv.Priv.init(io_); // D62：werr 日志名改进程私有
+    var wb: [96]u8 = undefined;
+    const werr_path = priv.path(&wb, "/tmp/zzc192-werr-", ".log");
     var wf: Io.File.Writer = undefined;
     var wbuf: [512]u8 = undefined;
     var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
@@ -2073,7 +2099,9 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     }
     gpa_ = std.testing.allocator; // 裸直调（D37 实锤形制）：壳任何未回收分配由 runner 直报 leaked
     // werr 接线（symlink 拒拷/写败静面两臂经 printErr，测试图 werr=undefined 直崩——191 同族）：
-    const werr_path = "/tmp/zzc193-werr.log";
+    const priv = tpriv.Priv.init(io_); // D62：日志与整棵工作树改进程私有
+    var wb: [96]u8 = undefined;
+    const werr_path = priv.path(&wb, "/tmp/zzc193-werr-", ".log");
     var wf: Io.File.Writer = undefined;
     var wbuf: [512]u8 = undefined;
     var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
@@ -2083,11 +2111,20 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     defer werr = undefined;
     defer wf.interface.flush() catch {};
 
-    const base = "/tmp/zzc193-t"; // 绝不走 .zig-cache：那是 zig 自己的缓存目录（构建并发期
-    //   会做清单式回收），测内在其下读写会遭不明清理——落位自捕（三跑）间歇红的现形根因。
-    const root = base ++ "/work/gen";
-    const dest_zig = root ++ "/main.zig"; // 仅借 dirname=root
-    const native_rel = base ++ "/work/src/main.zz"; // nat_dir="/tmp/zzc193-t/work/src"
+    const tpre = "/tmp/zzc193-t-"; // D62：工作树根带私有后缀。旧注在此写「绝不走 .zig-cache：zig 会清单式
+    //   回收测内产物」——第 196 轮实测推翻（D63）：`.zig-cache/` 与 `.zig-cache/tmp/` 下的探针文件经
+    //   `zig build` + 2×`zig build test` 原样存活，未见任何回收；间歇红的真机理是并发同径互踩（见 test_priv 头注）。
+    var bbase: [96]u8 = undefined;
+    var broot: [96]u8 = undefined;
+    var bdest: [96]u8 = undefined;
+    var bnat: [96]u8 = undefined;
+    var bdeep: [128]u8 = undefined; // 同段内多次使用的两条（deep 源文件与链接）各占专缓冲
+    var blnk: [128]u8 = undefined;
+    var sb: [128]u8 = undefined; // 单语句内即用即弃的派生路径共用缓冲
+    const base = priv.path(&bbase, tpre, "");
+    const root = priv.path(&broot, tpre, "/work/gen");
+    const dest_zig = priv.path(&bdest, tpre, "/work/gen/main.zig"); // 仅借 dirname=root
+    const native_rel = priv.path(&bnat, tpre, "/work/src/main.zz"); // nat_dir=<base>/work/src
     std.Io.Dir.cwd().deleteTree(io_, base) catch {};
     defer std.Io.Dir.cwd().deleteTree(io_, base) catch {};
     // 自捕（二跑）：下行前置回清原置于 createFileAbsolute **之后**——刚建的 werr 日志被
@@ -2104,18 +2141,18 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     //   全等（readFileRaw 不 stripBom 经壳成立；换成 readWhole 即剥 BOM 而红——反证靶；
     //   D2 原样镜像契约）。
     const BIN = "\xEF\xBB\xBF\xFF\xFE\x00\x01AB\x00";
-    try writeWhole(base ++ "/work/src/k.bin", BIN);
+    try writeWhole(priv.path(&sb, tpre, "/work/src/k.bin"), BIN);
     stageEmbedAssets(native_rel, "const a = @embedFile(\"k.bin\");\n", dest_zig, root);
     {
-        const got = try readFileRaw(root ++ "/k.bin");
+        const got = try readFileRaw(priv.path(&sb, tpre, "/work/gen/k.bin"));
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings(BIN, got);
     }
     // A2 子目录资产：dst 父目录自动建（writeWhole createDirPath 面经壳成立）。
-    try writeWhole(base ++ "/work/src/sub/b.bin", "SUB");
+    try writeWhole(priv.path(&sb, tpre, "/work/src/sub/b.bin"), "SUB");
     stageEmbedAssets(native_rel, "const a = @embedFile(\"sub/b.bin\");\n", dest_zig, root);
     {
-        const got = try readFileRaw(root ++ "/sub/b.bin");
+        const got = try readFileRaw(priv.path(&sb, tpre, "/work/gen/sub/b.bin"));
         defer std.testing.allocator.free(got);
         try std.testing.expectEqualStrings("SUB", got);
     }
@@ -2128,29 +2165,29 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     //   自捕）：joinRelNorm 只拼不解析 `..`，srcp=…/src/deep/../x.bin 要经 Linux 路径解析，
     //   `deep/` 不存在则 readFileRaw 直接 ENOENT 而 continue——守卫 neuter 也照绿，伪钉重现。
     {
-        const native_deep = base ++ "/work/src/deep/main.zz";
+        const native_deep = priv.path(&bdeep, tpre, "/work/src/deep/main.zz");
         try writeWhole(native_deep, "// 仅使 deep/ 目录实体存在，供 srcp 的 `..` 解析\n");
-        try writeWhole(base ++ "/work/src/x.bin", "S");
+        try writeWhole(priv.path(&sb, tpre, "/work/src/x.bin"), "S");
         stageEmbedAssets(native_deep, "const a = @embedFile(\"../x.bin\");\n", dest_zig, root);
-        try std.testing.expect(!pathExists(base ++ "/work/x.bin")); // dst 侧越 root：不建
+        try std.testing.expect(!pathExists(priv.path(&sb, tpre, "/work/x.bin"))); // dst 侧越 root：不建
         // 源本体未被触碰（仍 "S"）：skip 发生在校验后、读写前。
-        const src_still = try readFileRaw(base ++ "/work/src/x.bin");
+        const src_still = try readFileRaw(priv.path(&sb, tpre, "/work/src/x.bin"));
         defer std.testing.allocator.free(src_still);
         try std.testing.expectEqualStrings("S", src_still);
     }
     // A4 源缺失静默跳过（交 zig 原生 `failed opening` 报错）：dst 不建、werr 零提示。
     {
         stageEmbedAssets(native_rel, "const a = @embedFile(\"nope.bin\");\n", dest_zig, root);
-        try std.testing.expect(!pathExists(root ++ "/nope.bin"));
+        try std.testing.expect(!pathExists(priv.path(&sb, tpre, "/work/gen/nope.bin")));
     }
     // A5 symlink 拒拷 + 母语提示（R8 壳面端到端）：树内链接（悬空目标亦可——lstat 只认
     //   链接本体）→ 不读不拷、werr 点名「符号链接」、dst 不建。
     {
-        const link = base ++ "/work/src/lnk.bin";
+        const link = priv.path(&blnk, tpre, "/work/src/lnk.bin");
         std.Io.Dir.cwd().deleteFile(io_, link) catch {};
         try std.Io.Dir.cwd().symLink(io_, "outside-nope.bin", link, .{});
         stageEmbedAssets(native_rel, "const a = @embedFile(\"lnk.bin\");\n", dest_zig, root);
-        try std.testing.expect(!pathExists(root ++ "/lnk.bin"));
+        try std.testing.expect(!pathExists(priv.path(&sb, tpre, "/work/gen/lnk.bin")));
         wf.interface.flush() catch {};
         const wraw = try readFileRaw(werr_path);
         defer std.testing.allocator.free(wraw);
@@ -2159,8 +2196,8 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     // A6 写失败静面：dst 路径预建为**目录** → writeWhole 失败 → printErr「拷贝嵌入资源
     //   文件失败」+ 继续（void 不改主流程；改 try 传播即主报错升格缺陷）。
     {
-        try std.Io.Dir.cwd().createDirPath(io_, root ++ "/occ.bin");
-        try writeWhole(base ++ "/work/src/occ.bin", "OCC");
+        try std.Io.Dir.cwd().createDirPath(io_, priv.path(&sb, tpre, "/work/gen/occ.bin"));
+        try writeWhole(priv.path(&sb, tpre, "/work/src/occ.bin"), "OCC");
         stageEmbedAssets(native_rel, "const a = @embedFile(\"occ.bin\");\n", dest_zig, root);
         wf.interface.flush() catch {};
         const wraw = try readFileRaw(werr_path);
@@ -2169,12 +2206,12 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     }
     // A7 多 embed 单调用：两条全 stage（循环面 + list 借用元素零逐项 free 契约 R7f⑤）。
     {
-        try writeWhole(base ++ "/work/src/m1.bin", "M1");
-        try writeWhole(base ++ "/work/src/m2.bin", "M2");
+        try writeWhole(priv.path(&sb, tpre, "/work/src/m1.bin"), "M1");
+        try writeWhole(priv.path(&sb, tpre, "/work/src/m2.bin"), "M2");
         stageEmbedAssets(native_rel, "const a = @embedFile(\"m1.bin\");\nconst b = @embedFile(\"m2.bin\");\n", dest_zig, root);
-        const g1 = try readFileRaw(root ++ "/m1.bin");
+        const g1 = try readFileRaw(priv.path(&sb, tpre, "/work/gen/m1.bin"));
         defer std.testing.allocator.free(g1);
-        const g2 = try readFileRaw(root ++ "/m2.bin");
+        const g2 = try readFileRaw(priv.path(&sb, tpre, "/work/gen/m2.bin"));
         defer std.testing.allocator.free(g2);
         try std.testing.expectEqualStrings("M1", g1);
         try std.testing.expectEqualStrings("M2", g2);
@@ -2182,10 +2219,10 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
     // A8 源缺失只跳本条、不中断循环（continue 而非 return）：首条不存在、后条存在→
     //   后条仍须 stage（把 readFileRaw 的 `catch continue` 改成 `catch return` 即红）。
     {
-        try writeWhole(base ++ "/work/src/m3.bin", "M3");
+        try writeWhole(priv.path(&sb, tpre, "/work/src/m3.bin"), "M3");
         stageEmbedAssets(native_rel, "const a = @embedFile(\"gone.bin\");\nconst b = @embedFile(\"m3.bin\");\n", dest_zig, root);
-        try std.testing.expect(!pathExists(root ++ "/gone.bin"));
-        const g3 = try readFileRaw(root ++ "/m3.bin");
+        try std.testing.expect(!pathExists(priv.path(&sb, tpre, "/work/gen/gone.bin")));
+        const g3 = try readFileRaw(priv.path(&sb, tpre, "/work/gen/m3.bin"));
         defer std.testing.allocator.free(g3);
         try std.testing.expectEqualStrings("M3", g3);
     }
@@ -2224,7 +2261,9 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
     }
     gpa_ = std.testing.allocator; // 裸直调（D37/D58 实锤形制）：壳任何未回收分配由 runner 直报 leaked
     // werr 接线：五处失败臂全经 printErr，测试图 werr=undefined 直崩（191 同族）。
-    const werr_path = "/tmp/zzc194-werr.log";
+    const priv = tpriv.Priv.init(io_); // D62：werr 日志名改进程私有
+    var wb: [96]u8 = undefined;
+    const werr_path = priv.path(&wb, "/tmp/zzc194-werr-", ".log");
     var wf: Io.File.Writer = undefined;
     var wbuf: [512]u8 = undefined;
     var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;

@@ -72,9 +72,12 @@ pub fn installedFile(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []con
 
 // ---------------------------------------------------------------- 单测（真 IO·落 zzc_core 测试图）
 
-/// 测试用同步 Io（第 109 轮在册手法）：`Threaded` 内部 gpa 须线程安全，故用 page_allocator；
-/// 被测分配另走 Arena over testing.allocator 以获零泄漏判定。产物落 `.zig-cache/` 下自清。
-const test_dir_root = ".zig-cache/userpack_test_140";
+// 测块共用构件（第 196 轮 D62）：`tpriv.Priv` 取进程私有后缀作安装目录名。
+// 测内另备同步 Io（第 109 轮在册手法）：`Threaded` 内部 gpa 须线程安全，故用 page_allocator；
+// 被测分配另走 Arena over testing.allocator 以获零泄漏判定。产物落 `.zig-cache/` 下自清。
+// 原先此处是一个编译期固定的共享目录名（`userpack_test_140`），而本模块的测块在两个测试图
+// 并发跑（或多进程并跑同一二进制）时互删对方在装的文件——旧固定 const 因此撤销。
+const tpriv = @import("../test_priv.zig");
 
 test "keyIsSafe：ASCII 白名单放行，穿越/盘符/分隔/空白/非 ASCII/前导点划/超长一律拒" {
     // 放行形（内置与既有 fixture 的真实注册名都在此列）。
@@ -123,13 +126,17 @@ test "install：真 IO 往返——建目录、字节原样落位、重名拒覆
     defer arena_impl.deinit();
     const gpa = arena_impl.allocator();
 
-    const dir = test_dir_root;
+    const priv = tpriv.Priv.init(io); // D62：安装目录改进程私有
+    var db: [96]u8 = undefined;
+    var eb: [128]u8 = undefined;
+    const dir = priv.path(&db, ".zig-cache/tmp/zzc_userpack_", "");
+    const evil = priv.path(&eb, ".zig-cache/tmp/zzc_userpack_", "/../../evil.txt");
     const rel = try fileRel(gpa, dir, "kA");
     std.Io.Dir.cwd().deleteFile(io, rel) catch {}; // 前次中断残留
 
     const body = "$name = 测试甲\n$code = kA\n[keywords]\n常数 = const\n";
     try install(io, gpa, dir, "kA", body);
-    defer std.Io.Dir.cwd().deleteFile(io, rel) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {}; // 私有目录整树回清（不留空壳累在 .zig-cache/tmp 下）
 
     // 落位字节与入参全等（包体不得被加工/追加头指令——那是内嵌档的事，本档只管原样存）。
     const back = try file_io.readWhole(io, gpa, rel);
@@ -143,7 +150,7 @@ test "install：真 IO 往返——建目录、字节原样落位、重名拒覆
 
     // 坏名零副作用：BadKey 必须先于任何写盘返回，且目录内不出现该名文件。
     try std.testing.expectError(error.BadKey, install(io, gpa, dir, "../evil", body));
-    try std.testing.expect(!file_io.pathExists(io, ".zig-cache/userpack_test_140/../../evil.txt"));
+    try std.testing.expect(!file_io.pathExists(io, evil));
     try std.testing.expectError(error.BadKey, install(io, gpa, dir, "中文", body));
 }
 
@@ -155,7 +162,9 @@ test "installedFile：装后可查、未装为 null、不安全名先于磁盘�
     defer arena_impl.deinit();
     const gpa = arena_impl.allocator();
 
-    const dir = test_dir_root;
+    const priv = tpriv.Priv.init(io); // D62：安装目录改进程私有
+    var db: [96]u8 = undefined;
+    const dir = priv.path(&db, ".zig-cache/tmp/zzc_userpack_", "");
     const rel = try fileRel(gpa, dir, "kB");
     std.Io.Dir.cwd().deleteFile(io, rel) catch {};
 
@@ -163,7 +172,7 @@ test "installedFile：装后可查、未装为 null、不安全名先于磁盘�
     try std.testing.expect(installedFile(io, gpa, dir, "kB") == null);
 
     try install(io, gpa, dir, "kB", "$code = kB\n[keywords]\n常数 = const\n");
-    defer std.Io.Dir.cwd().deleteFile(io, rel) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {}; // 私有目录整树回清
 
     const hit = installedFile(io, gpa, dir, "kB") orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualStrings(rel, hit);

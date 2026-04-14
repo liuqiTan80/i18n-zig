@@ -67,6 +67,11 @@ pub fn pathIsSymlink(io: Io, path: []const u8) bool {
     return st.kind == .sym_link;
 }
 
+// 测内私有路径构件（第 196 轮 D62）：本文件测块的盘上产物一律落到带随机后缀的私有目录下——
+// 编译期固定的同径名在 `zig build test` 并发跑两测试图（同一测块被两图各跑一份）时会互删
+// 对方正在读写的文件，表现为「串行恒绿、偶发红」的间歇假红（机理与实锤数见 src/test_priv.zig 头注）。
+const tpriv = @import("test_priv.zig");
+
 test "file_io 读写往返 + BOM 剥离 + pathExists + readFileRaw 保留 BOM（第 62 轮 D21 下沉真测）" {
     // 测试上下文无 std.process.Init，自建同步 Io（文件操作走调用线程、不触异步分发，故 gpa 用 page_allocator 即可）。
     var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
@@ -77,7 +82,10 @@ test "file_io 读写往返 + BOM 剥离 + pathExists + readFileRaw 保留 BOM（
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    const probe = ".zig-cache/zzc_fileio_probe.txt";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有
+    var pb: [96]u8 = undefined;
+    const pre = ".zig-cache/tmp/zzc_fileio_";
+    const probe = priv.path(&pb, pre, "_probe.txt");
 
     // 写→读往返（无 BOM 内容原样回读）。
     try writeWhole(io, probe, "hello zzc");
@@ -111,7 +119,9 @@ test "readWhole 编码封口（D31）：UTF-16 BOM 与非法 UTF-8 字节拒为 
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    const probe = ".zig-cache/zzc_fileio_enc_probe.txt";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有
+    var pb: [96]u8 = undefined;
+    const probe = priv.path(&pb, ".zig-cache/tmp/zzc_fileio_", "_enc_probe.txt");
     try writeWhole(io, probe, "占位");
     defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
 
@@ -139,14 +149,18 @@ test "pathIsSymlink：普通文件与不存在路径均回 false（R8 守卫假�
     defer threaded.deinit();
     const io = threaded.io();
 
-    const probe = ".zig-cache/zzc_symlink_probe.txt";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有
+    var pb: [96]u8 = undefined;
+    var nb: [96]u8 = undefined;
+    const probe = priv.path(&pb, ".zig-cache/tmp/zzc_", "symlink_probe.txt");
+    const absent = priv.path(&nb, ".zig-cache/tmp/zzc_", "no_such_link_xyz");
     try writeWhole(io, probe, "x");
     defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
 
     // 普通文件不是符号链接（守 R8：非链接的合法嵌入资产不得被误拒拷贝）。
     try std.testing.expect(!pathIsSymlink(io, probe));
     // 不存在路径保守回 false（交后续 readFileRaw catch-continue 处理）。
-    try std.testing.expect(!pathIsSymlink(io, ".zig-cache/zzc_no_such_link_xyz"));
+    try std.testing.expect(!pathIsSymlink(io, absent));
     // 真符号链接→true 分支系 POSIX 面：另见下方「pathIsSymlink 真链接」平台门控测（第 177 轮消台账 R8 真链接面待验）。
 }
 
@@ -163,12 +177,21 @@ test "pathIsSymlink：POSIX 真符号链接→true（链接指向文件/目录/�
     const io = threaded.io();
     const cwd = std.Io.Dir.cwd();
 
-    const base = ".zig-cache/zzc_r177";
-    const target = base ++ "/real.txt"; // 工程内真实文件（链接目标）
-    const link_file = base ++ "/link_to_file"; // 指向上面真实文件的链接
-    const link_dir = base ++ "/link_to_dir"; // 指向目录的链接（main.zig「树内链接指向树外」最危险形）
-    const link_dangling = base ++ "/link_dangling"; // 悬空链接（目标不存在仍应是 .sym_link）
-    const dir_target = base ++ "/adir";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有（七条子路径各占一段缓冲）
+    const pre = ".zig-cache/tmp/zzc_r177_";
+    var bb: [96]u8 = undefined;
+    var bt: [96]u8 = undefined;
+    var blf: [96]u8 = undefined;
+    var bld: [96]u8 = undefined;
+    var bldang: [96]u8 = undefined;
+    var bdang: [96]u8 = undefined;
+    var bdir: [96]u8 = undefined;
+    const base = priv.path(&bb, pre, "");
+    const target = priv.path(&bt, pre, "/real.txt"); // 工程内真实文件（链接目标）
+    const link_file = priv.path(&blf, pre, "/link_to_file"); // 指向上面真实文件的链接
+    const link_dir = priv.path(&bld, pre, "/link_to_dir"); // 指向目录的链接（main.zig「树内链接指向树外」最危险形）
+    const link_dangling = priv.path(&bldang, pre, "/link_dangling"); // 悬空链接（目标不存在仍应是 .sym_link）
+    const dir_target = priv.path(&bdir, pre, "/adir");
 
     // 清历史残留，使前置确定性成立。
     cwd.deleteFile(io, link_file) catch {};
@@ -193,7 +216,7 @@ test "pathIsSymlink：POSIX 真符号链接→true（链接指向文件/目录/�
     try std.testing.expect(pathIsSymlink(io, link_dir));
     // ④ 悬空链接（目标不存在）→ 仍 true：`follow_symlinks=false` 的 lstat 只认链接元数据、
     //    不要求目标存在；这条钉死「不存在路径保守回 false」与「链接指向不存在回 true」的边界分野。
-    try cwd.symLink(io, base ++ "/no_such_target", link_dangling, .{});
+    try cwd.symLink(io, priv.path(&bdang, pre, "/no_such_target"), link_dangling, .{});
     try std.testing.expect(pathIsSymlink(io, link_dangling));
 }
 
@@ -206,7 +229,9 @@ test "D37：readWhole 编码封口错误路径不泄已分配缓冲（裸 testin
     defer threaded.deinit();
     const io = threaded.io();
 
-    const probe = ".zig-cache/zzc_fileio_leak_probe.txt";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有
+    var pb: [96]u8 = undefined;
+    const probe = priv.path(&pb, ".zig-cache/tmp/zzc_fileio_", "_leak_probe.txt");
     try writeWhole(io, probe, "\xB3\xA3"); // GBK 实字节、非法 UTF-8
     defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
 
@@ -234,7 +259,9 @@ test "readWhole 超限封口（B5/max_source_bytes）：限内放行、超限 1 
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    const probe = ".zig-cache/zzc_fileio_size_probe.txt";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有
+    var pb: [96]u8 = undefined;
+    const probe = priv.path(&pb, ".zig-cache/tmp/zzc_fileio_", "_size_probe.txt");
     defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
 
     // ① 恰在限内（max_source_bytes - 1）：正常读取、内容等长（证 .limited 不误拦边界内）。
@@ -269,9 +296,14 @@ test "writeWhole 必要时建父目录声明面：二级缺失嵌套真建可写
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    const root = ".zig-cache/zzc_r129_deep";
-    const sub = root ++ "/sub";
-    const deep = sub ++ "/probe.txt";
+    const priv = tpriv.Priv.init(io); // D62：同径名改私有（root/sub/deep 三径同源后缀）
+    const pre = ".zig-cache/tmp/zzc_r129_deep_";
+    var br: [96]u8 = undefined;
+    var bs: [96]u8 = undefined;
+    var bd: [96]u8 = undefined;
+    const root = priv.path(&br, pre, "");
+    const sub = priv.path(&bs, pre, "/sub");
+    const deep = priv.path(&bd, pre, "/sub/probe.txt");
     // 先清历史异常残留，使前置「缺失」断言确定性成立（正常 defer 已清，本行为双保险）。
     std.Io.Dir.cwd().deleteTree(io, root) catch {};
     defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
