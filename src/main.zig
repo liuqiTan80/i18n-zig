@@ -156,18 +156,19 @@ fn stageEmbedAssets(native_rel: []const u8, zig_str: []const u8, dest_zig: []con
         const within = cli.embedPathStaysWithin(gpa_, root, dst_dir, p) catch false;
         if (!within) continue;
         const srcp = cli.joinRelNorm(gpa_, nat_dir, p) catch continue; // 拼接+归一单一真值（D9）
-        // 符号链接守卫（R8）：词法包含性判断（embedPathStaysWithin）防不住“树内链接指向树外”——
+        // D58：srcp/dstp 系 gpa_ 堆串，原只在 symlink/dstp 失败两臂显式 free，成功与源缺失
+        // 两路全漏（生产 gpa_ 是进程 arena 故无感、长驻/反复 collect 仍属累积面）。改单手
+        // defer 无条件回收（defer 于 for 体每次迭代末执行），下方各臂只留 continue。
+        defer gpa_.free(srcp);
+        // 符号链接守卫（R8）：词法包含性判断（embedPathStaysWithin）防不住“树内链接指树外”——
         // staging 会把外部内容读进生成树/eject 产物。链接资产拒拷并母语提示；
         // zig 自身 @embedFile 有 canonical 越界检查（嵌入越界条目已本地化其拒绝）。
         if (pathIsSymlink(srcp)) {
             printErr("zzc: 嵌入资源 `{s}` 是符号链接，不拷贝（防止把工程外内容读入生成树）；请改用工程内的真实文件。", .{srcp});
-            gpa_.free(srcp);
             continue;
         }
-        const dstp = cli.joinRelNorm(gpa_, dst_dir, p) catch {
-            gpa_.free(srcp);
-            continue;
-        };
+        const dstp = cli.joinRelNorm(gpa_, dst_dir, p) catch continue;
+        defer gpa_.free(dstp);
         const bytes = readFileRaw(srcp) catch continue; // 源缺失→跳过，交给 zig 自己报 `failed opening`
         defer gpa_.free(bytes);
         writeWhole(dstp, bytes) catch |e| {
@@ -2026,5 +2027,162 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
         gpa_ = arena.allocator(); // 回置早于块尾（B3 无 werr 依赖、计数已定格）
         try std.testing.expectEqual(fa3.deallocations, fa3.allocations);
         try std.testing.expect(fa3.allocations > 0); // 防双零假绿（render 确走过分配）
+    }
+}
+
+// 第 193 轮审计注：stageEmbedAssets（L149·@embedFile 资源镜像拷贝壳）系测面零直调——
+// 生产直调唯 collect L379（.zzc/gen 镜像）与 eject L770（导出树）；下层 extractEmbedPaths/
+// embedPathStaysWithin/joinRelNorm/normalizeRelPath 皆 cli 图有钉、pathIsSymlink 真链接面
+// 177 轮 POSIX 门控钉，但壳本体决策块全库零钉：越界守卫 skip（R8/D2 契约核心执行点）、
+// symlink 拒拷+母语提示（树内链接指树外唯一拦截面）、源缺失静默 continue（交 zig 原生报错）、
+// 写失败 catch 静面、二进制安全拷贝（readFileRaw 不 stripBom 经壳成立）、defer list.deinit
+// 漏防臂。盘上形制：工作目录 /tmp/zzc193-t（deleteTree 崩溃幂等·192 五跑教训直用）；
+// 177 轮 symLink/门控形制复用。**实锤 D58**：srcp/dstp 系 joinRelNorm 堆串，
+// 原码只在 symlink 拒拷与 dstp 拼接失败两臂显式 free，**成功拷贝路径与源缺失 continue
+// 路径全漏**（每 embed 泄 2 串；生产 gpa_ 为进程 arena 故长期无感，属累积面）——本测
+// gpa_ 裸 testing.allocator 直调，首跑即报 12 leaks（六对·A1/A2/A4/A6/A7×2）坐实，
+// 改单手 defer 回收后绿（D37 先例：先红后绿、当轮修）。落位自捕六案：①0.17 `Dir` 无
+// `exists(io, path)` 成员——用 main 侧 pathExists wrapper；②前置回清误置于
+// createFileAbsolute 之后，把刚建的 werr 日志自身删除（句柄尚存故写入不报错、静默弃），
+// A5/A6 读它直报 FileNotFound——绝对路径日志只留 defer 尾部回清（createFileAbsolute 本身
+// truncate，无须前置删）；③工作目录绝不可建在 `.zig-cache/` 下——那是 zig 自己的
+// 缓存目录，`zig build test` 并发跑两测试图时的清单式回收会把测内产物不明清掉，
+// 表现为“重建后首跑必红、复跑即绿”的间歇假象（本测曾踩，改 /tmp 私有目录后稳定）；
+// ④换私有目录时只改了 root/native_rel、各段 `writeWhole` 的源侧路径未同层加 `work/`
+// 一子层——源根本不在 nat_dir 下，壳走“源缺失静默 continue”，A1 读目标直报
+// FileNotFound（fresh 双跑自现）：盘上形制改动须整体重算而非逐点打贴；⑤⑥越界守卫钉
+// 两度伪钉（S1 neuter 守卫仍全绿）：先因 srcp 侧多一层上溯使 joinRelNorm 后路径解不开，
+// 改单层 `..` 后仍绿——因 `deep/` 目录未实体建在盘、Linux 解不开 `deep/../`——真钉一个
+// “skip”臂须同时保证**读侧路径可解**与**写侧路径可达**，否则测只在不存在的前件上打转。
+// 证伪撤号不占 D 号。
+
+test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写败静面/二进制安全/裸测试分配器无漏" {
+    if (builtin.os.tag == .windows) return; // symlink 段非管理员不可靠——177 轮同族门控保 windows CI 绿
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io_prev = io_;
+    const gpa_prev = gpa_; // 接线前取原全局（undefined 亦可存回）
+    io_ = threaded.io();
+    defer {
+        io_ = io_prev;
+        gpa_ = gpa_prev; // 回置全局（192 八案：跨测段共享全局须显式复位）
+    }
+    gpa_ = std.testing.allocator; // 裸直调（D37 实锤形制）：壳任何未回收分配由 runner 直报 leaked
+    // werr 接线（symlink 拒拷/写败静面两臂经 printErr，测试图 werr=undefined 直崩——191 同族）：
+    const werr_path = "/tmp/zzc193-werr.log";
+    var wf: Io.File.Writer = undefined;
+    var wbuf: [512]u8 = undefined;
+    var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
+    defer wfile.close(io_);
+    wf = Io.File.Writer.init(wfile, io_, &wbuf);
+    werr = &wf.interface;
+    defer werr = undefined;
+    defer wf.interface.flush() catch {};
+
+    const base = "/tmp/zzc193-t"; // 绝不走 .zig-cache：那是 zig 自己的缓存目录（构建并发期
+    //   会做清单式回收），测内在其下读写会遭不明清理——落位自捕（三跑）间歇红的现形根因。
+    const root = base ++ "/work/gen";
+    const dest_zig = root ++ "/main.zig"; // 仅借 dirname=root
+    const native_rel = base ++ "/work/src/main.zz"; // nat_dir="/tmp/zzc193-t/work/src"
+    std.Io.Dir.cwd().deleteTree(io_, base) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, base) catch {};
+    // 自捕（二跑）：下行前置回清原置于 createFileAbsolute **之后**——刚建的 werr 日志被
+    //   自己删掉，A5/A6 读它直报 FileNotFound；句柄仍在故写入不报错（静默弃）。改为
+    //   只留 defer 尾部回清（createFileAbsolute 本身 truncate，无需前置删）。
+    defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {};
+
+    // A0 无 embed 清单：零副作用（gen 目录不建、不触任何分配面）。
+    {
+        stageEmbedAssets(native_rel, "const a = 1;\n", dest_zig, root);
+        try std.testing.expect(!pathExists(root)); // 自捕预备：0.17 Dir 无 exists(io,path)——用 main 侧 pathExists wrapper
+    }
+    // A1 命中拷贝 + 二进制安全：源首含 UTF-8 BOM、后续含无效 UTF-8 字节 → 目标字节
+    //   全等（readFileRaw 不 stripBom 经壳成立；换成 readWhole 即剥 BOM 而红——反证靶；
+    //   D2 原样镜像契约）。
+    const BIN = "\xEF\xBB\xBF\xFF\xFE\x00\x01AB\x00";
+    try writeWhole(base ++ "/work/src/k.bin", BIN);
+    stageEmbedAssets(native_rel, "const a = @embedFile(\"k.bin\");\n", dest_zig, root);
+    {
+        const got = try readFileRaw(root ++ "/k.bin");
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings(BIN, got);
+    }
+    // A2 子目录资产：dst 父目录自动建（writeWhole createDirPath 面经壳成立）。
+    try writeWhole(base ++ "/work/src/sub/b.bin", "SUB");
+    stageEmbedAssets(native_rel, "const a = @embedFile(\"sub/b.bin\");\n", dest_zig, root);
+    {
+        const got = try readFileRaw(root ++ "/sub/b.bin");
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings("SUB", got);
+    }
+    // A3 越界守卫拒拷（D2 核心执行点）：同一 p 在 nat/dst 两基址下归一后**只出 dst 一侧**
+    //   的 root——源 nat_dir/../x.bin 可读、目标 dst_dir/../x.bin 落 root 外（去守卫即被建）。
+    //   自捕（五跑·伪钉现形）：原构造取 `../../shared.bin`（srcp=work/src/deep/../../…=work/
+    //   shared.bin、dstp=work/gen/../../…=base/shared.bin）——S1 把守卫 neuter 后仍全绿，因 srcp
+    //   一侧 joinRelNorm 先失败即 continue，根本走不到写面：本钉当时是**伪钉**，改单层 `..` +
+    //   deep 源基址（srcp 可读、dstp 越界）后方为真钉。真钉还须源目录**实体存盘**（六跑
+    //   自捕）：joinRelNorm 只拼不解析 `..`，srcp=…/src/deep/../x.bin 要经 Linux 路径解析，
+    //   `deep/` 不存在则 readFileRaw 直接 ENOENT 而 continue——守卫 neuter 也照绿，伪钉重现。
+    {
+        const native_deep = base ++ "/work/src/deep/main.zz";
+        try writeWhole(native_deep, "// 仅使 deep/ 目录实体存在，供 srcp 的 `..` 解析\n");
+        try writeWhole(base ++ "/work/src/x.bin", "S");
+        stageEmbedAssets(native_deep, "const a = @embedFile(\"../x.bin\");\n", dest_zig, root);
+        try std.testing.expect(!pathExists(base ++ "/work/x.bin")); // dst 侧越 root：不建
+        // 源本体未被触碰（仍 "S"）：skip 发生在校验后、读写前。
+        const src_still = try readFileRaw(base ++ "/work/src/x.bin");
+        defer std.testing.allocator.free(src_still);
+        try std.testing.expectEqualStrings("S", src_still);
+    }
+    // A4 源缺失静默跳过（交 zig 原生 `failed opening` 报错）：dst 不建、werr 零提示。
+    {
+        stageEmbedAssets(native_rel, "const a = @embedFile(\"nope.bin\");\n", dest_zig, root);
+        try std.testing.expect(!pathExists(root ++ "/nope.bin"));
+    }
+    // A5 symlink 拒拷 + 母语提示（R8 壳面端到端）：树内链接（悬空目标亦可——lstat 只认
+    //   链接本体）→ 不读不拷、werr 点名「符号链接」、dst 不建。
+    {
+        const link = base ++ "/work/src/lnk.bin";
+        std.Io.Dir.cwd().deleteFile(io_, link) catch {};
+        try std.Io.Dir.cwd().symLink(io_, "outside-nope.bin", link, .{});
+        stageEmbedAssets(native_rel, "const a = @embedFile(\"lnk.bin\");\n", dest_zig, root);
+        try std.testing.expect(!pathExists(root ++ "/lnk.bin"));
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        defer std.testing.allocator.free(wraw);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "符号链接") != null);
+    }
+    // A6 写失败静面：dst 路径预建为**目录** → writeWhole 失败 → printErr「拷贝嵌入资源
+    //   文件失败」+ 继续（void 不改主流程；改 try 传播即主报错升格缺陷）。
+    {
+        try std.Io.Dir.cwd().createDirPath(io_, root ++ "/occ.bin");
+        try writeWhole(base ++ "/work/src/occ.bin", "OCC");
+        stageEmbedAssets(native_rel, "const a = @embedFile(\"occ.bin\");\n", dest_zig, root);
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        defer std.testing.allocator.free(wraw);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "拷贝嵌入资源文件失败") != null);
+    }
+    // A7 多 embed 单调用：两条全 stage（循环面 + list 借用元素零逐项 free 契约 R7f⑤）。
+    {
+        try writeWhole(base ++ "/work/src/m1.bin", "M1");
+        try writeWhole(base ++ "/work/src/m2.bin", "M2");
+        stageEmbedAssets(native_rel, "const a = @embedFile(\"m1.bin\");\nconst b = @embedFile(\"m2.bin\");\n", dest_zig, root);
+        const g1 = try readFileRaw(root ++ "/m1.bin");
+        defer std.testing.allocator.free(g1);
+        const g2 = try readFileRaw(root ++ "/m2.bin");
+        defer std.testing.allocator.free(g2);
+        try std.testing.expectEqualStrings("M1", g1);
+        try std.testing.expectEqualStrings("M2", g2);
+    }
+    // A8 源缺失只跳本条、不中断循环（continue 而非 return）：首条不存在、后条存在→
+    //   后条仍须 stage（把 readFileRaw 的 `catch continue` 改成 `catch return` 即红）。
+    {
+        try writeWhole(base ++ "/work/src/m3.bin", "M3");
+        stageEmbedAssets(native_rel, "const a = @embedFile(\"gone.bin\");\nconst b = @embedFile(\"m3.bin\");\n", dest_zig, root);
+        try std.testing.expect(!pathExists(root ++ "/gone.bin"));
+        const g3 = try readFileRaw(root ++ "/m3.bin");
+        defer std.testing.allocator.free(g3);
+        try std.testing.expectEqualStrings("M3", g3);
     }
 }
