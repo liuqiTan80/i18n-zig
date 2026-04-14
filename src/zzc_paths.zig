@@ -16,6 +16,15 @@
 //! 治法：族成员一律由本模块的 `root` 派生（拼接在编译期完成、产物字节不变），消费侧（隐藏判据）改取
 //! `root`；跨模块耦合面由 `diag/translate.zig` 的「写侧产物 → 隐藏判据」组合锚钉住（同 199 轮 D67 的
 //! 形制：配对契约经函数组合可锚，纯同值引用不可锚）。
+//!
+//! 第 201 轮 D69 并入**方言工程布局族**（`src` 目录段 / `main` 入口词干 / `.zz` 扩展名 / 默认入口全串）：
+//! 与 `.zzc` 族同属「一名多点硬编、失配不报错只错位」的字面量族，只是域不同——上族是**我方内部落盘**，
+//! 本族是**用户工程约定**。旧形制七处字面量散在 3 模块：入口选择 `cli.pickEntry` 的后缀判据与默认入口
+//! 两枚、embed 资产豁免判据一枚（以上 199/200 前后皆有钉）、`main.cmdInit` 写盘入口名 `"{s}/src/main.zz"`、
+//! `main.cmdEject` 硬编入口 `"src/main.zz"`、`main` 采集器后缀判据 `".zz"` 三枚 **零钉**（t2 探针 P2/P3/P4
+//! 单点破坏后 505/505 全绿）。后果面是写/读配对契约断裂：`cmdInit` 按自己的字面量建工程、`pickEntry`
+//! 按另一枚字面量认工程，两者一旦漂移，新建工程跑 `zzc run`/`zzc check` 即报「找不到工程目录/未找到
+//! 方言源文件」——报错指向目录而非指向失配的字面量，用户无从看出是自己用法问题还是工具坏了。
 
 const std = @import("std");
 
@@ -43,6 +52,31 @@ pub const check_root: []const u8 = root ++ "/tmp_check_root";
 /// 上者的完整 zig 旗标形（`-femit-bin=` 前缀与路径同源，不另立字面量）。
 pub const check_root_flag: []const u8 = "-femit-bin=" ++ check_root;
 
+/// 方言源码扩展名（采集器筛源文件、入口选择判据、embed 资产豁免判据三处共用的唯一真值，第 201 轮 D69）。
+pub const dialect_ext: []const u8 = ".zz";
+
+/// 方言工程的源码目录段（相对工程根）。
+pub const src_dir: []const u8 = "src";
+
+/// 默认入口的文件词干（`zzc init` 建的就是它，`pickEntry` 缺省也认它）。
+pub const entry_stem: []const u8 = "main";
+
+/// 默认入口全串 = `src/main.zz`：由上三枚派生，故 `cmdInit` 的写侧与 `pickEntry` 的读侧自此同源。
+pub const default_entry: []const u8 = src_dir ++ "/" ++ entry_stem ++ dialect_ext;
+
+/// 路径是否为方言源文件（采集器筛源、入口选择、embed 资产豁免三处判据的唯一真值，第 201 轮 D69）。
+/// 纯后缀比较，与旧形制 `std.mem.endsWith(u8, p, ".zz")` 逐字节等价——本轮只收敛真值、不改判据宽度。
+/// （故 `.zz` 这种「只有扩展名没有词干」的怪名仍算命中，与漂移前行为一致，非本轮引入。）
+pub fn isDialectSource(p: []const u8) bool {
+    return std.mem.endsWith(u8, p, dialect_ext);
+}
+
+/// `zzc init <name>` 建的入口路径 = `<name>/src/main.zz`（第 201 轮 D69）：写侧由本函数持唯一构造，
+/// 读侧（`pickEntry`/采集器）由 `default_entry`/`isDialectSource` 持同一真值，两侧不再各写字面量。
+pub fn initEntryPathFor(alloc: std.mem.Allocator, name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "{s}/{s}", .{ name, default_entry });
+}
+
 test "第 200 轮 T0 .zzc 族单一真值：八枚字面量全员钉 + 形制契约（相对、正斜杠、前缀多一个分隔符）" {
     // A1 族真值逐枚字面量钉（判据不复用常量，遵 196/197 通则）：改本模块任一枚即本钉红，
     //    连带要求消费/生产两侧与 `diag/translate.zig` 的组合锚同步复跑。
@@ -63,4 +97,27 @@ test "第 200 轮 T0 .zzc 族单一真值：八枚字面量全员钉 + 形制契
         try std.testing.expect(std.mem.indexOfScalar(u8, p, '\\') == null);
     }
     try std.testing.expectEqual(@as(usize, 1), gen_dir_prefix.len - gen_dir.len);
+}
+
+test "第 201 轮 T0 方言工程布局族：四枚字面量全员钉 + 入口构造真形 + 形制契约" {
+    // A1 族真值逐枚字面量钉（判据不复用常量，遵 196/197 通则）：任一枚漂移即本钉红，
+    //    连带要求 `cli.pickEntry`/`main` 采集器/`cmdInit` 与 201 T1 的往返锚同步复跑。
+    try std.testing.expectEqualStrings(".zz", dialect_ext);
+    try std.testing.expectEqualStrings("src", src_dir);
+    try std.testing.expectEqualStrings("main", entry_stem);
+    try std.testing.expectEqualStrings("src/main.zz", default_entry);
+
+    // A2 写侧构造真形（独立字面量、不引常量）：`zzc init myapp` 落在 `myapp/src/main.zz`。
+    const gpa = std.testing.allocator;
+    const p = try initEntryPathFor(gpa, "myapp");
+    defer gpa.free(p);
+    try std.testing.expectEqualStrings("myapp/src/main.zz", p);
+
+    // A3 形制契约（独立 oracle）：布局族成员是**用户工程内**的相对路径，绝不含我方内部根——
+    //    若 `src` 或 `default_entry` 被误改成 `.zzc/…` 形，`isInternalPath` 会把用户源码路径整体隐藏。
+    for ([_][]const u8{ dialect_ext, src_dir, entry_stem, default_entry }) |q| {
+        try std.testing.expect(!std.fs.path.isAbsolute(q));
+        try std.testing.expect(std.mem.indexOfScalar(u8, q, '\\') == null);
+        try std.testing.expect(std.mem.indexOf(u8, q, root) == null);
+    }
 }

@@ -290,7 +290,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
     defer walker.deinit();
     while (try walker.next(io_)) |e| {
         if (e.kind != .file) continue;
-        if (!std.mem.endsWith(u8, e.path, ".zz")) continue;
+        if (!zzc.isDialectSource(e.path)) continue; // 第 201 轮 D69：后缀真值取族 hub（与 `cmdInit` 写盘同源）
         // 拼接+归一单一真值（D9）：正斜杠形与文档/findUnit 精确匹配对齐。
         const joined = try cli.joinRelNorm(gpa_, entry_dir, e.path);
         try files.append(gpa_, joined);
@@ -712,7 +712,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
         };
         std.process.exit(2);
     }
-    const main_zz = try std.fmt.allocPrint(gpa_, "{s}/src/main.zz", .{name});
+    const main_zz = try zzc.initEntryPathFor(gpa_, name); // 第 201 轮 D69：入口构造取族 hub（旧形制本处自持一枚 "{s}/src/main.zz"）
     // 防覆盖：入口文件已存在则不写盘，避免清空用户已有工程的劳动成果（幂等、非破坏）。
     if (pathExists(main_zz)) {
         printOut("zzc: 工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：zzc run", .{ name, main_zz });
@@ -724,7 +724,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     // 选外语包时出生即碎码（探针 T2 实锤）——现在全部词形取自所选包、缺则安全降级。
     const tmpl_src = try cli.buildInitTemplate(gpa_, lang);
     try writeWhole(main_zz, tmpl_src);
-    printOut("已创建工程 {s}（src/main.zz）。进入目录后运行：zzc run", .{name});
+    printOut("已创建工程 {s}（{s}）。进入目录后运行：zzc run", .{ name, zzc.default_entry });
 }
 
 /// 判断 eject 目标是否会与源码树重叠的纯谓词已移到 cli.ejectDestHitsSourceTree（属
@@ -736,7 +736,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
         printErr("zzc: eject 目标 `{s}` 会与方言源码目录 `src` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
         return error.Failed;
     }
-    const proj = try collectAndTranslate("src/main.zz", lang, table);
+    const proj = try collectAndTranslate(zzc.default_entry, lang, table); // 第 201 轮 D69：入口真值取族 hub
 
     // eject 产出的是可独立 `zig build` 的可执行程序，须有 `main` 入口；纯库工程无从毕业，
     // 提前母语拒绝，避免写出指向缺失 src/main.zig 的坏 build.zig 再报“验证未通过”的误导。

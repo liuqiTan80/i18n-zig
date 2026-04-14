@@ -16,11 +16,16 @@ pub const EntryPick = struct {
 /// 带空格分隔的值（如 `-O ReleaseFast` 中的 `ReleaseFast` 不以 `-` 开头），若按非旗标
 /// 位置取入口会误把旗标值当文件，导致 `zzc build -O ReleaseFast` 之类合法透传失败。
 /// 没有任何 `.zz` 参数时，入口取默认 `src/main.zz`，全部参数都作为透传旗标。
+/// 第 201 轮 D69：后缀判据与默认入口改取 `zzc_paths` 的族真值——旧形制下同一 `.zz`/`src/main.zz`
+/// 由本函数与 `main.cmdInit`（建工程写盘）、`main.cmdEject`（硬编入口）、`main` 采集器（筛后缀）
+/// 各持一份字面量，写/读是配对契约；探针 P2/P3/P4 单点破坏 main 侧三处均 505/505 全绿（零钉），
+/// 漂移后 `zzc init x && zzc run` 报的是「找不到工程目录」而非字面量失配，用户无从归因。
+/// 跨模块耦合由本文件尾部「201 T1」的写→读往返锚钉住。
 pub fn pickEntry(args: []const []const u8) EntryPick {
     for (args, 0..) |a, i| {
-        if (std.mem.endsWith(u8, a, ".zz")) return .{ .entry = a, .idx = i };
+        if (zzc.isDialectSource(a)) return .{ .entry = a, .idx = i };
     }
-    return .{ .entry = "src/main.zz", .idx = null };
+    return .{ .entry = zzc.default_entry, .idx = null };
 }
 
 /// 生成树目录（第 199 轮 D67 抽单一真值、第 200 轮 D68 并入 `.zzc` 族 hub）：旧形制下 `.zzc/gen` 由七处
@@ -942,7 +947,7 @@ pub fn resolveEmbedZzRel(gpa: std.mem.Allocator, referrer_dir: []const u8, p: []
     if (p.len == 0) return null;
     if (p[0] == '/' or p[0] == '\\') return null;
     if (p.len >= 2 and p[1] == ':') return null;
-    if (!std.mem.endsWith(u8, p, ".zz")) return null; // 先筛后缀再拼接，省无谓 join
+    if (!zzc.isDialectSource(p)) return null; // 先筛后缀再拼接，省无谓 join（第 201 轮 D69：后缀真值同源）
     const joined = try std.fs.path.join(gpa, &.{ referrer_dir, p });
     defer gpa.free(joined);
     const norm = try normalizeRelPath(gpa, joined);
@@ -1298,4 +1303,36 @@ test "第 199 轮 T1 gen_dir 单一真值：真值字面量钉 + 写→剥组合
     try std.testing.expectEqualStrings("x.zig", stripGenDir("/tmp/deep/dir/x.zig"));
     try std.testing.expectEqualStrings("gen", stripGenDir(".zzc/gen"));
     try std.testing.expectEqualStrings("", stripGenDir(""));
+}
+
+// 第 201 轮 T1（D69 · 方言工程布局族 的写→读配对锚）。旧形制下 `.zz`/`src`/`main` 三枚真值被生产侧
+// `main.cmdInit`（建工程写盘）、`main.cmdEject`（硬编入口）与消费侧 `pickEntry`、`main` 采集器各持一份：
+// 探针 P2/P3/P4 单点破坏 main 侧三处均 505/505 全绿（零钉），且失配不报错、只让用户在错位置找不到工程。
+// 形制同 199 轮 D67 推论二：配对契约经函数组合（init 产物喂入口判据）转为行为锚，纯同值引用不可锚。
+test "第 201 轮 T1 布局族写→读往返：init 产物可被入口判据认下 + 缺省入口同址 + 后缀宽度真形" {
+    const gpa = std.testing.allocator;
+    // A1 写→读往返：`zzc init myapp` 建的入口须被入口选择判据认下（显式传参形），且字面量侧钉死
+    //    为 `myapp/src/main.zz`——改 `initEntryPathFor` 的格式串（丢目录段、换反斜杠）即本钉红。
+    const created = try zzc.initEntryPathFor(gpa, "myapp");
+    defer gpa.free(created);
+    try std.testing.expectEqualStrings("myapp/src/main.zz", created);
+    const picked = pickEntry(&.{created});
+    try std.testing.expectEqualStrings(created, picked.entry);
+    try std.testing.expectEqual(@as(?usize, 0), picked.idx);
+
+    // A2 落回工程根即默认入口：用户进目录后不带文件运行 `zzc run`，读侧缺省必须指向 init 写出的那个
+    //    文件（去掉 `<name>/` 前缀后逐字节相等）——init 建完能否直接跑通就是这条契约。
+    try std.testing.expectEqualStrings("src/main.zz", zzc.default_entry);
+    try std.testing.expectEqualStrings(zzc.default_entry, created["myapp/".len..]);
+    try std.testing.expectEqualStrings(zzc.default_entry, pickEntry(&.{ "-O", "Debug" }).entry);
+
+    // A3 采集器同判据（配对消费面）：入口名进得来、我方生成物与临时备份名进不来——
+    //    `collectAndTranslate` 的筛后缀与 `cmdInit` 的写盘共用 `isDialectSource`，此处钉住其宽度。
+    try std.testing.expect(zzc.isDialectSource(zzc.default_entry));
+    try std.testing.expect(!zzc.isDialectSource("src/main.zig")); // 生成树产物不得被当方言源采集
+    try std.testing.expect(!zzc.isDialectSource("src/main.zz.bak")); // 备份/临时名不得混入编译单元
+
+    // A4 真形坐实（非期望）：判据是纯后缀比较，故「只有扩展名没有词干」的 `.zz` 也命中——与本轮收敛前的
+    //    `std.mem.endsWith(u8, p, ".zz")` 完全一致（纯重构、不改判据宽度），钉住防「顺手加词干校验」。
+    try std.testing.expect(zzc.isDialectSource(".zz"));
 }
