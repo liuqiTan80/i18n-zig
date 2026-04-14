@@ -210,7 +210,12 @@ pub const Server = struct {
 
     pub fn deinit(self: *Server) void {
         var it = self.docs.iterator();
-        while (it.next()) |e| self.gpa.free(e.value_ptr.*);
+        while (it.next()) |e| {
+            // D60（第 195 轮）：键系 upsertDoc 里 `gpa.dupe` 的自持堆串，原码只 free 值——
+            // 在表键串全数漏收（会话结束时的兜底回收面亦缺，与 D58/D59 同族）。
+            self.gpa.free(e.key_ptr.*);
+            self.gpa.free(e.value_ptr.*);
+        }
         self.docs.deinit();
     }
 
@@ -285,7 +290,11 @@ pub const Server = struct {
             const p = params_obj orelse return;
             const td = objIn(p.get("textDocument")) orelse return;
             const uri = strField(td, "uri") orelse return;
-            if (self.docs.fetchRemove(uri)) |kv| gpa.free(kv.value);
+            // D60（第 195 轮）：`fetchRemove` 取回的键同为自持堆串，须与值一并回收（原码只 free 值）。
+            if (self.docs.fetchRemove(uri)) |kv| {
+                gpa.free(kv.key);
+                gpa.free(kv.value);
+            }
             // 规范：文档关闭后清波浪线——发布空诊断数组
             try self.publishRaw(out, uri, "[]");
             return;
@@ -326,8 +335,19 @@ pub const Server = struct {
 
     fn upsertDoc(self: *Server, uri: []const u8, text: []const u8) !void {
         const gpa = self.gpa;
-        if (self.docs.fetchRemove(uri)) |old| gpa.free(old.value);
-        try self.docs.put(try gpa.dupe(u8, uri), try gpa.dupe(u8, text));
+        // D60（第 195 轮）：docs 的键是下面 dupe 出的自持堆串，原码替换臂只 free 值、从不 free
+        // 旧键——LSP 为长驻进程且 textDocumentSync=1 全量同步，didChange 随键击成交，每换一次
+        // 文本即泄一只旧 uri 串（与 D58/D59 同族，然面在长驻进程、系全库累积最快的一处）。
+        if (self.docs.fetchRemove(uri)) |old| {
+            gpa.free(old.key);
+            gpa.free(old.value);
+        }
+        // 两只 dupe 拆开各挂 errdefer：原码挤在同一表达式里，第二只失败即第一只无人回收。
+        const key = try gpa.dupe(u8, uri);
+        errdefer gpa.free(key);
+        const val = try gpa.dupe(u8, text);
+        errdefer gpa.free(val);
+        try self.docs.put(key, val);
     }
 
     fn publish(self: *Server, out: *OutList, uri: []const u8, text: []const u8) !void {
@@ -1469,4 +1489,119 @@ test "lsp.server：asObject/objIn/intField 取值器分支真形与帧根非对�
     }
 
     std.debug.print("T4 asserts={d}\n", .{asserts});
+}
+
+// 第 195 轮审计注：`Server.upsertDoc`（L327·文档表写入壳）系全库零直调——唯 `handle` 的
+// didOpen L263 / didChange L280 两生产直调，既有 156/159/165/172 轮测皆经 `handle` 端到端
+// 间接触达，且本文件测帧 gpa 恒为 `ArenaAllocator.init(testing.allocator)`（14 处）——所有权
+// 面在 arena 掩盖下结构性不可见（D37/D49/D51/D58/D59 同族破局靶心）。
+// **疑似 D60**：`docs` 的键系 `gpa.dupe(u8, uri)` 自持堆串（L330），而三处回收点一律只 free
+// 值、从不 free 键——upsertDoc 替换臂（L329 `fetchRemove` 取回 `old` 只 `free(old.value)`）、
+// didClose（L288 同形）、`deinit`（L213 迭代只 free `e.value_ptr.*`）。LSP 服务器是**长驻进程**、
+// textDocumentSync=1 全量同步下 didChange 随键击成交——每次替换泄一只旧 uri 键串（比 D58/D59
+// 的 CLI 短进程面高频得多）；`deinit` 末了亦把全部在表键串带走。另 `put(try dupe(uri),
+// try dupe(text))` 把两只 dupe 挤在同一表达式里：第二只失败即第一只无人回收（errdefer 面）。
+// 本测以 `FailingAllocator`（不设失败靶·纯计数）套裸 `testing.allocator` 直调本壳：原码必
+// `deallocations < allocations`（差在键串数），补 free 后齐平——194 轮 A6「不借容量策略、
+// 每轮必现的计数钉」形制直用；runner 的 leaked 报告为第二重保险。
+
+test "第 195 轮 T1 upsertDoc 文档表所有权：首插/替换/双 uri/入参借用独立/didClose 端到端 + D60 键串计数钉" {
+    // lang 走独立 arena（不入被计数的 fa）：本测计数面只管 Server 的分配成交。
+    var lang_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer lang_arena.deinit();
+    var lang = try Pack.parse(lang_arena.allocator(), @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+
+    // A1..A5 直调形：首插读回 / 同 uri 替换（count 不增、文本换新）/ 双 uri 互不串 /
+    // 入参借用独立性（dupe 契约·改写源缓冲表内不变）/ 未知 uri null。
+    {
+        var fa = std.testing.FailingAllocator.init(testing.allocator, .{});
+        var srv = Server.init(fa.allocator(), &lang);
+        try srv.upsertDoc("file:///a.zz", "常数 a = 1;\n");
+        try testing.expectEqual(@as(usize, 1), srv.docs.count());
+        try testing.expectEqualStrings("常数 a = 1;\n", srv.docs.get("file:///a.zz").?);
+        try srv.upsertDoc("file:///a.zz", "常数 b = 2;\n"); // 替换臂：旧键串须在此回收
+        try testing.expectEqual(@as(usize, 1), srv.docs.count());
+        try testing.expectEqualStrings("常数 b = 2;\n", srv.docs.get("file:///a.zz").?);
+        try srv.upsertDoc("file:///b.zz", "常数 c = 3;\n");
+        try testing.expectEqual(@as(usize, 2), srv.docs.count());
+        try testing.expectEqualStrings("常数 b = 2;\n", srv.docs.get("file:///a.zz").?);
+        try testing.expectEqualStrings("常数 c = 3;\n", srv.docs.get("file:///b.zz").?);
+        try testing.expect(srv.docs.get("file:///nope.zz") == null);
+        // 入参借用独立性：喂可变缓冲，写入后改写源缓冲，表内字节须纹丝不动。
+        var mut: [8]u8 = undefined;
+        @memcpy(mut[0..7], "XYZ 06\n");
+        mut[7] = '!';
+        try srv.upsertDoc("file:///mut.zz", mut[0..7]);
+        mut[0] = 'Q';
+        mut[4] = 'Z';
+        try testing.expectEqualStrings("XYZ 06\n", srv.docs.get("file:///mut.zz").?);
+        srv.deinit(); // 在表键串+值须全收
+        // D60 计数钉：原码从不 free 键串（三处回收点皆只 free 值）→ 此处必差 n 只。
+        try testing.expectEqual(fa.deallocations, fa.allocations);
+    }
+
+    // A6 didOpen→didClose 端到端计数钉（覆盖 handle 的 didClose L288 回收臂与 upsertDoc
+    //   首插臂的真实报文路径）：全报文字节经 fa 分配、逐段回收，末了表空——原码差一只
+    //   didClose 未 free 的 uri 键串。
+    {
+        var fa = std.testing.FailingAllocator.init(testing.allocator, .{});
+        var srv = Server.init(fa.allocator(), &lang);
+        var out: OutList = .empty;
+        try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///e1.zz\",\"text\":\"常数 a = 1;\\n\"}}}", &out);
+        try testing.expectEqual(@as(usize, 1), out.items.len);
+        try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"file:///e1.zz\"}}}", &out);
+        try testing.expectEqual(@as(usize, 2), out.items.len);
+        try testing.expect(std.mem.indexOf(u8, out.items[1], "\"diagnostics\":[]") != null); // 关闭清波浪线
+        try testing.expectEqual(@as(usize, 0), srv.docs.count());
+        freeOut(srv.gpa, &out);
+        srv.deinit();
+        try testing.expectEqual(fa.deallocations, fa.allocations);
+    }
+
+    // A7 didOpen→didChange（同 uri 全文替换）→didChange→deinit 端到端计数钉：长驻会话里
+    //   随键击成交的高频路径——原码每换一次文本泄一只旧键串（本轮三枚键串计数钉之二）。
+    {
+        var fa = std.testing.FailingAllocator.init(testing.allocator, .{});
+        var srv = Server.init(fa.allocator(), &lang);
+        var out: OutList = .empty;
+        try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///e2.zz\",\"text\":\"常数 a = 1;\\n\"}}}", &out);
+        try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///e2.zz\"},\"contentChanges\":[{\"text\":\"常数 b = 2;\\n\"}]}}", &out);
+        try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///e2.zz\"},\"contentChanges\":[{\"text\":\"常数 c = 3;\\n\"}]}}", &out);
+        try testing.expectEqual(@as(usize, 3), out.items.len);
+        try testing.expectEqualStrings("常数 c = 3;\n", srv.docs.get("file:///e2.zz").?);
+        freeOut(srv.gpa, &out);
+        srv.deinit();
+        try testing.expectEqual(fa.deallocations, fa.allocations);
+    }
+
+    // A8 三道分配失败臂逐点钉（探针实定落点：fail_index 0=dupe(uri)、1=dupe(text)、
+    //   2=docs.put 首块表内存；≥3 恒成——本壳分配序固定故可逐臂钉）：任臂失败皆须
+    //   ①向上传播 error.OutOfMemory（不静默）②表不留半个映射③已 dupe 的串全数回收。
+    //   落点另以 `allocations == arm` 钉住（防“失败未落在所拟那一步”的伪钉）。
+    //   原码两只 dupe 挤同一表达式且无 errdefer：fail_index=1 泄键、=2 泄键+值——本钉必红。
+    {
+        var arm: usize = 0;
+        while (arm <= 2) : (arm += 1) {
+            var fa = std.testing.FailingAllocator.init(testing.allocator, .{ .fail_index = arm });
+            var srv = Server.init(fa.allocator(), &lang);
+            try testing.expectError(error.OutOfMemory, srv.upsertDoc("file:///f.zz", "常数 a = 1;\n"));
+            try testing.expectEqual(@as(usize, 0), srv.docs.count());
+            try testing.expectEqual(arm, fa.allocations);
+            try testing.expectEqual(fa.deallocations, fa.allocations);
+            srv.deinit();
+        }
+    }
+
+    // A9 成功臂分配套钉：首次插入恰三块（键串/值串/表首块）——防“只修不还形状”的
+    //   过度修（比如把 dupe 改成存入借用则次数与独立性同变），与 A4 入参独立性互为经标。
+    {
+        var fa = std.testing.FailingAllocator.init(testing.allocator, .{});
+        var srv = Server.init(fa.allocator(), &lang);
+        try srv.upsertDoc("file:///g.zz", "常数 a = 1;\n");
+        try testing.expectEqual(@as(usize, 3), fa.allocations);
+        try testing.expectEqual(@as(usize, 0), fa.deallocations); // 在表期间一只都不该提前回
+        srv.deinit();
+        try testing.expectEqual(fa.deallocations, fa.allocations); // 含表首块在内全部齐平
+    }
 }
