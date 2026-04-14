@@ -1355,6 +1355,8 @@ pub fn main(init: std.process.Init) !void {
 // 改名；因这三块只存在于 main 图（`zig build test` 每图只跑一份）故常规形制不红，本机 24 路并跑
 // 同一 main 图二进制时它们恰为唯一残红点名（修复后 core 图 0/24 红、main 图 20/24 红全属此族）。
 // 私有化需换 cwd（`std.os.linux.chdir` 断代 windows CI 矩阵）或把目录名做成生产入参——留待专轮。
+// 附带契约（本轮尾注自捕）：私有名把「固定名覆盖」换成「每跑一枚新名」，用毕须显式回清，否则
+// 由并发互踩转为 /tmp 累积（191/192 两块漏 `deleteFileAbsolute` 已补齐，193/194 形制为样）。
 const tpriv = @import("test_priv.zig");
 
 test "第 181 轮 T1 parseMachineDiag：合法形提取 + 防御拒形全臂钉（直接命中的每个拒绝分支都喂一例）" {
@@ -1737,8 +1739,11 @@ test "第 190 轮 T2 eject 三件套：回读命中/名闸/无字段/NotDir + sp
         std.debug.print("T2 setup createDirPath 失败：{s}", .{@errorName(e)});
         return error.TestUnexpectedResult;
     };
-    defer std.Io.Dir.cwd().deleteFile(io_, zon) catch {};
-    defer std.Io.Dir.cwd().deleteDir(io_, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, dir) catch {};
+    // 自捕（本轮尾注·D62 迁移的次生面）：上行原为「先注 deleteFile(zon) 再注 deleteDir(dir)」，
+    //   defer LIFO 故删目录**先跑**（时 zon 尚在 → 非空 ENOTEMPTY 被 catch 吞）、删文件后跑，
+    //   每跑留一枚**空目录**；固定名时代下一跑的同名前置清理会自愈，私有名下不再相遇遂成累积。
+    //   改 deleteTree 整树归零（192 五跑同族形制：文件/目录/子树全形态幂等）。
 
     const good = "// zzc\n.{\n    .name = .pj,\n    .fingerprint = 0xdeadbeef,\n}\n";
     {
@@ -1827,6 +1832,10 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     werr = &wf.interface;
     defer wf.interface.flush() catch {};
     defer werr = undefined;
+    // 自捕（本轮尾注·D62 迁移的次生面）：私有名把「固定名覆盖」换成「每跑一枚新名」，块尾漏回清
+    //   即每跑净累积一份（本块与 192 同款，实测 /tmp 累积 107 枚）——回清补齐（193/194 既有形制）。
+    //   defer LIFO：本行后注册=先跑，unlink 于 close/flush 之前，POSIX 下句柄仍可读到内容清零。
+    defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {};
 
     // 前置清理（A1「尚无符号表」须为真前提而非巧合）+ 尾部回清。
     std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
@@ -1917,6 +1926,7 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     werr = &wf.interface;
     defer werr = undefined; // 先注册=后跑：wf.flush 于其前执行完毕
     defer wf.interface.flush() catch {};
+    defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {}; // 自捕（同 191：私有名须配回清）
     // 前置清理（A1「尚无文件」须为真前提）+ 尾部回清。自捕（五跑）：上一跑 ABRT 崩溃
     //   把 logs/untranslated_phrases.json 残留成**目录**形态（C 段构造的失败注入态），
     //   deleteFile 对目录失败、pathExists 仍真——改 deleteTree 递归删（文件/目录/子树
