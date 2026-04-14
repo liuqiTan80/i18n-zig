@@ -150,6 +150,27 @@ pub fn build(b: *std.Build) void {
     check_matcher_run.addFileArg(b.path("editors/vscode/examples/tasks.json"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
+
+    // 第 205 轮 D73：工具链版本族 ↔ 本仓 `build.zig.zon` 与 CI 安装版本守卫（同上的跨文件同步守卫形制）。
+    // 对面是两枚 `src/` 包路径之外的文件——205 t2 探针 P3 实锤「改 build.zig.zon 的 minimum_zig_version
+    // 而 522/522 全绿」（zon 与 CI 皆非 source dependency，测试根本不重跑），故只能由本步以 `addFileArg`
+    // 声明文件依赖后核对；挂在 `test` 上使 CI 的 `zig build test` 必检（同 202/203 轮判例）。
+    const check_ver_exe = b.addExecutable(.{
+        .name = "check-toolchain-baseline",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check/zon_baseline_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+
+    const check_ver_step = b.step("check-toolchain-baseline", "校验 build.zig.zon 与 CI 安装版本同源于工具链族真值（CI 守卫）");
+    const check_ver_run = b.addRunArtifact(check_ver_exe);
+    check_ver_run.addFileArg(b.path("build.zig.zon"));
+    check_ver_run.addFileArg(b.path(".gitcode/workflows/ci.yml"));
+    check_ver_step.dependOn(&check_ver_run.step);
+    test_step.dependOn(&check_ver_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②）

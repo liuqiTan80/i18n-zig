@@ -430,6 +430,10 @@ fn findUnit(proj: Project, entry: []const u8) ?Unit {
 
 // ---------------------------------------------------------------- zig 子进程与报错回译
 
+/// 「无法启动 zig」的人读提示（第 205 轮 D73）：版本下限取族真值，标定升代时文案不滞后
+/// （t2 探针 P4 实锤旧形制改这枚文案零测可抓；失实文案按 197 轮 D65 判例属缺陷面）。
+const zig_missing_msg: []const u8 = "zzc: 无法启动 zig，请确认已安装 Zig " ++ zzc.zig_series ++ "+（PATH 中可找到 zig）";
+
 /// 执行一次编译；失败时把 stderr 回译成母语打印，返回 error.Failed。
 /// `seen` 不为 null 时跨多次调用去重诊断（`zzc check` 传入）。
 fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8, seen: ?*std.StringHashMap(void)) !void {
@@ -437,7 +441,7 @@ fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8
         .argv = argv,
         .create_no_window = true,
     }) catch {
-        printErr("zzc: 无法启动 zig，请确认已安装 Zig 0.17+（PATH 中可找到 zig）", .{});
+        printErr(zig_missing_msg, .{});
         return error.Failed;
     };
     defer gpa_.free(res.stdout);
@@ -860,7 +864,7 @@ fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
     try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .name = .{s},\n", .{app_name}));
     try z.appendSlice(gpa_, "    .version = \"0.1.0\",\n");
     if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .fingerprint = {s},\n", .{t}));
-    try z.appendSlice(gpa_, "    .minimum_zig_version = \"0.17.0\",\n");
+    try z.appendSlice(gpa_, "    .minimum_zig_version = \"" ++ zzc.zig_version ++ "\",\n");
     try z.appendSlice(gpa_, "    .dependencies = .{},\n");
     // `.paths` 条目由族集合派生（第 204 轮 D72）：与写侧落盘名同源，杜绝「文件写成 A、清单列的是 B」。
     // 逐条目 allocPrint + defer free（第 65 轮 D23 反模式守则：临时串必须逐枚释放），字节形与旧手抄全等。
@@ -1662,7 +1666,7 @@ test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp �
     gpa_ = arena.allocator(); // 文件级 arena 手动接线（生产 main L1150 同形制、188 轮 io_ 同族先例）
 
     const tail =
-        "    .minimum_zig_version = \"0.17.0\",\n" ++
+        "    .minimum_zig_version = \"" ++ zzc.zig_version ++ "\",\n" ++ // 第 205 轮 D73：版本段取族真值（本测的 `.paths` 段仍写死三枚名，作独立值钉）
         "    .dependencies = .{},\n" ++
         "    .paths = .{\n        \"build.zig\",\n        \"build.zig.zon\",\n        \"src\",\n    },\n}\n";
 
@@ -2678,4 +2682,22 @@ test "第 204 轮 T1 毕业工程产物族跨点位耦合：`.paths` 清单⟺�
     }
     // A4 独立写死的负例形：消息面不承诺导出树目录（`.paths` 才收录它），出现即文案越界说谎。
     try std.testing.expect(std.mem.indexOf(u8, eject_ok_msg, zzc.src_dir) == null);
+}
+test "第 205 轮 T2 eject zon 模板与启动提示吃族真值：hub 判据现读产物文本 + 文案系列形 + 异值负例" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 文件级 arena 接线（189 T2/204 T1 同族形制）
+    // A1 组合锚：把 ejectZoneText 的真产物喂 hub 的对面判据——判据认它，才证明模板行与族真值同源。
+    const zon = try ejectZoneText("pj", null);
+    defer gpa_.free(zon);
+    try std.testing.expect(zzc.zonDeclaresBaseline(zon));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, zon, ".minimum_zig_version"));
+    // A2 负例：判据真在读值而非恒真——把产物里的真值串换成异值后须翻假。
+    const stale = try std.mem.replaceOwned(u8, gpa_, zon, zzc.zig_version, "9.9.9");
+    defer gpa_.free(stale);
+    try std.testing.expect(!zzc.zonDeclaresBaseline(stale));
+    // A3 文案族：启动失败提示须现形族系列串、且不得现形完整串（下限形是 `X.Y+`，非 `X.Y.Z+`）。
+    try std.testing.expect(std.mem.indexOf(u8, zig_missing_msg, zzc.zig_series) != null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_missing_msg, zzc.zig_version) == null);
+    try std.testing.expect(std.mem.indexOf(u8, zig_missing_msg, "Zig " ++ zzc.zig_series ++ "+") != null);
 }

@@ -150,6 +150,54 @@ pub fn ejectPathFor(alloc: std.mem.Allocator, dest: []const u8, name: []const u8
     return std.fmt.allocPrint(alloc, "{s}/{s}", .{ dest, name });
 }
 
+/// 工具链标定基线的两级真值（第 205 轮 D73）：诊断回译标定（`cli.diag_baseline_zig`）、eject 模板写进
+/// 每个毕业工程的 `.minimum_zig_version`、「无法启动 zig」提示里的版本下限、本仓 `build.zig.zon` 与 CI
+/// 安装版本共用的唯一真值。旧形制四处各抄一份同值字面量、互不引用（t2 探针 P3/P4 实锤改对面与本仓 zon
+/// 而 `zig build test` 恒绿），标定升代时三处静默停在旧版——毕业工程声明的下限低于生成它的工具链标定，
+/// 用户按声明在旧版上构建才拿到 zig 的失败而非 zzc 的说明。
+pub const zig_major: u32 = 0;
+
+/// 标定基线次级（与 `zig_major` 同族，第 205 轮 D73）。
+pub const zig_minor: u32 = 17;
+
+/// 系列串 `0.17`（人读提示用「Zig {s}+」的版本下限形，第 205 轮 D73）：由上两枚派生，不再手抄。
+pub const zig_series: []const u8 = std.fmt.comptimePrint("{d}.{d}", .{ zig_major, zig_minor });
+
+/// 完整串 `0.17.0`（zon 的 `.minimum_zig_version` 与 CI 下载 URL 的版本形，第 205 轮 D73）：
+/// 由同一对真值派生，故与 `zig_series` 不可能分道。
+pub const zig_version: []const u8 = std.fmt.comptimePrint("{d}.{d}.0", .{ zig_major, zig_minor });
+
+/// CI 安装段的定位标记 `download/0.17.0/`（对面判据的唯一形制来源，第 205 轮 D73）。
+pub const zig_download_marker: []const u8 = "download/" ++ zig_version ++ "/";
+
+/// 从文本中抽 `.minimum_zig_version = "…"` 引号之间的值段（第 205 轮 D73 的守卫判据，纯函数）。
+/// 字段名缺、值非字符串形（无成对引号）皆 null；本仓只用单层引号形，故不实现转义与多行串。
+pub fn minimumZigVersionIn(text: []const u8) ?[]const u8 {
+    const key = ".minimum_zig_version";
+    const k = std.mem.indexOf(u8, text, key) orelse return null;
+    var i = k + key.len;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i >= text.len or text[i] != '=') return null;
+    i += 1;
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+    if (i >= text.len or text[i] != '"') return null;
+    const start = i + 1;
+    const end = std.mem.indexOfScalar(u8, text[start..], '"') orelse return null;
+    return text[start .. start + end];
+}
+
+/// 本仓 `build.zig.zon` 文本声明的工具链下限是否逐字节等于族真值（第 205 轮 D73 的守卫判据）。
+/// 取严格全等而非「不低于」：本仓只标定一个版本，`dev`/`+hash` 后缀或另起 patch 都须显式改族真值。
+pub fn zonDeclaresBaseline(text: []const u8) bool {
+    const v = minimumZigVersionIn(text) orelse return false;
+    return std.mem.eql(u8, v, zig_version);
+}
+
+/// CI 工作流文本是否安装族真值所指的那一版（第 205 轮 D73 的守卫判据）：以 `zig_download_marker` 定位。
+pub fn ciInstallsBaseline(text: []const u8) bool {
+    return std.mem.indexOf(u8, text, zig_download_marker) != null;
+}
+
 /// 目录路径 `dir` 是否被 `.gitignore` 内容 `rules` 的某条**目录规则**覆盖（第 202 轮 D70 的守卫判据）。///
 /// 取首段比较：族成员的落盘根总在第一位（`.zzc/gen` → `.zzc`、`logs/x.json` → `logs`），而 git 的语义
 /// 正是「目录被忽略则整棵子树被忽略」，故子段随根。
@@ -311,4 +359,34 @@ test "第 204 轮 T0 毕业工程产物族：值钉／清单派生钉／dest 构
         try std.testing.expect(std.mem.indexOfScalar(u8, name, '/') == null);
         try std.testing.expect(!std.mem.startsWith(u8, name, "."));
     }
+}
+test "第 205 轮 T0 工具链版本族：两枚数与两枚串的值钉／派生一致性／zon 与 CI 判据小样 + 负例" {
+    // A1 值钉：判据不复用被测常量（196/197 通则），四枚形各自写死。
+    try std.testing.expectEqual(@as(u32, 0), zig_major);
+    try std.testing.expectEqual(@as(u32, 17), zig_minor);
+    try std.testing.expectEqualStrings("0.17", zig_series);
+    try std.testing.expectEqualStrings("0.17.0", zig_version);
+    try std.testing.expectEqualStrings("download/0.17.0/", zig_download_marker);
+    // A2 派生一致：完整串＝系列串 + ".0"；两级数可从系列串反解回真值；系列串恰一枚点。
+    try std.testing.expectEqualStrings(zig_series ++ ".0", zig_version);
+    const back = std.fmt.parseInt(u32, zig_series[std.mem.indexOfScalar(u8, zig_series, '.').? + 1 ..], 10) catch unreachable;
+    try std.testing.expectEqual(zig_minor, back);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, zig_series, "."));
+    // A3 minimumZigVersionIn：标准形／前空格形／同行后置内容形；缺字段、值非引号、引号不闭合皆 null。
+    try std.testing.expectEqualStrings("0.17.0", minimumZigVersionIn(".{\n    .minimum_zig_version = \"0.17.0\",\n}").?);
+    try std.testing.expectEqualStrings("0.18.1", minimumZigVersionIn(".minimum_zig_version   =   \"0.18.1\"").?);
+    try std.testing.expectEqualStrings("1.2.3", minimumZigVersionIn(".minimum_zig_version = \"1.2.3\", .paths = .{}").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), minimumZigVersionIn(".{\n    .version = \"0.1.0\",\n}"));
+    try std.testing.expectEqual(@as(?[]const u8, null), minimumZigVersionIn(".minimum_zig_version = 17"));
+    try std.testing.expectEqual(@as(?[]const u8, null), minimumZigVersionIn(".minimum_zig_version = \"未闭合"));
+    // A4 zonDeclaresBaseline：真值命中；异值／缺字段／带后缀 皆假（本仓只标定一版，严格全等）。
+    try std.testing.expect(zonDeclaresBaseline(".minimum_zig_version = \"" ++ zig_version ++ "\","));
+    try std.testing.expect(!zonDeclaresBaseline(".minimum_zig_version = \"0.16.0\","));
+    try std.testing.expect(!zonDeclaresBaseline(".minimum_zig_version = \"" ++ zig_version ++ "-dev.1\","));
+    try std.testing.expect(!zonDeclaresBaseline(".{ .name = .zzc }"));
+    // A5 ciInstallsBaseline：含下载标记为真；只含系列串、只含裸版本号、空文本 皆假。
+    try std.testing.expect(ciInstallsBaseline("curl -LO https://ziglang.org/" ++ zig_download_marker ++ "zig.tar.xz"));
+    try std.testing.expect(!ciInstallsBaseline("安装 Zig " ++ zig_series ++ "（本机）"));
+    try std.testing.expect(!ciInstallsBaseline("download/0.16.0/zig.tar.xz"));
+    try std.testing.expect(!ciInstallsBaseline(""));
 }

@@ -620,7 +620,9 @@ test "parseFingerprintFromZone：名字匹配才抽取，改名/缺字段/无十
 // ---------------------------------------------------------------------------
 
 /// 诊断措辞表标定的工具链基线（内置中文包真相源；`zigDriftNote` 据此判漂移）。
-pub const diag_baseline_zig = .{ .major = 0, .minor = 17 };
+/// 第 205 轮 D73：两枚数取族真值——标定、eject 模板写给毕业工程的 `.minimum_zig_version`、
+/// 「无法启动 zig」提示里的版本下限、本仓 `build.zig.zon` 与 CI 安装版本自此同源，标定升代不再三处滞后。
+pub const diag_baseline_zig = .{ .major = zzc.zig_major, .minor = zzc.zig_minor };
 
 /// 解析 `zig version` 文本（`M.m.p` / `M.m.p-dev.N+hash` 等形）取前两级 major/minor；
 /// 垃圾/缺第二段/非数字段返回 null（调用方据此静默、不误报）。按 `.` 分段后取前两段 parseInt，
@@ -1367,4 +1369,26 @@ test "第 204 轮 T2 毁源闸门吃布局族真值：拒绝面与放行面都�
         if (std.mem.eql(u8, n, zzc.src_dir)) found = true;
     }
     try std.testing.expect(found);
+}
+test "第 205 轮 T1 标定基线吃工具链族真值：同源断言 + 漂移告警文案现形族系列串 + 完整串可解析回两级" {
+    // A1 同源断言（异值锚：本模块另抄异值即红；同值内联不可锚，205 反证 M1 如实登册）。
+    try std.testing.expectEqual(zzc.zig_major, diag_baseline_zig.major);
+    try std.testing.expectEqual(zzc.zig_minor, diag_baseline_zig.minor);
+    var buf: [256]u8 = undefined;
+    // A2 基线内静默：把族真值本身喂进去须 null（告警判据与族真值同点）。
+    try std.testing.expectEqual(@as(?[]const u8, null), zigDriftNote(zzc.zig_major, zzc.zig_minor, &buf));
+    // A3 非基线告警须现形族系列串（文案里的标定值与族同源，否则升代后告警说谎）。
+    const note = zigDriftNote(zzc.zig_major, zzc.zig_minor + 1, &buf) orelse {
+        std.debug.print("T1 A3：非基线应产告警", .{});
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expect(std.mem.indexOfScalar(u8, note, 0) == null); // bufPrint 留尾脏，值段须无 NUL
+    try std.testing.expect(std.mem.indexOf(u8, note, zzc.zig_series) != null);
+    // A4 往返：族完整串可被 parseZigVersion 解析回族两级（本仓 zon/CI 用的正是这一形）。
+    const parsed = parseZigVersion(zzc.zig_version ++ "\n") orelse {
+        std.debug.print("T1 A4：完整串应可解析", .{});
+        return error.TestUnexpectedResult;
+    };
+    try std.testing.expectEqual(zzc.zig_major, parsed.major);
+    try std.testing.expectEqual(zzc.zig_minor, parsed.minor);
 }
