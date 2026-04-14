@@ -26,6 +26,7 @@ const diag = @import("diag/translate.zig");
 const PureFilter = @import("diag/pure_filter.zig").PureFilter;
 const UntranslatedList = @import("diag/pure_filter.zig").UntranslatedList;
 const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslatedJson;
+const UntranslatedPhrase = @import("diag/pure_filter.zig").UntranslatedPhrase; // 192 T1 造清单 entry 用（生产侧经 UntranslatedList 间接引用、无此别名先例）
 const cli = @import("cli/args.zig");
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
@@ -1844,5 +1845,186 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
         try std.testing.expectError(error.DuplicateSymbol, loadSymbols(&t));
+    }
+}
+
+// 第 192 轮审计注：flushUntranslated（L79·未翻译清单进程出口落盘壳）系测面零直调——
+// 生产直调唯 bail L915 与 main defer L1155（皆产品入口流、测试二进制不触发）；纯函数面
+// renderUntranslatedJson（键名/转义/D22 mid-loop OOM errdefer）已有三枚 pure_filter 单测、
+// UntranslatedList.log 去重亦有测钉，但壳本体全库零钉：F3「空清单不建文件」早退臂（防 CI
+// 把恒在空文件误读为零未译）、real 时钟 generated_at（改 monotonic 族即落 1970）、双 catch
+// 静面（序列化失败/落盘失败均只 printErr、不改退出码——改成 try 传播即把辅面异常升格成主
+// 报错）、defer free(json) 泄漏防线（191 S1 同族）与 entry 字段透传/顺序契约。盘上形制：
+// writeWhole 自动 createDirPath("logs")（file_io L40）、logs/ 未 gitignore——测试图以
+// deleteTree 回清（崩溃幂等：文件/目录/子树全形态归零）；werr 接线 /tmp 盘上日志
+// （191 T2 同族：静面 printErr 臂 werr=undefined 直崩）。首跑自证注：0.17 断代候选
+// `f.deleteFile` 不存在；`deleteFileAbsolute` 内部 assert(isAbsolute) 传相对路径即
+// ABRT——回清统一 cwd().deleteFile 相对形；后因崩溃残留脏态改 deleteTree 整树归零
+// （五跑）。JsonDoc 系 pure_filter 私有不可 import，改动态 std.json.Value 按字节面
+// 键名钉。连环自捕八案：①statsAllocator 已断代——B3 改 FailingAllocator 公开计数
+// 字段；②errdefer+defer 同指针双手清理在失败展开路径双 deinit，0.17 SafetyLock
+// assertUnlocked panic 掩原始测红——统一单手 defer；③跨段悬垂全局拷贝：B2 块尾
+// deinit 后 untranslated_list 仍持死指针，C 段壳读垃圾 phrase.len 直诱发巨量分配
+// overflow——跨段交接须显式重置全局；④log 自持 dupe 串须逐条 free（deinit 只释放
+// 数组本体）。证伪撤号轮不占 D 号。
+
+test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透传/静面双 catch/json 免泄漏" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    io_ = threaded.io();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 189/190/191 同族形制：文件级 arena 接线
+    // werr 接线（静面 printErr 臂需实流；191 T2 同族形制）：函数帧作用域一次接线、
+    //   defer 回置——B/C 段内块会重开 append 句柄复用法帧的 wf/wbuf。
+    const werr_path = "/tmp/zzc192-werr.log";
+    var wf: Io.File.Writer = undefined;
+    var wbuf: [512]u8 = undefined;
+    var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
+    defer wfile.close(io_);
+    wf = Io.File.Writer.init(wfile, io_, &wbuf);
+    werr = &wf.interface;
+    defer werr = undefined; // 先注册=后跑：wf.flush 于其前执行完毕
+    defer wf.interface.flush() catch {};
+    // 前置清理（A1「尚无文件」须为真前提）+ 尾部回清。自捕（五跑）：上一跑 ABRT 崩溃
+    //   把 logs/untranslated_phrases.json 残留成**目录**形态（C 段构造的失败注入态），
+    //   deleteFile 对目录失败、pathExists 仍真——改 deleteTree 递归删（文件/目录/子树
+    //   全形态归零，崩溃幂等）。
+    std.Io.Dir.cwd().deleteTree(io_, "logs") catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, "logs") catch {};
+
+    // A1 F3 契约主钉：空清单 → 早退、不建文件（防 CI 把恒在空文件误读为「零未译」）。
+    untranslated_list = .{};
+    flushUntranslated();
+    try std.testing.expect(!pathExists("logs/untranslated_phrases.json"));
+
+    // A2 非空落盘端到端：entry 字段透传 + generated_at 走 real 时钟（下界=epoch 秒
+    //   量级、上界拒 monotonic 族小值——ts 源被改成开机钟即红）+ 键名形制自证。
+    const PHRASE = "未译甲";
+    const LOC = "src/a.zz:1:2";
+    const TS: i64 = 1700000001;
+    var items_a = std.ArrayList(UntranslatedPhrase).empty;
+    defer items_a.deinit(std.testing.allocator); // 六跑自捕：原 errdefer+defer 同指针双 deinit（见尾部总注）
+    try items_a.append(std.testing.allocator, .{ .phrase = PHRASE, .location = LOC, .timestamp = TS });
+    untranslated_list = .{ .items = items_a };
+    flushUntranslated();
+    try std.testing.expect(pathExists("logs/untranslated_phrases.json"));
+    // 自捕（二跑）：JsonDoc 系 pure_filter 模块私有 const 不可 import——改动态
+    //   std.json.Value 解析，键名形制（generated_at/phrase/…）在测试侧显式写死，
+    //   反证面更宽（改键名即红）。
+    const raw_a = try readFileRaw("logs/untranslated_phrases.json");
+    const dv = try std.json.parseFromSlice(std.json.Value, gpa_, raw_a, .{});
+    defer dv.deinit();
+    const doc = dv.value;
+    const ga = doc.object.get("generated_at").?;
+    // 自捕（三跑）：0.17 动态 union 无 `Integer` 大写成员；tag 断言系冗余——
+    //   下行 ga.integer 字段访问本身即 tag 校验（错 tag 直崩即红），删专门断言。
+    const now_hi = @as(i64, @intCast(@divFloor(Io.Timestamp.now(io_, .real).nanoseconds, std.time.ns_per_s)));
+    try std.testing.expect(ga.integer >= 1_760_000_000); // 下界：实置真时钟
+    try std.testing.expect(ga.integer <= now_hi + 60); // 上界：monotonic 族小值直穿
+    const arr = doc.object.get("phrases").?;
+    try std.testing.expectEqual(@as(usize, 1), arr.array.items.len);
+    const e0 = arr.array.items[0].object;
+    try std.testing.expectEqualStrings(PHRASE, e0.get("phrase").?.string);
+    try std.testing.expectEqualStrings(LOC, e0.get("location").?.string);
+    try std.testing.expectEqual(TS, e0.get("timestamp").?.integer);
+    try std.testing.expectEqualStrings("[待翻译] " ++ PHRASE, e0.get("suggested_translation").?.string);
+
+    // A3 去重清单多 entry 顺序透传：log 去重属纯函数面（已有钉），壳侧契约=条目序照传。
+    var items_c = std.ArrayList(UntranslatedPhrase).empty;
+    defer items_c.deinit(std.testing.allocator); // 六跑自捕：双手清理改单手（同上）
+    var lc_c = UntranslatedList{};
+    // 八跑自捕：log 的 phrase/location 系 gpa.dupe 自持堆串——items.deinit 只释放
+    //   数组本体，4 枚 dupe 须逐条 free（LeakCheckedAllocator 直报 leaked 4）。
+    defer {
+        for (lc_c.items.items) |it| {
+            std.testing.allocator.free(it.phrase);
+            std.testing.allocator.free(it.location);
+        }
+        lc_c.items.deinit(std.testing.allocator);
+    }
+    try lc_c.log(std.testing.allocator, "重复乙", "src/b.zz", 1);
+    try lc_c.log(std.testing.allocator, "重复乙", "src/b.zz", 1); // 复合键去重：仍 1 条
+    try lc_c.log(std.testing.allocator, "另一丙", "src/c.zz", 2);
+    try items_c.appendSlice(std.testing.allocator, lc_c.items.items);
+    untranslated_list = .{ .items = items_c };
+    flushUntranslated();
+    const raw_c = try readFileRaw("logs/untranslated_phrases.json");
+    var vd_c = try std.json.parseFromSlice(std.json.Value, gpa_, raw_c, .{});
+    defer vd_c.deinit();
+    const arr_c = vd_c.value.object.get("phrases").?.array;
+    try std.testing.expectEqual(@as(usize, 2), arr_c.items.len);
+    try std.testing.expectEqualStrings("重复乙", arr_c.items[0].object.get("phrase").?.string);
+    try std.testing.expectEqualStrings("另一丙", arr_c.items[1].object.get("phrase").?.string);
+
+    // B1 同清单重写=覆盖非追加（createFile 默认 truncate 经壳成立）：条数仍 2
+    //   （generated_at 秒级可变，不拿全文相等当判据、防跨秒假红）。
+    flushUntranslated();
+    const raw_b1 = try readFileRaw("logs/untranslated_phrases.json");
+    var vd_b1 = try std.json.parseFromSlice(std.json.Value, gpa_, raw_b1, .{});
+    defer vd_b1.deinit();
+    try std.testing.expectEqual(@as(usize, 2), vd_b1.value.object.get("phrases").?.array.items.len);
+
+    // B2 序列化失败静面（catch printErr 臂）：fail-at-0 分配器注入 gpa_ → render 首
+    //    alloc 即 OOM → printErr「序列化失败…已跳过落盘」+ return——void 签名即「不改
+    //   退出码」契约本体（改成 try 传播则 defer 调用点编译期自守）。借清单字段零分配
+    //   路径（纯 ASCII 免转义），不触 io 分配面。
+    {
+        wf = Io.File.Writer.init(wfile, io_, &wbuf); // 复用句柄重开 writer（append 语义、读前 flush）
+        werr = &wf.interface;
+        var b_items = std.ArrayList(UntranslatedPhrase).empty;
+        defer b_items.deinit(std.testing.allocator); // 六跑自捕：双手改单手（同上）
+        try b_items.append(std.testing.allocator, .{ .phrase = "plain-ascii", .location = "src/d.zz", .timestamp = 3 });
+        untranslated_list = .{ .items = b_items };
+        var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        gpa_ = fa.allocator();
+        flushUntranslated();
+        gpa_ = arena.allocator(); // 回置必须早于块尾 flush defer（werr 后续仍用 io_）
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "序列化失败") != null);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "已跳过落盘") != null);
+    }
+
+    // C 落盘失败静面（writeWhole catch 臂）：目标路径已是目录 → createDirPath/createFile
+    //   失败 → printErr「落盘失败…已跳过」、void 静默返回（改成 try 传播即主报错升格缺陷）。
+    {
+        // 七跑自捕：B2 块尾 defer 已把 b_items 归还 testing.allocator，而全局
+        //   untranslated_list 拷贝未回清——C 段壳读到悬垂内存（phrase.len 垃圾直
+        //   接诱发 render 巨量分配 integer overflow）。回清归段内职责、跨段交接
+        //   须显式重置全局（188/189 全局接线回置守则同族延伸）。
+        untranslated_list = .{};
+        std.Io.Dir.cwd().deleteTree(io_, "logs") catch {}; // 承上：整树归零再造目录态
+        try std.Io.Dir.cwd().createDirPath(io_, "logs/untranslated_phrases.json");
+        wf = Io.File.Writer.init(wfile, io_, &wbuf);
+        werr = &wf.interface;
+        var c_items = std.ArrayList(UntranslatedPhrase).empty;
+        defer c_items.deinit(std.testing.allocator); // 单手清理（六跑自捕同族）
+        try c_items.append(std.testing.allocator, .{ .phrase = "落盘失败钉", .location = "src/f.zz", .timestamp = 5 });
+        untranslated_list = .{ .items = c_items };
+        flushUntranslated(); // 非空清单 → writeWhole 失败臂
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "落盘失败") != null);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "已跳过") != null);
+        std.Io.Dir.cwd().deleteDir(io_, "logs/untranslated_phrases.json") catch {};
+    }
+
+    // B3 defer free(json) 泄漏钉（191 S1 同族反证靶）：gpa_ 换 FailingAllocator 直连
+    //   （0.17 断代自捕：statsAllocator 已不存在——改读 fa.allocations/deallocations
+    //   公开计数字段；init 第二参为 Config 结构非裸整数）。壳的 defer gpa_.free(json)
+    //   如实兑现；去 defer 即 allocations > deallocations 测红。
+    {
+        untranslated_list = .{};
+        var b3_items = std.ArrayList(UntranslatedPhrase).empty;
+        defer b3_items.deinit(std.testing.allocator); // 六跑自捕：双手改单手（同上）
+        try b3_items.append(std.testing.allocator, .{ .phrase = "plain-ascii2", .location = "src/e.zz", .timestamp = 4 });
+        untranslated_list = .{ .items = b3_items };
+        var fa3 = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        gpa_ = fa3.allocator();
+        flushUntranslated();
+        gpa_ = arena.allocator(); // 回置早于块尾（B3 无 werr 依赖、计数已定格）
+        try std.testing.expectEqual(fa3.deallocations, fa3.allocations);
+        try std.testing.expect(fa3.allocations > 0); // 防双零假绿（render 确走过分配）
     }
 }
