@@ -370,3 +370,77 @@ test "tmlang.isLanguageConstant：恰四常量 + near-miss 判 false（第 167 �
     try testing.expect(!isLanguageConstant("un"));
     try testing.expect(!isLanguageConstant(""));
 }
+
+// 护栏（第 186 轮增量审计·证伪撤号）：`emitAlternation`（L25·贪心最长匹配 alternation
+// 发射器）系 167 轮钉尽同文件 wordLess/escapeRegex/jsonEscape/isLanguageConstant 后、本体
+// 仍唯余 154 轮 generate e2e 子串断言间接触达的接线核——排序调用接线、`|` 分隔与 `(?:`…`)`
+// 包装对称、逐词 escapeRegex 转义接线皆零直测直调；且空组早退臂系生产不可达形（唯一调用位
+// emitPatternEntry L221 已先分 words.len == 0 走 `(?!)` 占位、永不传入空表）。零喂入坐实：
+// check-editor-syntax 系独立 CI step 不入 zig build test，形态变异（捕获组化/剔闭括号/去转义）
+// 于既有测试面皆漏抓——154 测仅 indexOf 子串存在断言，`标准库` 无论转义与否皆命中。
+// 探针即测以本测首跑承担，一次绿坐实真形皆符声明→证伪撤号不占 D 号。
+test "tmlang.emitAlternation：直调钉——空组早退 + 排序接线 + 分隔/包装对称 + 元字符转义接线 + e2e pattern-entry 耦合（第 186 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    // 直调助手：构造词表并返回 alternation 输出字节。
+    const T = struct {
+        fn w(s: []const u8) Word {
+            return .{ .text = s, .len = s.len };
+        }
+        fn emit(alloc: std.mem.Allocator, words: []const Word) ![]const u8 {
+            var out: std.ArrayList(u8) = .empty;
+            try emitAlternation(&out, alloc, words);
+            return out.toOwnedSlice(alloc);
+        }
+    };
+
+    // ---- 空表早退：输出零字节（生产不可达臂·直调面独防）----
+    try testing.expectEqualStrings("", try T.emit(gpa, &.{}));
+
+    // ---- 单词：仅包装、无分隔符 ----
+    try testing.expectEqualStrings("(?:甲)", try T.emit(gpa, &.{T.w("甲")}));
+
+    // ---- 乱序输入 -> 贪心最长匹配序（钉 std.mem.sort + wordLess 接线）----
+    try testing.expectEqualStrings(
+        "(?:无符号整数|整数|乙)",
+        try T.emit(gpa, &.{ T.w("整数"), T.w("无符号整数"), T.w("乙") }),
+    );
+
+    // ---- 同长按字典序升序 tie-break（乱序喂入）----
+    try testing.expectEqualStrings("(?:ab|bb)", try T.emit(gpa, &.{ T.w("bb"), T.w("ab") }));
+
+    // ---- 元字符逐词转义接线：`.` -> JSON 3 字节 `\\.` 形（escapeRegex 核 167 已钉、
+    //      但 emitAlternation 是否「调用它」零测——去接线后 154 子串断言照绿，真隐缝）----
+    try testing.expectEqualStrings("(?:标准库\\\\.调试)", try T.emit(gpa, &.{T.w("标准库.调试")}));
+
+    // ---- ASCII 词原样入组：边界符属调用方 emitPatternEntry、本核不添加 ----
+    try testing.expectEqualStrings("(?:main)", try T.emit(gpa, &.{T.w("main")}));
+
+    // ---- 同长混合转义序：`+`(0x2B) < `.`(0x2E) 字典序 + 两词皆转义（`+`/`.` 俱元字符、
+    //      各经 JSON 3 字节 `\\X` 形——首跑自捕登册：初版期望误给 `+` 单反斜杠形）----
+    try testing.expectEqualStrings(
+        "(?:a\\\\+b|a\\\\.b)",
+        try T.emit(gpa, &.{ T.w("a.b"), T.w("a+b") }),
+    );
+
+    // ---- 重复词不脱重（现行为钉：脱重非本核职责）----
+    try testing.expectEqualStrings("(?:甲|甲)", try T.emit(gpa, &.{ T.w("甲"), T.w("甲") }));
+
+    // ---- e2e：经 generate -> emitPatternEntry 耦合位钉完整 match 值
+    //      （负向前查 + 包装转义体 + 后查三段一体形——子串级即整串钉死）----
+    var lang = try Pack.parse(gpa,
+        \\ [keywords]
+        \\ 甲 = var
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+        \\
+    );
+    defer lang.deinit();
+    const json_bytes = try generate(gpa, lang);
+    defer gpa.free(json_bytes);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, "\"(?<![\\\\p{L}\\\\p{N}_])(?:标准库\\\\.调试)(?![\\\\p{L}\\\\p{N}_])\"") != null);
+    // keywords 组（控制流类）同形钉：`甲` 无元字符透传。
+    try testing.expect(std.mem.indexOf(u8, json_bytes, "\"(?<![\\\\p{L}\\\\p{N}_])(?:甲)(?![\\\\p{L}\\\\p{N}_])\"") != null);
+}
