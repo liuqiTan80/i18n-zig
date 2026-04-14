@@ -730,11 +730,18 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
 
 /// 判断 eject 目标是否会与源码树重叠的纯谓词已移到 cli.ejectDestHitsSourceTree（属
 /// zzc_core 测试图，才能真跑单测）；下方 cmdEject 直接调用它。
+/// eject 的两条出口消息：文件名段取自毕业族真值（第 204 轮 D72），使「承诺含哪些文件」与「实际写了
+/// 哪些文件」同源。旧形制此处手抄两枚文件名且只报 `build.zig`——而 zon 在验证前就已落盘（措辞与
+/// 真因错位，190 轮尾注在册），故本轮按 D65 失实文案先例一并更正为两枚齐报。
+const eject_ok_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；`zig build` 验证通过，产物：{s}/zig-out/bin/{s}。";
+
+const eject_no_zig_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；未检测到 zig，无法自动验证构建。";
+
 fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const dest = if (args.len > 0) args[0] else "standard";
     // 防毁源：在做任何工作（采集/翻译/写盘/清空）前先拒绝与源码树重叠的目标。
     if (cli.ejectDestHitsSourceTree(dest)) {
-        printErr("zzc: eject 目标 `{s}` 会与方言源码目录 `src` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
+        printErr("zzc: eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
         return error.Failed;
     }
     const proj = try collectAndTranslate(zzc.default_entry, lang, table); // 第 201 轮 D69：入口真值取族 hub
@@ -759,10 +766,10 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     // 被改名/删除（如 `sub/mod.zz`→`sub/core.zz`），仅靠逐文件覆写会残留已无方言对应的
     // 孤儿 `.zig`——它仍随 `.paths = "src"` 打进毕业包、误导使用者。故先整体清空 `dest/src`
     // 再重写，保证导出树与当前工程一一对应（`writeWhole` 会自动重建所需子目录）。
-    const dest_src = try std.fmt.allocPrint(gpa_, "{s}/src", .{dest});
+    const dest_src = try zzc.ejectPathFor(gpa_, dest, zzc.src_dir);
     if (pathExists(dest_src)) {
         std.Io.Dir.cwd().deleteTree(io_, dest_src) catch |e| {
-            printErr("zzc: 清理旧导出目录 `{s}/src` 失败（{s}）；请手动删除后重试 eject。", .{ dest, @errorName(e) });
+            printErr("zzc: 清理旧导出目录 `{s}/{s}` 失败（{s}）；请手动删除后重试 eject。", .{ dest, zzc.src_dir, @errorName(e) });
             return error.Failed;
         };
     }
@@ -817,7 +824,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
         \\}}
         \\
     , .{ app_name, entry_rel });
-    try writeWhole(try std.fmt.allocPrint(gpa_, "{s}/build.zig", .{dest}), build_zig);
+    try writeWhole(try zzc.ejectPathFor(gpa_, dest, zzc.out_build_zig), build_zig);
 
     // Zig 0.17 的 `zig build` 要求 build.zig.zon 含顶层 fingerprint（u64）。
     // 其高 32 位由包名派生、不可自行伪造（伪造会被判为 invalid），低 32 位是随机盐（由 zig 每次
@@ -825,7 +832,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     // 告诉我们一个合法值，再回写。
     // 幂等：但重复 eject 到同一目标时，若沿用“每次重新探测”会因低半随机而让 build.zig.zon
     // 逐次产生无谓差异、破坏“字节级可复现”。故先读目标既有 zon 里的 fingerprint，命中则复用（跳过探测）。
-    const zon_path = try std.fmt.allocPrint(gpa_, "{s}/build.zig.zon", .{dest});
+    const zon_path = try zzc.ejectPathFor(gpa_, dest, zzc.out_build_zon);
     const existing_fp = readExistingFingerprint(dest, app_name);
     try writeWhole(zon_path, try ejectZoneText(app_name, null));
     const fp = existing_fp orelse probeFingerprint(dest);
@@ -837,12 +844,12 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
 
     // 验证“毕业路径”：进入导出目录直接 `zig build`，确认可独立构建。
     switch (verifyBuild(dest)) {
-        .ok => printOut("已导出标准 Zig 到 {s}/（含 build.zig + build.zig.zon）；`zig build` 验证通过，产物：{s}/zig-out/bin/{s}。", .{ dest, dest, app_name }),
+        .ok => printOut(eject_ok_msg, .{ dest, dest, app_name }),
         .fail => {
             printErr("zzc: 导出完成，但 `zig build` 验证未通过，请进入 {s}/ 手动排查。", .{dest});
             return error.Failed;
         },
-        .no_zig => printOut("已导出标准 Zig 到 {s}/（含 build.zig）；未检测到 zig，无法自动验证构建。", .{dest}),
+        .no_zig => printOut(eject_no_zig_msg, .{dest}),
     }
 }
 
@@ -855,7 +862,15 @@ fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
     if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .fingerprint = {s},\n", .{t}));
     try z.appendSlice(gpa_, "    .minimum_zig_version = \"0.17.0\",\n");
     try z.appendSlice(gpa_, "    .dependencies = .{},\n");
-    try z.appendSlice(gpa_, "    .paths = .{\n        \"build.zig\",\n        \"build.zig.zon\",\n        \"src\",\n    },\n}\n");
+    // `.paths` 条目由族集合派生（第 204 轮 D72）：与写侧落盘名同源，杜绝「文件写成 A、清单列的是 B」。
+    // 逐条目 allocPrint + defer free（第 65 轮 D23 反模式守则：临时串必须逐枚释放），字节形与旧手抄全等。
+    try z.appendSlice(gpa_, "    .paths = .{\n");
+    for (zzc.out_paths_family) |name| {
+        const row = try std.fmt.allocPrint(gpa_, "        \"{s}\",\n", .{name});
+        defer gpa_.free(row);
+        try z.appendSlice(gpa_, row);
+    }
+    try z.appendSlice(gpa_, "    },\n}\n");
     return z.toOwnedSlice(gpa_);
 }
 
@@ -884,7 +899,7 @@ fn probeFingerprint(dest: []const u8) ?[]const u8 {
 /// 读目标目录既有 `build.zig.zon` 中的 fingerprint（`0x` 十六进制串，含前缀，gpa_ 拥有）；
 /// 不存在文件/无该字段时返回 null。解析逻辑在测试图内的 cli.parseFingerprintFromZone（可真跑单测）。
 fn readExistingFingerprint(dest: []const u8, app_name: []const u8) ?[]const u8 {
-    const zon_path = std.fmt.allocPrint(gpa_, "{s}/build.zig.zon", .{dest}) catch return null;
+    const zon_path = zzc.ejectPathFor(gpa_, dest, zzc.out_build_zon) catch return null;
     defer gpa_.free(zon_path);
     const text = readWhole(zon_path) catch return null;
     defer gpa_.free(text);
@@ -2613,4 +2628,54 @@ test "第 203 轮 T1 机读出口往返：hub 格式串渲染的行必被消费�
     try std.testing.expectEqualStrings("/bin/zzc", stripped.items[0]);
     try std.testing.expectEqualStrings(mcon.sub_check, stripped.items[1]);
     try std.testing.expectEqualStrings("main.zz", stripped.items[2]);
+}
+
+test "第 204 轮 T1 毕业工程产物族跨点位耦合：`.paths` 清单⟺族集合覆盖锚 + 写↔读同名单侧往返锚 + 文案现形钉" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    io_ = threaded.io();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 文件级 arena 手动接线（189/190 轮同形制）
+    // A1 覆盖锚：从真模板产物里抽 `.paths` 段的引号条目，枚数须等于族集合、逐枚须命中真值。判据取自家
+    // 集合（与 189 T2 的全字节形制互补：那条钉字节、本条钉「清单⟺落盘集」的集合关系，条目顺序漂移不红）。
+    const zone = try ejectZoneText("pj", null);
+    const head = std.mem.indexOf(u8, zone, ".paths = .{") orelse return error.TestUnexpectedResult;
+    const seg = zone[head..];
+    var quotes: usize = 0;
+    for (seg) |c| {
+        if (c == '"') quotes += 1;
+    }
+    try std.testing.expectEqual(zzc.out_paths_family.len * 2, quotes);
+    for (zzc.out_paths_family) |name| {
+        const needle = try std.fmt.allocPrint(gpa_, "\"{s}\"", .{name});
+        defer gpa_.free(needle);
+        try std.testing.expect(std.mem.indexOf(u8, seg, needle) != null);
+    }
+    // A2 写↔读往返锚：按**写侧的同一构造**落一份带 fingerprint 的 zon，再走读侧真函数回读。写侧与读侧
+    // 原系两份同体字面量（204 t2 P2 实测：单改写侧后 226/226 全绿，重复 eject 的「复用既有指纹」幂等路径
+    // 静默失效、build.zig.zon 逐次漂移）；两侧不同名即刻红，同名单侧改名（回退内联）则行为等价不可锚。
+    const priv = tpriv.Priv.init(io_);
+    var bdir: [96]u8 = undefined;
+    const dpre = "/tmp/zzc204proj-";
+    const dir = priv.path(&bdir, dpre, "");
+    std.Io.Dir.cwd().deleteTree(io_, dir) catch {}; // 前置清残：目录不存在才是真前提
+    std.Io.Dir.cwd().createDirPath(io_, dir) catch |e| {
+        std.debug.print("T1 setup createDirPath 失败：{s}", .{@errorName(e)});
+        return error.TestUnexpectedResult;
+    };
+    defer std.Io.Dir.cwd().deleteTree(io_, dir) catch {}; // 整树归零（192 轮同族形制，勿用 deleteFile+deleteDir）
+    const zon = try zzc.ejectPathFor(gpa_, dir, zzc.out_build_zon); // 与 cmdEject 写侧同一函数、同一真值
+    try writeWhole(zon, "// zzc\n.{\n    .name = .pj,\n    .fingerprint = 0xfeedface,\n}\n");
+    try std.testing.expectEqualStrings("0xfeedface", readExistingFingerprint(dir, "pj").?);
+    try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(dir, "other")); // 名闸透传
+    // A3 文案现形钉：两条出口消息都须现形两枚产物名（承诺与落盘集同源）。旧形制的 `.no_zig` 只报
+    // `build.zig`，而 zon 在验证前就已落盘（措辞与真因错位，190 轮尾注在册），本轮按 D65 先例齐报。
+    for ([_][]const u8{ eject_ok_msg, eject_no_zig_msg }) |m| {
+        for (zzc.out_paths_family[0..2]) |name| {
+            try std.testing.expect(std.mem.indexOf(u8, m, name) != null);
+        }
+    }
+    // A4 独立写死的负例形：消息面不承诺导出树目录（`.paths` 才收录它），出现即文案越界说谎。
+    try std.testing.expect(std.mem.indexOf(u8, eject_ok_msg, zzc.src_dir) == null);
 }

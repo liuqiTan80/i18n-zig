@@ -330,7 +330,7 @@ pub fn ejectDestHitsSourceTree(dest: []const u8) bool {
         if (std.mem.eql(u8, seg, ".")) continue; // `./x` 里的当前目录噪声
         any_real_seg = true;
         if (std.mem.eql(u8, seg, "..")) has_escaped = true;
-        if (first_real and std.mem.eql(u8, seg, "src")) at_src_root = true;
+        if (first_real and std.mem.eql(u8, seg, zzc.src_dir)) at_src_root = true; // 第 204 轮 D72：毁源闸门比的是族真值，非本模块另抄的 "src"
         first_real = false;
     }
     if (!any_real_seg) return true; // 全是 `.`/斜杠 → 等价于 cwd → `dest/src == src`
@@ -1348,4 +1348,23 @@ test "第 203 轮 T2 usage 文案↔契约 hub 对偶钉：旗标名／子命令
     // 负例钉（独立写死的期望形）：文案不得被改写成与真值骨分隔符不相干的形（P7 的变异体）。
     try std.testing.expect(std.mem.indexOf(u8, usage_text, "路径;行;列") == null);
     try std.testing.expect(std.mem.indexOf(u8, usage_text, "路径,行,列") == null);
+}
+
+test "第 204 轮 T2 毁源闸门吃布局族真值：拒绝面与放行面都按 src_dir 构造，而非本模块另抄的字面量" {
+    // 本闸是 cmdEject 无条件 deleteTree(`dest`/`src_dir`) 前的唯一防线（D39 在册）。旧形制此处自持一枚
+    // "src"，与 hub 的 `src_dir` 各写一份（同 D68 的隐藏判据硬编形制）：真值一改，闸门照旧拦旧名而
+    // 写侧已换新名——毁源防线静默失效。三臂全部**经真值**构造路径，漂移即刻现形。
+    try std.testing.expect(ejectDestHitsSourceTree(zzc.src_dir)); // dest 就是源码目录名本身
+    try std.testing.expect(ejectDestHitsSourceTree(zzc.src_dir ++ "/sub")); // 其子目录
+    try std.testing.expect(ejectDestHitsSourceTree("./" ++ zzc.src_dir)); // 带 `./` 噪声的同义形
+    // 放行面须按真值的**邻域**构造：前缀相似不算源码树、真值非首段也不重叠。
+    try std.testing.expect(!ejectDestHitsSourceTree(zzc.src_dir ++ "2"));
+    try std.testing.expect(!ejectDestHitsSourceTree("my/" ++ zzc.src_dir));
+    // 毕业包清单必须收录导出树目录：清单与写侧/清理侧同取族集合，漏 `src_dir` 即导出的 `.zig` 树
+    // 不在毕业包内（`zig build --system` 型取用会缺文件），故此臂跨「闸门」与「清单」两面。
+    var found = false;
+    for (zzc.out_paths_family) |n| {
+        if (std.mem.eql(u8, n, zzc.src_dir)) found = true;
+    }
+    try std.testing.expect(found);
 }

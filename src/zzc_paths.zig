@@ -132,8 +132,25 @@ pub fn initEntryPathFor(alloc: std.mem.Allocator, name: []const u8) ![]const u8 
     return std.fmt.allocPrint(alloc, "{s}/{s}", .{ name, default_entry });
 }
 
-/// 目录路径 `dir` 是否被 `.gitignore` 内容 `rules` 的某条**目录规则**覆盖（第 202 轮 D70 的守卫判据）。
-///
+/// 毕业工程（`zzc eject`）写侧产物名：标准 Zig 构建脚本（第 204 轮 D72）。旧形制在写侧、提示文案、
+/// `.paths` 清单三处各持一枚同值字面量，而写侧那枚**全仓零钉**（t2 探针 P1 实测：改名后 226/226 全绿、
+/// 真跑 eject 产出的毕业树里根本没有 `build.zig`，`zig build` 验证随即失败）。
+pub const out_build_zig: []const u8 = "build.zig";
+
+/// 毕业工程包清单名（写侧、读 fingerprint 的读侧、提示文案、`.paths` 清单四处共用的唯一真值，第 204 轮 D72）。
+/// 写侧与读侧原系两份同体字面量：任一侧单独漂移就静默打断「重复 eject 复用既有 fingerprint」的幂等路径。
+pub const out_build_zon: []const u8 = "build.zig.zon";
+
+/// 毕业包 `.paths` 须收录的 dest 顶层成员集（由族真值派生，第 204 轮 D72）：写侧落盘名与清单条目取自
+/// 同一集合，杜绝「文件写成了 A 而清单列的是 B」；`src_dir` 入列即导出树目录（亦是 eject 清理侧的目标）。
+pub const out_paths_family = [_][]const u8{ out_build_zig, out_build_zon, src_dir };
+
+/// 毕业工程 dest 下的产物路径构造（写侧、读侧、陈旧清理侧共用的唯一变换，第 204 轮 D72）。
+pub fn ejectPathFor(alloc: std.mem.Allocator, dest: []const u8, name: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(alloc, "{s}/{s}", .{ dest, name });
+}
+
+/// 目录路径 `dir` 是否被 `.gitignore` 内容 `rules` 的某条**目录规则**覆盖（第 202 轮 D70 的守卫判据）。///
 /// 取首段比较：族成员的落盘根总在第一位（`.zzc/gen` → `.zzc`、`logs/x.json` → `logs`），而 git 的语义
 /// 正是「目录被忽略则整棵子树被忽略」，故子段随根。
 ///
@@ -263,4 +280,35 @@ test "第 202 轮 T0 落盘族 ↔ .gitignore 忽略面：族根值钉 + 清单�
     ));
     try std.testing.expectEqualStrings("src", firstFalselyIgnored("logs/\n**/.zzc/\nsrc/\n").?);
     try std.testing.expectEqual(@as(?[]const u8, null), firstFalselyIgnored("logs/\n**/.zzc/\n"));
+}
+
+test "第 204 轮 T0 毕业工程产物族：值钉／清单派生钉／dest 构造形制／层级负例" {
+    // A1 值钉：三枚名是与**所有既有毕业工程**对外的契约，改名即断裂（旧形制写侧那枚零钉，204 t2 P1 实测
+    // 改名后 226/226 全绿而毕业树里没有 build.zig——本轮起值侧与派生侧皆有钉）。
+    try std.testing.expectEqualStrings("build.zig", out_build_zig);
+    try std.testing.expectEqualStrings("build.zig.zon", out_build_zon);
+    try std.testing.expectEqualStrings("src", src_dir);
+    // A2 清单派生钉：恰三枚且顺序即 `.paths` 落盘形制——漏一项＝毕业包缺文件，多一项＝清单指错名。
+    try std.testing.expectEqual(@as(usize, 3), out_paths_family.len);
+    try std.testing.expectEqualStrings(out_build_zig, out_paths_family[0]);
+    try std.testing.expectEqualStrings(out_build_zon, out_paths_family[1]);
+    try std.testing.expectEqualStrings(src_dir, out_paths_family[2]);
+    // A3 构造形制：`dest` 前缀 + 单斜杠 + 名，写侧／读侧／陈旧清理侧共用同一变换（三处旧各持一枚字面量）。
+    const gpa = std.testing.allocator;
+    const p1 = try ejectPathFor(gpa, "standard", out_build_zig);
+    defer gpa.free(p1);
+    try std.testing.expectEqualStrings("standard/build.zig", p1);
+    const p2 = try ejectPathFor(gpa, "a/b", out_build_zon);
+    defer gpa.free(p2);
+    try std.testing.expectEqualStrings("a/b/build.zig.zon", p2);
+    const p3 = try ejectPathFor(gpa, "out", src_dir);
+    defer gpa.free(p3);
+    try std.testing.expectEqualStrings("out/src", p3); // 清理侧目标（导出树目录）与清单条目同一构造
+    // A4 层级负例：族成员都是**单层名**——带斜杠即清单指错层级（`.paths` 会收录路径而非顶层成员），
+    // 以 `.` 起头即把隐藏文件打进毕业包，空段即清单有洞。三条各守一处可达漂移形。
+    for (out_paths_family) |name| {
+        try std.testing.expect(name.len > 0);
+        try std.testing.expect(std.mem.indexOfScalar(u8, name, '/') == null);
+        try std.testing.expect(!std.mem.startsWith(u8, name, "."));
+    }
 }
