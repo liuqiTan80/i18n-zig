@@ -30,6 +30,7 @@ const UntranslatedPhrase = @import("diag/pure_filter.zig").UntranslatedPhrase; /
 const untranslated_log_path_default = @import("diag/pure_filter.zig").default_log_path; // 197 D64 单一真值（此处取作默认初值、198 D66 下改为可覆写变量）
 const cli = @import("cli/args.zig");
 const zzc = @import("zzc_paths.zig"); // 第 200 轮 D68：内部状态/产物路径族（符号表、产物目录、深检临时发射物）取单一真值
+const mcon = @import("machine_contract.zig"); // 第 203 轮 D71：机读出口契约族（旗标名/子命令名/单行骨架）取单一真值
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
 const userpack = @import("lang/userpack.zig");
@@ -367,12 +368,12 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
                 if (v.ascii.len > 0) {
                     if (v.ascii[0] == ' ') {
                         // 全角空格：半角替换字面不可见，改用文字描述而非反引号包裹。
-                        printErr("{s}:{d}:{d}: 词法: {s}，请改用半角空格作缩进/分隔", .{ rel, lc.line, lc.col, v.hint });
+                        printErr(mcon.line_head ++ "词法: {s}，请改用半角空格作缩进/分隔", .{ rel, lc.line, lc.col, v.hint });
                     } else {
-                        printErr("{s}:{d}:{d}: 词法: {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ rel, lc.line, lc.col, v.hint, v.ascii });
+                        printErr(mcon.line_head ++ "词法: {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ rel, lc.line, lc.col, v.hint, v.ascii });
                     }
                 } else {
-                    printErr("{s}:{d}:{d}: 词法: {s}（`{s}`）", .{ rel, lc.line, lc.col, v.hint, v.word });
+                    printErr(mcon.line_head ++ "词法: {s}（`{s}`）", .{ rel, lc.line, lc.col, v.hint, v.word });
                 }
             }
             return error.Failed;
@@ -384,7 +385,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
         if (eng.items.len > 0) {
             for (eng.items) |v| {
                 const lc = ColumnMap.lineColOf(nat_src, v.off);
-                printErr("{s}:{d}:{d}: 纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", .{ rel, lc.line, lc.col, v.word, v.native });
+                printErr(mcon.line_head ++ "纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", .{ rel, lc.line, lc.col, v.word, v.native });
             }
             return error.Failed;
         }
@@ -1041,9 +1042,9 @@ const LspSemantic = struct {
         const fs_path = uriToFilesystemPath(a, uri) orelse return &.{};
         const dir = std.fs.path.dirname(fs_path) orelse return &.{};
         const base = std.fs.path.basename(fs_path);
-        const argv = &.{ exe, "check", "--machine", base };
+        const argv = mcon.machineArgv(exe, base); // 第 203 轮 D71：子命令名与旗标名取契约 hub 真值
         const res = std.process.run(a, io_, .{
-            .argv = argv,
+            .argv = &argv,
             .cwd = .{ .path = dir },
             .create_no_window = true,
         }) catch return &.{};
@@ -1197,7 +1198,7 @@ pub fn main(init: std.process.Init) !void {
     const args = all_args[2..];
 
     // 第 154 轮：`--machine` 机读单行化旗标（编辑器/CI 消费）——在场即开、后续统一剔离不透传 zig。
-    machine_mode = cli.hasBoolFlag(args, "--machine");
+    machine_mode = cli.hasBoolFlag(args, mcon.flag_machine);
 
     // 惯例帮助旗标：`--help`/`-h`/`-?`/`help` 都应打印用法并成功退出（而非当未知子命令报 EXIT=2）。
     // 放在解析语言包之前：用法文本静态、不依赖 lang。
@@ -1260,7 +1261,7 @@ pub fn main(init: std.process.Init) !void {
         return e;
     };
     defer filtered.deinit(gpa_);
-    var mach_stripped = cli.stripBoolFlag(gpa_, filtered.items, "--machine") catch |e| {
+    var mach_stripped = cli.stripBoolFlag(gpa_, filtered.items, mcon.flag_machine) catch |e| {
         printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
         return e;
     };
@@ -1324,13 +1325,13 @@ pub fn main(init: std.process.Init) !void {
 
     // R11（第 164 轮）：版本漂移早警只挂编译类四入口（check/build/run/test）——这些路径消费
     // [diagnostics] 措辞表；init/lang/version/lsp/eject 不产 zig 编译回译、无需提醒。
-    if (std.mem.eql(u8, cmd, "check") or std.mem.eql(u8, cmd, "build") or
+    if (std.mem.eql(u8, cmd, mcon.sub_check) or std.mem.eql(u8, cmd, "build") or
         std.mem.eql(u8, cmd, "run") or std.mem.eql(u8, cmd, "test"))
     {
         maybeWarnZigDrift();
     }
 
-    if (std.mem.eql(u8, cmd, "check")) {
+    if (std.mem.eql(u8, cmd, mcon.sub_check)) {
         cmdCheck(lang, &table, argv) catch |e| bail(e);
     } else if (std.mem.eql(u8, cmd, "build")) {
         cmdBuild(lang, &table, .build, argv) catch |e| bail(e);
@@ -2574,4 +2575,42 @@ test "第 202 轮 T1 真实落盘默认路径 ∈ 落盘族清单：守卫核对
     //   把内部位置泄给方言用户、要么让对外契约的产出面消失，本钉把这条分流写死。
     try std.testing.expectEqualStrings(".zzc", std.fs.path.dirname(symbols_path_default).?);
     try std.testing.expectEqualStrings("logs", std.fs.path.dirname(untranslated_log_path_default).?);
+}
+
+test "第 203 轮 T1 机读出口往返：hub 格式串渲染的行必被消费侧解析器按五段解出 + 自调用 argv 经解析器认下" {
+    // —— A1 生成↔消费往返（真行为锚）：以 hub `line_fmt` 渲染样例行，喂 `parseMachineDiag`
+    //   须解出五段且字段序对应。hub 格式串与解析器判据一旦分道（如分隔符 `: ` 退 `:`），
+    //   本臂即红——把「生成侧单源」与「消费侧硬编判据」的耦合从口头声明转为可跑契约。
+    var buf: [512]u8 = undefined;
+    const line = std.fmt.bufPrint(&buf, mcon.line_fmt, .{ "src/main.zz", @as(usize, 3), @as(usize, 7), "错误", "不可变常量不能被重新赋值" }) catch return error.TestUnexpectedResult;
+    const d = parseMachineDiag(std.mem.trimEnd(u8, line, "\n")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("src/main.zz", d.file);
+    try std.testing.expectEqual(@as(usize, 3), d.line);
+    try std.testing.expectEqual(@as(usize, 7), d.col);
+    try std.testing.expectEqualStrings("错误", d.kind);
+    try std.testing.expectEqualStrings("不可变常量不能被重新赋值", d.message);
+
+    // —— A2 带提示式同解：提示以全角括号并入末段，不得新增 ASCII 分隔段（否则 kind/msg 被切断）。
+    var buf2: [512]u8 = undefined;
+    const line2 = std.fmt.bufPrint(&buf2, mcon.line_fmt_tip, .{ "src/main.zz", @as(usize, 1), @as(usize, 2), "警告", "未使用", "加下划线即可" }) catch return error.TestUnexpectedResult;
+    const d2 = parseMachineDiag(std.mem.trimEnd(u8, line2, "\n")) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("警告", d2.kind);
+    try std.testing.expectEqualStrings("未使用（提示：加下划线即可）", d2.message);
+    try std.testing.expect(!std.mem.containsAtLeast(u8, d2.message, 1, ": ")); // 并入段内无 ASCII ": "
+
+    // —— A3 自调用 argv 经解析器（写侧↔读侧配对锚，199 轮推论二形制）：argv[1..] 喂
+    //   `hasBoolFlag` 须认下机读旗标，且 argv[1] 逐字节等于子命令真值（dispatch 的 check 臂已同源）。
+    const argv = mcon.machineArgv("/bin/zzc", "main.zz");
+    try std.testing.expect(cli.hasBoolFlag(&argv, mcon.flag_machine));
+    try std.testing.expectEqualStrings(mcon.sub_check, argv[1]);
+    try std.testing.expectEqualStrings(mcon.flag_machine, argv[2]);
+    try std.testing.expect(!cli.hasBoolFlag(&argv, "--machin")); // 近名不误匹（判据宽度未放宽）
+
+    // —— A4 剔离面：同一 argv 经 `stripBoolFlag` 后旗标消失、其余元素逐位不变（不透传 zig 契约）。
+    var stripped = cli.stripBoolFlag(std.testing.allocator, &argv, mcon.flag_machine) catch return error.TestUnexpectedResult;
+    defer stripped.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 3), stripped.items.len);
+    try std.testing.expectEqualStrings("/bin/zzc", stripped.items[0]);
+    try std.testing.expectEqualStrings(mcon.sub_check, stripped.items[1]);
+    try std.testing.expectEqualStrings("main.zz", stripped.items[2]);
 }

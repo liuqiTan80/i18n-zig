@@ -16,6 +16,7 @@ const Pack = @import("../lang/pack.zig");
 const PureFilter = @import("pure_filter.zig").PureFilter; // 取嵌套 struct，非文件根命名空间
 const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：内部路径族的隐藏判据与族成员同源
+const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读单行格式串取契约 hub 真值
 
 /// 产品时间源（F3）：主层启动时经 `setIo` 注入；单测图不注入保持默认 null → 取时回 0，
 /// 诊断纯函数测试图不被 Io 污染（D7 可测性守则）。
@@ -218,9 +219,9 @@ fn flushMachine(gpa: std.mem.Allocator, out: *std.ArrayList(u8), maybe: ?Machine
     const p = maybe orelse return;
     if (p.loc) |L| {
         if (p.tip) |tip| {
-            try appendPrintF(out, gpa, "{s}:{d}:{d}: {s}: {s}（提示：{s}）\n", .{ L.file, L.line, L.col, p.kind, p.msg, tip });
+            try appendPrintF(out, gpa, mcon.line_fmt_tip, .{ L.file, L.line, L.col, p.kind, p.msg, tip });
         } else {
-            try appendPrintF(out, gpa, "{s}:{d}:{d}: {s}: {s}\n", .{ L.file, L.line, L.col, p.kind, p.msg });
+            try appendPrintF(out, gpa, mcon.line_fmt, .{ L.file, L.line, L.col, p.kind, p.msg });
         }
     } else {
         try appendPrintF(out, gpa, "{s}: {s}\n", .{ p.kind, p.msg });

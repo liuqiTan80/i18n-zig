@@ -129,6 +129,27 @@ pub fn build(b: *std.Build) void {
     check_ignore_run.addFileArg(b.path(".gitignore"));
     check_ignore_step.dependOn(&check_ignore_run.step);
     test_step.dependOn(&check_ignore_run.step);
+
+    // 第 203 轮 D71：机读出口契约 ↔ 编辑器对面守卫（同上的跨文件同步守卫形制）。对面是
+    // `editors/vscode/package.json` 的 problemMatcher 正则与 `examples/tasks.json` 的示例命令行——
+    // 二者在 `src/` 包路径之外（同 202 轮硬约束）、且 203 t2 探针 P1/P2 实锤「改对面文件而测数行为空」
+    // （非 source dependency），故只能由本步以 `addFileArg` 声明文件依赖后核对；挂在 `test` 上使 CI 必检。
+    const check_matcher_exe = b.addExecutable(.{
+        .name = "check-machine-matcher",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check/machine_matcher_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+
+    const check_matcher_step = b.step("check-machine-matcher", "校验编辑器对面与机读契约同源（CI 守卫）");
+    const check_matcher_run = b.addRunArtifact(check_matcher_exe);
+    check_matcher_run.addFileArg(b.path("editors/vscode/package.json"));
+    check_matcher_run.addFileArg(b.path("editors/vscode/examples/tasks.json"));
+    check_matcher_step.dependOn(&check_matcher_run.step);
+    test_step.dependOn(&check_matcher_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②）

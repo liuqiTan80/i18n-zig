@@ -3,6 +3,7 @@
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack; // 第 142 轮：模板生成器按包组词需 Pack 反查面
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：.zzc 内部路径族改由该模块持唯一真值
+const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读旗标名与单行形制的契约 hub
 
 pub const EntryPick = struct {
     /// 方言入口文件路径（缺省为 src/main.zz）
@@ -1335,4 +1336,16 @@ test "第 201 轮 T1 布局族写→读往返：init 产物可被入口判据认
     // A4 真形坐实（非期望）：判据是纯后缀比较，故「只有扩展名没有词干」的 `.zz` 也命中——与本轮收敛前的
     //    `std.mem.endsWith(u8, p, ".zz")` 完全一致（纯重构、不改判据宽度），钉住防「顺手加词干校验」。
     try std.testing.expect(zzc.isDialectSource(".zz"));
+}
+
+test "第 203 轮 T2 usage 文案↔契约 hub 对偶钉：旗标名／子命令名／机读形制提示逐字现形于帮助文本" {
+    // 文案是说给编辑器/CI 作者听的第二份契约面：既有测只判旗标名在场（202 轮前形制），本轮补
+    // 「机读形制描述」与真值的对偶——探针 P7（把 `路径:行:列: 种类: 消息` 改成分号形）实测全绿，
+    // 本钉使其转红。期望串一律取 hub 派生真值（`shape_hint` 由 field_names+sep_after 拼出），非手抄。
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, mcon.flag_machine) != null);
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, mcon.sub_check) != null);
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, mcon.shape_hint) != null);
+    // 负例钉（独立写死的期望形）：文案不得被改写成与真值骨分隔符不相干的形（P7 的变异体）。
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, "路径;行;列") == null);
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, "路径,行,列") == null);
 }

@@ -15,6 +15,7 @@ pub const snippets = @import("editor/snippets.zig");
 pub const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
 pub const lsp_server = @import("lsp/server.zig");
 pub const paths = @import("zzc_paths.zig");
+pub const machine = @import("machine_contract.zig");
 
 pub const zh_pack_bytes = @embedFile("lang/packs/中文.txt");
 
@@ -35,4 +36,5 @@ test {
     _ = lsp_jsonrpc;
     _ = lsp_server;
     _ = paths;
+    _ = machine;
 }
