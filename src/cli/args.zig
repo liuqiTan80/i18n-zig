@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack; // 第 142 轮：模板生成器按包组词需 Pack 反查面
+const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：.zzc 内部路径族改由该模块持唯一真值
 
 pub const EntryPick = struct {
     /// 方言入口文件路径（缺省为 src/main.zz）
@@ -22,17 +23,18 @@ pub fn pickEntry(args: []const []const u8) EntryPick {
     return .{ .entry = "src/main.zz", .idx = null };
 }
 
-/// 生成树目录的**唯一真值**（第 199 轮 D67）：旧形制下 `.zzc/gen` 由七处生产字面量各自硬编——写侧
-/// `genPathFor` 两枚拼串、剥侧 `cmdEject` 两站点各持「前缀串 + 前缀.len」两枚、镜像根 `collect`
-/// 传参一枚。写与剥是一对必须字节相等的契约，失配时剥侧走 `else basename` 静默降级、把导出树的
-/// 子目录拉平（正是 `cmdEject` 原注释警告的 `@import("sub/mod.zig")` 断链形）。t2 探针实锤本漂移
+/// 生成树目录（第 199 轮 D67 抽单一真值、第 200 轮 D68 并入 `.zzc` 族 hub）：旧形制下 `.zzc/gen` 由七处
+/// 生产字面量各自硬编——写侧 `genPathFor` 两枚拼串、剥侧 `cmdEject` 两站点各持「前缀串 + 前缀.len」两枚、
+/// 镜像根 `collect` 传参一枚。写与剥是一对须字节相等的契约，失配时剥侧走 `else basename` 静默降级、把
+/// 导出树的子目录拉平（正是 `cmdEject` 原注释警告的 `@import("sub/mod.zig")` 断链形）。t2 探针实锤本漂移
 /// 无测可抓：改剥侧任一点位（前缀串、切长、镜像根）500/500 全绿，唯改写侧目录名被 `genPathFor`
-/// 自身的字面量钉抓到（P1–P5，详见本轮审计注）。
-pub const gen_dir: []const u8 = ".zzc/gen";
+/// 自身的字面量钉抓到（P1–P5，详见 199 轮审计注）。
+/// 本名系 `zzc_paths.gen_dir` 的公开面（值与形制一字未改、全员钉在 `zzc_paths` 的 200 T0）。
+pub const gen_dir: []const u8 = zzc.gen_dir;
 
 /// 生成树内路径的前缀（含尾分隔符）：由 `gen_dir` 派生，故「前缀串」与「前缀长度」自此同源——
 /// 旧形制两枚各自硬编的字面量（其一改动即错位切头）属探针 P3 点位，抽真值后该类漂移不可表示。
-pub const gen_dir_prefix: []const u8 = gen_dir ++ "/";
+pub const gen_dir_prefix: []const u8 = zzc.gen_dir_prefix;
 
 /// 方言入口相对路径 → 生成树内 .zig 落点。
 /// 根目录文件直接 `.zzc/gen/<stem>.zig`；带子目录则保留层级 `.zzc/gen/<dir>/<stem>.zig`。

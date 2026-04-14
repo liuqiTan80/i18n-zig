@@ -16,9 +16,11 @@
 const std = @import("std");
 const Io = std.Io;
 const file_io = @import("../file_io.zig");
+const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：`.zzc` 族单一真值
 
 /// 默认安装目录（相对当前工作目录）。正斜杠形与既有 `.zzc/symbols.txt` 等一致，Windows 亦接受。
-pub const default_dir = ".zzc/lang";
+/// 第 200 轮 D68：值改取 `zzc.lang_dir`（与符号表/生成树/产物目录同一根派生、全员钉在 `zzc_paths` 的 200 T0）。
+pub const default_dir: []const u8 = zzc.lang_dir;
 
 /// 注册名长度上限：key 直接成为文件名与 argv 选择名，过长只会制造截断/展示问题。
 pub const max_key_len: usize = 64;

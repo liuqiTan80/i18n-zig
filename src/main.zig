@@ -29,6 +29,7 @@ const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslate
 const UntranslatedPhrase = @import("diag/pure_filter.zig").UntranslatedPhrase; // 192 T1 造清单 entry 用（生产侧经 UntranslatedList 间接引用、无此别名先例）
 const untranslated_log_path_default = @import("diag/pure_filter.zig").default_log_path; // 197 D64 单一真值（此处取作默认初值、198 D66 下改为可覆写变量）
 const cli = @import("cli/args.zig");
+const zzc = @import("zzc_paths.zig"); // 第 200 轮 D68：内部状态/产物路径族（符号表、产物目录、深检临时发射物）取单一真值
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
 const userpack = @import("lang/userpack.zig");
@@ -76,8 +77,8 @@ var untranslated_list: UntranslatedList = .{};
 /// （diag.machineLines）已在测试图内单测，本旗标只做接线（行为面由 demos e2e 守卫钉）。
 var machine_mode: bool = false;
 
-/// 状态文件路径的**默认真值**（第 198 轮 D66）：与历史字面量一字未改。
-const symbols_path_default: []const u8 = ".zzc/symbols.txt";
+/// 状态文件路径的**默认真值**（第 198 轮 D66 抽形、第 200 轮 D68 并入 `.zzc` 族 hub）：与历史字面量一字未改。
+const symbols_path_default: []const u8 = zzc.symbols_file;
 
 /// 符号表与未翻译清单的落盘路径（第 198 轮 D66·进程级可覆写形制，同 `machine_mode`/`werr` 先例）：
 /// 生产恒取默认值、行为零变更；做成变量只为测试图——路径若是编译期字面量，测块就无法给自己的盘上
@@ -588,7 +589,7 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     // 含用户点名的那个）。临时产物固定同名、串行覆盖即可（用后即弃）。
     for (proj.units.items) |u| {
         if (!cli.zigHasMainFn(u.zig_str)) continue;
-        const bin = "-femit-bin=.zzc/tmp_check_root";
+        const bin = zzc.check_root_flag; // 第 200 轮 D68：旗标前缀与路径同源（旧形制整串一枚字面量）
         const argv: []const []const u8 = &.{ "zig", "build-exe", u.gen_rel, bin };
         zigCompile(lang, table.*, proj, argv, &seen) catch |e| {
             if (e == error.Failed) {
@@ -636,9 +637,9 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
 
     const stem = std.fs.path.stem(unit.native_rel);
     const ext_bin = if (builtin.os.tag == .windows) ".exe" else "";
-    const bin_full = try std.fmt.allocPrint(gpa_, ".zzc/bin/{s}{s}", .{ stem, ext_bin });
-    // zig -femit-bin 不会自建目录，需先创建产物目录
-    try std.Io.Dir.cwd().createDirPath(io_, ".zzc/bin");
+    const bin_full = try std.fmt.allocPrint(gpa_, "{s}/{s}{s}", .{ zzc.bin_dir, stem, ext_bin });
+    // zig -femit-bin 不会自建目录，需先创建产物目录（与上行同一真值，第 200 轮 D68：旧形制此处另持一枚字面量）
+    try std.Io.Dir.cwd().createDirPath(io_, zzc.bin_dir);
 
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.append(gpa_, "zig");

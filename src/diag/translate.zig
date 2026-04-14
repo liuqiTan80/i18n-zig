@@ -15,6 +15,7 @@ const Mangle = @import("../transpiler/mangle.zig");
 const Pack = @import("../lang/pack.zig");
 const PureFilter = @import("pure_filter.zig").PureFilter; // 取嵌套 struct，非文件根命名空间
 const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
+const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：内部路径族的隐藏判据与族成员同源
 
 /// 产品时间源（F3）：主层启动时经 `setIo` 注入；单测图不注入保持默认 null → 取时回 0，
 /// 诊断纯函数测试图不被 Io 污染（D7 可测性守则）。
@@ -462,11 +463,14 @@ fn pathsMatch(err_path: []const u8, gen_path: []const u8) bool {
 /// 或对用户不存在的生成产物（如导入缺文件时 zig 报的 `.zzc/gen/…/gone.zig`），应当隐藏。
 /// 注意：我方**已生成**文件即便被 zig 以该路径报出，也会先经 nativeLoc/pathsMatch 命中映射、
 /// 改展示方言路径；故本判定仅在 nativeLoc 已返回 null（确非我方已映射文件）时才起作用。
+/// 第 200 轮 D68：子串由硬编 `".zzc"` 改取族真值 `zzc.root`——旧形制下族成员（生成树/符号表/产物
+/// 目录/包目录/临时发射物）散在 4 个模块、本判据与它们无任何引用关系：探针 P1（写侧族名整体改掉、
+/// 本判据不动）与 P3（收窄为只认生成树）均 502/502 全绿——耦合面零钉，族改名即把内部路径直泄给用户。
 fn isInternalPath(p: []const u8) bool {
     if (p.len >= 2 and p[1] == ':' and std.ascii.isAlphabetic(p[0])) return true; // 盘符
     if (p.len > 0 and (p[0] == '/' or p[0] == '\\')) return true; // Unix/UNC 绝对
     if (std.mem.indexOf(u8, p, ".zig-cache") != null) return true; // 缓存目录
-    if (std.mem.indexOf(u8, p, ".zzc") != null) return true; // 我方生成目录（未映射回方言的产物）
+    if (std.mem.indexOf(u8, p, zzc.root) != null) return true; // 我方内部目录族（未映射回方言的产物）
     return false;
 }
 
@@ -3059,4 +3063,46 @@ test "lsp.diag 机读格式化：machineHead 头判据拒绝/接受臂 + flushMa
 
 fn dupStr(gpa: std.mem.Allocator, s: []const u8) ![]const u8 {
     return gpa.dupe(u8, s);
+}
+
+// 第 200 轮 T1（D68 · `.zzc` 族 ↔ 隐藏判据 的跨模块耦合锚）。
+// 上一条测（L2856 区）直钉的是判据自身的四臂形为；本测钉的是**两条跨模块面无测**——t2 探针实锤
+// （`.scratch200/probe200.sh`）：P1 把写侧族名整体改掉而判据不动 → 502/502 全绿（耦合零钉）；
+// P3 把判据收窄为只认生成树 `.zzc/gen`（符号表/产物目录/包目录/临时发射物就此不再隐藏）→ 502/502 全绿
+// （成员命中面零钉）。二者都是「族改名或收窄即把内部路径直泄给方言用户」的活路径（台账 B1 同族泄漏面）。
+// A1 走 199 轮 D67 的推论二形制：写侧产物与隐藏判据是配对契约，经函数组合（真实 `genPathFor` 的输出喂
+// `isInternalPath`）转为行为锚——任一侧脱离 `zzc_paths` 真值即断；纯「两点引用同一常量」不可锚，故不写。
+test "第 200 轮 T1 隐藏判据与 .zzc 族同源：写侧产物→组合锚 + 全员命中 + 负例（D68）" {
+    const cli = @import("../cli/args.zig"); // 只在测体内 import：生产侧判据不得依赖 cli，跨模块耦合仅在测面闭合
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    // A1 组合锚：写侧真实产出的生成路径（顶层与子目录两形）必须被隐藏判据认内部。
+    //    独立字面量侧同钉（判据不复用常量，遵 196/197 通则），故 hub 真值一改即此处红——逼两侧同步复跑。
+    const top = try cli.genPathFor(gpa, "main.zz");
+    try std.testing.expectEqualStrings(".zzc/gen/main.zig", top);
+    try std.testing.expect(isInternalPath(top));
+    const sub = try cli.genPathFor(gpa, "sub/mod.zz");
+    try std.testing.expectEqualStrings(".zzc/gen/sub/mod.zig", sub);
+    try std.testing.expect(isInternalPath(sub));
+    try std.testing.expect(isInternalPath(".zzc/gen/main.zig")); // 字面量侧：写侧脱靶亦红
+
+    // A2 全员命中锚：族其余成员（符号表/产物目录/包目录/临时发射物）及其下真实产物路径都须被隐藏。
+    //    P3 的收窄形（只认生成树）在此红——把判据改回任何单成员字面量都过不了这一串。
+    try std.testing.expect(isInternalPath(zzc.symbols_file));
+    try std.testing.expect(isInternalPath(zzc.bin_dir));
+    try std.testing.expect(isInternalPath(zzc.bin_dir ++ "/root"));
+    try std.testing.expect(isInternalPath(zzc.lang_dir));
+    try std.testing.expect(isInternalPath(zzc.lang_dir ++ "/中文.txt"));
+    try std.testing.expect(isInternalPath(zzc.check_root));
+    try std.testing.expect(isInternalPath(zzc.check_root ++ ".exe"));
+
+    // A3 负例锚：方言相对路径与裸名 `zzc/`（无前导点，用户自建的目录）都不得被隐藏——
+    //    判据若被放宽成「含 zzc 即隐藏」，会把用户自己的路径位置行一起吞掉（同 L2864 空路径那枚的反向防御）。
+    try std.testing.expect(!isInternalPath("src/main.zz"));
+    try std.testing.expect(!isInternalPath("zzc/gen/main.zig"));
+    // A4 粗粒度真形（坐实真行为、非期望）：判据是子串匹配，故 `.zzcfoo` 这类同前缀名也被隐藏——
+    //    隐藏多一个不存在的路径无害、漏隐藏才泄密，此处钉住「宁宽勿严」的设计取向；判据改段边界匹配即本钉红。
+    try std.testing.expect(isInternalPath(".zzcfoo/x.zig"));
 }
