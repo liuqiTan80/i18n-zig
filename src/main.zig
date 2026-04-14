@@ -160,7 +160,7 @@ fn pathIsSymlink(path: []const u8) bool {
 
 /// 把某单位里 `@embedFile` 引用的资源从方言源目录原样拷到目标 .zig 所在目录（生成树或 eject dest）。
 /// zig 里 `@embedFile` 相对当前 .zig 所在目录解析：源 = dirname(native .zz)/p，目标 = dirname(dest .zig)/p。
-/// `root` 为镜像根（collect 传 `.zzc/gen`、eject 传 dest）：先做包含性守卫、目标解析 `..` 后越出 root 或 p 为绝对则直接跳过
+/// `root` 为镜像根（collect 传 `cli.gen_dir` 真值、eject 传 dest）：先做包含性守卫、目标解析 `..` 后越出 root 或 p 为绝对则直接跳过
 /// （先判后读、既不越界写也不读项目外文件），留给 zig 原生报错；仅当源文件存在才拷（二进制安全）。拷贝失败静默忽略。
 fn stageEmbedAssets(native_rel: []const u8, zig_str: []const u8, dest_zig: []const u8, root: []const u8) void {
     var list = cli.extractEmbedPaths(gpa_, zig_str) catch return;
@@ -396,8 +396,9 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
         } else |_| {
             try writeWhole(gen, res.zig_str);
         }
-        // 把本单位 @embedFile 引用的资源镜像进生成树（zig 相对 .zig 所在目录解析、需与生成文件同层）；镜像根 `.zzc/gen` 做越界写守卫。
-        stageEmbedAssets(rel, res.zig_str, gen, ".zzc/gen");
+        // 把本单位 @embedFile 引用的资源镜像进生成树（zig 相对 .zig 所在目录解析、需与生成文件同层）；镜像根取
+        // `cli.gen_dir` 真值（第 199 轮 D67：与写侧 `genPathFor` 同源，不再各持一枚字面量）做越界写守卫。
+        stageEmbedAssets(rel, res.zig_str, gen, cli.gen_dir);
         try proj.units.append(gpa_, .{
             .native_rel = rel,
             .gen_rel = gen,
@@ -776,14 +777,12 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
         }
         try content.appendSlice(gpa_, "\n");
         try content.appendSlice(gpa_, u.zig_str);
-        // 保留子目录结构：gen_rel 形如 `.zzc/gen/src/sub/mod.zig`，去掉 `.zzc/gen/` 前缀
-        // 得到 `src/sub/mod.zig`，据此写入导出根；若只取 basename 会拉平子目录，
+        // 保留子目录结构：gen_rel 形如 `.zzc/gen/src/sub/mod.zig`，剥掉生成树前缀得到
+        // `src/sub/mod.zig`，据此写入导出根；若只取 basename 会拉平子目录，
         // 导致导出后的 main.zig 中 `@import("sub/mod.zig")` 找不到文件、`zig build` 失败。
-        const gen_rel = u.gen_rel;
-        const rel = if (std.mem.startsWith(u8, gen_rel, ".zzc/gen/"))
-            gen_rel[".zzc/gen/".len..]
-        else
-            std.fs.path.basename(gen_rel);
+        // 第 199 轮 D67：前缀真值与剥逻辑下沉 `cli.stripGenDir`（与写侧 `genPathFor` 共取
+        // `cli.gen_dir`），本站点与下方 entry_rel 原系两份同体内联逻辑、各持两枚字面量。
+        const rel = cli.stripGenDir(u.gen_rel);
         const out_zig = try std.fmt.allocPrint(gpa_, "{s}/{s}", .{ dest, rel });
         try writeWhole(out_zig, content.items);
         // 随毕业一并把 @embedFile 引用的资源从 src/ 拷进 dest（dest 下的 .zig 位置与生成树同构）；
@@ -797,10 +796,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     // - entry_rel：导出后入口在 dest 下的相对路径（与 writeWhole 使用的同一变换），build.zig 据此定位。
     const entry_stem = std.fs.path.stem(mu.native_rel);
     const app_name: []const u8 = if (std.mem.eql(u8, entry_stem, "main")) "app" else entry_stem;
-    const entry_rel = if (std.mem.startsWith(u8, mu.gen_rel, ".zzc/gen/"))
-        mu.gen_rel[".zzc/gen/".len..]
-    else
-        std.fs.path.basename(mu.gen_rel);
+    const entry_rel = cli.stripGenDir(mu.gen_rel); // 与上方 units 循环同一函数（同一真值、同一变换）
     const build_zig = try std.fmt.allocPrint(gpa_,
         \\const std = @import("std");
         \\

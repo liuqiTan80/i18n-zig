@@ -22,16 +22,38 @@ pub fn pickEntry(args: []const []const u8) EntryPick {
     return .{ .entry = "src/main.zz", .idx = null };
 }
 
+/// 生成树目录的**唯一真值**（第 199 轮 D67）：旧形制下 `.zzc/gen` 由七处生产字面量各自硬编——写侧
+/// `genPathFor` 两枚拼串、剥侧 `cmdEject` 两站点各持「前缀串 + 前缀.len」两枚、镜像根 `collect`
+/// 传参一枚。写与剥是一对必须字节相等的契约，失配时剥侧走 `else basename` 静默降级、把导出树的
+/// 子目录拉平（正是 `cmdEject` 原注释警告的 `@import("sub/mod.zig")` 断链形）。t2 探针实锤本漂移
+/// 无测可抓：改剥侧任一点位（前缀串、切长、镜像根）500/500 全绿，唯改写侧目录名被 `genPathFor`
+/// 自身的字面量钉抓到（P1–P5，详见本轮审计注）。
+pub const gen_dir: []const u8 = ".zzc/gen";
+
+/// 生成树内路径的前缀（含尾分隔符）：由 `gen_dir` 派生，故「前缀串」与「前缀长度」自此同源——
+/// 旧形制两枚各自硬编的字面量（其一改动即错位切头）属探针 P3 点位，抽真值后该类漂移不可表示。
+pub const gen_dir_prefix: []const u8 = gen_dir ++ "/";
+
 /// 方言入口相对路径 → 生成树内 .zig 落点。
 /// 根目录文件直接 `.zzc/gen/<stem>.zig`；带子目录则保留层级 `.zzc/gen/<dir>/<stem>.zig`。
 /// 第 60 轮自 main.zig 下沉至测试图（D7：main.zig 的 test 块从不执行、此纯函数此前零有效覆盖）；
 /// 激活测时发现旧实现对根目录文件会因 `dirname orelse "."` 产出 `.zzc/gen/./main.zig` 的 `.` 段噪声，按测意图修正。
+/// 第 199 轮 D67：目录段改取 `gen_dir` 真值（拼接仍在编译期完成、产物字节不变）。
 pub fn genPathFor(gpa: std.mem.Allocator, rel: []const u8) ![]const u8 {
     const stem = std.fs.path.stem(std.fs.path.basename(rel));
     if (std.fs.path.dirname(rel)) |dir_of| {
-        return std.fmt.allocPrint(gpa, ".zzc/gen/{s}/{s}.zig", .{ dir_of, stem });
+        return std.fmt.allocPrint(gpa, gen_dir ++ "/{s}/{s}.zig", .{ dir_of, stem });
     }
-    return std.fmt.allocPrint(gpa, ".zzc/gen/{s}.zig", .{stem});
+    return std.fmt.allocPrint(gpa, gen_dir ++ "/{s}.zig", .{stem});
+}
+
+/// 生成树内相对路径 → 剥掉 `gen_dir_prefix` 后的相对路径（保层级）；前缀失配者回退 basename。
+/// 第 199 轮 D67 自 `cmdEject` 下沉：原为两份同体内联逻辑（各持一枚前缀串 + 一枚 `.len`），抽取后
+/// 写/剥共用同一真值、两站点合并为单一函数。回退臂系防御面——`gen_rel` 恒由 `genPathFor` 产出，
+/// 正常不可达；不可达≠可删（删臂即令任何非本树产物被无条件切掉头 9 字节）故直钉。
+pub fn stripGenDir(gen_rel: []const u8) []const u8 {
+    if (std.mem.startsWith(u8, gen_rel, gen_dir_prefix)) return gen_rel[gen_dir_prefix.len..];
+    return std.fs.path.basename(gen_rel);
 }
 
 /// 分隔符无关的相对路径比较（`/` 与 `\` 视为同）。第 60 轮自 main.zig 下沉至测试图。
@@ -1225,4 +1247,53 @@ test "skipWs：钉四字节空白集 {' ','\\t','\\r','\\n'} 跳过 + 非空白�
     // from == src.len 边界 → 恒返回 len（空尾不越界）。
     try std.testing.expectEqual(@as(usize, 2), skipWs("ab", 2));
     try std.testing.expectEqual(@as(usize, 0), skipWs("", 0));
+}
+
+// 第 199 轮审计注（D67）：`.zzc/gen` 曾系跨模块**七处生产字面量**的双源族——写侧 `genPathFor` 两枚拼串、
+// 剥侧 `cmdEject` 两站点各持「前缀串 + 前缀 `.len`」两枚、镜像根 `collect` 传参一枚。写与剥须字节相等，
+// 失配即走 `else basename` 静默降级、把 eject 导出树的子目录拉平（正是该处注释自己警告的
+// `@import("sub/mod.zig")` 断链形）——漂移不报错，只把产物写歪。
+// t2 探针（`.scratch199/mutate199.sh`：每路单点破坏后 `zig build test --summary all` 实测红绿）：
+//   P1 剥站点1 前缀串改 → 全绿；P2 剥站点2 前缀串改 → 全绿；P3 剥站点1 的 `.len` 单独漂移 → 全绿；
+//   P4 镜像根字面量改 → 全绿；P5 写侧目录名改 → 498/500 红（`genPathFor` 自身的字面量钉抓到）。
+//   即写侧有钉、剥侧四处零钉，P1/P3 两路恰是把「保层级」契约改成「拉平/错位切头」的路径。生产后果面
+//   由 `tools/check-demos.ps1` 的 multi/nested demo 守卫覆盖，唯本机 `which pwsh` 无（NO_PWSH）不可跑，
+//   属在册观察（同 196–198 各轮口径：e2e 面不在本轮四绿之内）。
+// 修法：抽 `gen_dir`/`gen_dir_prefix` 单一真值 + `stripGenDir` 下沉合并两站点（同 60 轮 D7 的
+// 「纯逻辑下沉 cli 进测试图」先例），本块钉契约：A1 真值字面量钉（判据不引用被测常量，遵 196/197
+// 「判据独立性通则」）；A2 写→剥组合往返——两侧经函数耦合而非仅经常量引用，故这是 197 轮所记
+// 「同源形制本身无可运行判据」缺的那枚**行为锚**：任一侧脱离真值即断；A3 深度层级保真（P3 类长度漂移
+// 的显式靶面，切长多一少一皆改此结果）；A4 前缀失配回退臂直钉（防御面，正常不可达≠可删）。
+// 不可锚登册：`collect` 的镜像根实参改用 `cli.gen_dir` 后，「同值改写回字面量」的行为完全等价、无可运行
+// 判据（反证 M5/M6 实测皆绿）——如实登记、不占钉，同 197 M5 判例。
+
+test "第 199 轮 T1 gen_dir 单一真值：真值字面量钉 + 写→剥组合往返 + 层级保真 + 失配回退臂" {
+    const gpa = std.testing.allocator;
+    // A1 真值字面量钉：改 `gen_dir` 即本钉红（真值漂移显式化，与 A2 的行为锚互补）。
+    try std.testing.expectEqualStrings(".zzc/gen", gen_dir);
+    try std.testing.expectEqualStrings(".zzc/gen/", gen_dir_prefix);
+
+    // A2 写→剥组合往返（根目录形 + 子目录形）：剥侧结果由字面量给定。写侧脱离真值 → 剥侧前缀失配 →
+    //   回退 basename（`mod.zig` ≠ `src/sub/mod.zig`）；剥侧脱离真值同理。两站点共用一函数即不再漂移。
+    const g_root = try genPathFor(gpa, "main.zz");
+    defer gpa.free(g_root);
+    try std.testing.expectEqualStrings(".zzc/gen/main.zig", g_root);
+    try std.testing.expectEqualStrings("main.zig", stripGenDir(g_root));
+    const g_sub = try genPathFor(gpa, "src/sub/mod.zz");
+    defer gpa.free(g_sub);
+    try std.testing.expectEqualStrings(".zzc/gen/src/sub/mod.zig", g_sub);
+    try std.testing.expectEqualStrings("src/sub/mod.zig", stripGenDir(g_sub));
+
+    // A3 深度层级保真：四段名对 9 字节前缀的切长最敏感，前缀串与切长不一致必然在此现形。
+    const g_deep = try genPathFor(gpa, "a/b/c/d.zz");
+    defer gpa.free(g_deep);
+    try std.testing.expectEqualStrings("a/b/c/d.zig", stripGenDir(g_deep));
+
+    // A4 失配回退臂（防御面）：非本树产物一律回退 basename——同前缀但目录名多一字符、绝对形、
+    //   目录名本身（无尾分隔符故不命中前缀）、空串。删臂即令这些形被无条件切掉头 9 字节。
+    try std.testing.expectEqualStrings("main.zig", stripGenDir("src/main.zig"));
+    try std.testing.expectEqualStrings("a.zig", stripGenDir(".zzc/genv/src/a.zig"));
+    try std.testing.expectEqualStrings("x.zig", stripGenDir("/tmp/deep/dir/x.zig"));
+    try std.testing.expectEqualStrings("gen", stripGenDir(".zzc/gen"));
+    try std.testing.expectEqualStrings("", stripGenDir(""));
 }
