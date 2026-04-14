@@ -205,6 +205,10 @@ fn loadSymbols(table: *Mangle) !void {
 
 fn saveSymbols(table: Mangle) void {
     var out: std.ArrayList(u8) = .empty;
+    // D59（第 194 轮）：`out` 系 gpa_ 堆缓冲，原码落盘后从不回收（四个 append 失败臂提前
+    // return 同样不回收）——每次落盘泄一只；生产 gpa_ 为进程 arena 故长期无感、属累积面
+    // （与 D58 同族）。单手 defer 无条件回收（deinit 对空表零副作用、失败臂亦覆盖）。
+    defer out.deinit(gpa_);
     for (table.symbols.items) |s| {
         out.appendSlice(gpa_, s.native) catch |e| {
             printErr("zzc: 保存符号表失败（写入符号名）：{s}", .{@errorName(e)});
@@ -2185,4 +2189,184 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
         defer std.testing.allocator.free(g3);
         try std.testing.expectEqualStrings("M3", g3);
     }
+}
+
+// 第 194 轮审计注：saveSymbols（L206·符号表落盘壳）系测面零直调——生产直调唯三条退出补位
+// 点：run 非零退出路径 L664（D38）、bail 失败退出 L916（D46）、main 分发末尾 L1331；
+// `std.process.exit` 不跑调用帧 defer，故三条退出路径都得手工补刷——写侧壳正是 D16 跨会话
+// 稳定契约的最后一环（191 轮钉了读侧 loadSymbols 恢复入口，本轮钉其对称面）。序列化形制
+// `母语名 = z_N\n` 与 `parseSymbolText` 入参格式互逆，而写侧全库零直调钉：分隔符/换行/顺序
+// 任一漂移即下一会话静默丢映射或撞号，core 图的 parseSymbolText 单测只看得到读侧。
+// **疑似 D59**：`out` 系 gpa_ 分配的 ArrayList(u8)，原码 writeWhole 之后从不 deinit/free
+// （四个 append 失败臂提前 return 同样不回收）——每落一次盘泄一只缓冲；生产 gpa_ 为进程
+// arena 故长期无感、属累积面（与 193 轮 D58 同族形制）。本测 gpa_ 裸 testing.allocator 直调，
+// 首跑即应由 runner 直报 leaked 坐实，再补单手 `defer out.deinit(gpa_)` 转绿（D37 先例）。
+// 盘上形制：路径硬编 `.zzc/symbols.txt` 相对 cwd（测试图 cwd=仓库根、`.zzc/` 已 gitignore）
+// ——191 轮前置清理 + defer 回清（LIFO 反序注删）先例直用。观察面登册：四臂 append 失败同体
+// 行为（母语措辞 + 提前 return 不落盘 + 回收计数），本轮硬钉两处：首臂（fail_index=0 必落
+// 「写符号名」）与成功臂回收形（A6 无失败点纯计数：allocations=1 与 deallocations 齐平，
+// 原码必 1/0）。后三臂需「后续增容失败」方能命中，16 组合 fail/resize 索引网格探针实证：
+// testing allocator 栈上 ArrayList 只走一次计入分配（后续增容走 remap 就地扩容、被 neuter
+// 后回退的 alignedAlloc 又即时成交），单点不可稳定诱发——登记为同体观察面（191 轮
+// SourceTooLarge 臂登册先例）。另登一项结构性观察：loadSymbols
+// 读入的文件缓冲被符号表借用视图长按（表存活期内不可回收、与 loadExternalPack 同一契约形），
+// 非缺陷但在裸 testing.allocator 下必报该块——写侧 arena 接线才能与其拮抗。
+
+test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用形/写败静面/append 失败臂不落盘 + D59 泄漏钉" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io_prev = io_;
+    const gpa_prev = gpa_; // 接线前取原全局（193 同族守则）
+    io_ = threaded.io();
+    defer {
+        io_ = io_prev;
+        gpa_ = gpa_prev;
+    }
+    gpa_ = std.testing.allocator; // 裸直调（D37/D58 实锤形制）：壳任何未回收分配由 runner 直报 leaked
+    // werr 接线：五处失败臂全经 printErr，测试图 werr=undefined 直崩（191 同族）。
+    const werr_path = "/tmp/zzc194-werr.log";
+    var wf: Io.File.Writer = undefined;
+    var wbuf: [512]u8 = undefined;
+    var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
+    defer wfile.close(io_);
+    wf = Io.File.Writer.init(wfile, io_, &wbuf);
+    werr = &wf.interface;
+    defer werr = undefined;
+    defer wf.interface.flush() catch {};
+    defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {};
+
+    // 前置清理 + 尾部回清（LIFO：先注 deleteDir（后跑）再注 deleteFile（先跑））。
+    std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+    std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
+    defer std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
+    defer std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+
+    // A0 空表仍落盘：建零字节文件（与 flushUntranslated「空清单不建文件」形制相反——空符号
+    //   表的「本次无映射」是显式落盘事实，读侧跳空行天然兼容；改成空表早退即红）。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        saveSymbols(t);
+        try std.testing.expect(pathExists(".zzc/symbols.txt"));
+        const b = try readFileRaw(".zzc/symbols.txt");
+        defer std.testing.allocator.free(b);
+        try std.testing.expectEqual(@as(usize, 0), b.len);
+    }
+    // A1 序列化字节面 + 端到端往返：intern 两名 → `甲 = z_1\n乙 = z_2\n` 逐字节钉，再喂回
+    //   loadSymbols（D16 契约：写侧格式漂移＝读侧静默丢映射；改分隔符/换行/次序即红）。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        _ = try t.intern("甲");
+        _ = try t.intern("乙");
+        saveSymbols(t);
+        const b = try readWhole(".zzc/symbols.txt");
+        defer std.testing.allocator.free(b);
+        try std.testing.expectEqualStrings("甲 = z_1\n乙 = z_2\n", b);
+        var t2 = Mangle.init(std.testing.allocator);
+        defer t2.deinit();
+        // 自捕（三跑）：loadSymbols 的文件缓冲被符号表**借用视图**长按（parseSymbolText 走
+        //   putExisting·owned=false，表内 native/ascii 均为该缓冲字节——表存活期内结构性不可
+        //   回收，与 loadExternalPack「字节不 free：键值为借用视图」同一契约形，非缺陷）——
+        //   故本段必须接有界 arena 而非裸 testing.allocator，否则 runner 必报该块「漏」。
+        //   191 轮测帧 gpa_ 接的正是 arena、本漏形当时无从现形。
+        var arena_rt = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena_rt.deinit(); // LIFO：先 t2.deinit（只处自有 ascii）后处 arena
+        gpa_ = arena_rt.allocator();
+        try loadSymbols(&t2); // 同一盘上文件回读：写读两壳经本钉咬合成闭环
+        gpa_ = std.testing.allocator;
+        try std.testing.expectEqual(@as(usize, 2), t2.count());
+        const c = try t2.intern("丙"); // next_index 已推过恢复值：新名续接 z_3
+        try std.testing.expectEqualStrings("z_3", c);
+    }
+    // A2 顺序面：输出序 = symbols.items 首现序（可复现契约），非字典序/哈希序。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        _ = try t.intern("b");
+        _ = try t.intern("a");
+        saveSymbols(t);
+        const b = try readWhole(".zzc/symbols.txt");
+        defer std.testing.allocator.free(b);
+        try std.testing.expectEqualStrings("b = z_1\na = z_2\n", b);
+    }
+    // A3 借用形（owned=false）：putExisting 载入的映射（ascii 为入参借用视图）同样逐字节落盘
+    //   且 t.deinit 不误 free 借用名——序列化不分支 owned，写侧分支即红。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try t.putExisting("丁", "z_9");
+        saveSymbols(t);
+        const b = try readWhole(".zzc/symbols.txt");
+        defer std.testing.allocator.free(b);
+        try std.testing.expectEqualStrings("丁 = z_9\n", b);
+    }
+    // A4 写失败静面：`.zzc/symbols.txt` 预建为目录 → createFile 报 IsDir → printErr 点名
+    //   「保存符号表失败（写入文件）」，void 签名不改主流程出码（改 try 传播则编译期自守）。
+    {
+        // 自捕（首跑）：A3 刚把 `.zzc/symbols.txt` 当**文件**写过，createDirPath 见到已存在
+        //   非目录节点直报 NotDir（dirCreateDirPath 的 kind 检查）——预建目录前必先删文件形。
+        std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+        try std.Io.Dir.cwd().createDirPath(io_, ".zzc/symbols.txt");
+        defer std.Io.Dir.cwd().deleteDir(io_, ".zzc/symbols.txt") catch {};
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        _ = try t.intern("戊");
+        saveSymbols(t);
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        defer std.testing.allocator.free(wraw);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "保存符号表失败（写入文件）") != null);
+    }
+    // A5 append 首臂（OOM 面）：fail_index=0 → 写符号名即失败 → 母语点名 + 提前 return
+    //   **不落盘**（坏包不留半个文件；把 return 改 continue 即红——后续 append 成功、
+    //   writeWhole 写出截断内容）。本臂 out 零分配，计数 0/0 仅作形制对照。
+    {
+        std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+        try std.testing.expect(!pathExists(".zzc/symbols.txt"));
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        _ = try t.intern("甲");
+        var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 0 });
+        gpa_ = fa.allocator();
+        saveSymbols(t);
+        gpa_ = std.testing.allocator; // 回置早于块尾（fa 计数已定格，192 形制）
+        try std.testing.expect(!pathExists(".zzc/symbols.txt"));
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        defer std.testing.allocator.free(wraw);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "保存符号表失败（写入符号名）") != null);
+        try std.testing.expectEqual(fa.deallocations, fa.allocations); // 零分配臂：0/0 形制对照
+    }
+    // A6 D59 计数钉（无失败点纯计数形）：FailingAllocator 不设 fail/resize 靶，正常落盘一条
+    //   长名——allocations=1（out 首块容量）且与 deallocations 齐平：原码（从不回收）必为
+    //   1/0，补 `defer out.deinit(gpa_)` 后才成立——不借容量策略、每轮必现的硬钉（192 轮
+    //   「FailingAllocator 计数形 + 防双零假绿」先例）；runner 在裸 testing.allocator 下的
+    //   leaked 报告为同一钉的第二重保险。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        const LONG_NATIVE: [300]u8 = @splat('x'); // 300 字节长母语名（自捕：`"x" ** 300` 被 0.17
+        //   zig fmt 判为「`*` 单侧空格」硬拒、两种空格形制皆不录——改 @splat 定长数组形避开）
+        const EXPECT_LONG = LONG_NATIVE ++ " = z_1\n"; // ++ 结果带哨兵（[307:0]u8），不可标注为定长数组类型
+        try t.putExisting(&LONG_NATIVE, "z_1");
+        var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        gpa_ = fa.allocator();
+        saveSymbols(t);
+        gpa_ = std.testing.allocator; // 回置早于块尾（fa 计数已定格）
+        try std.testing.expectEqual(@as(usize, 1), fa.allocations);
+        try std.testing.expectEqual(fa.deallocations, fa.allocations);
+        const b = try readWhole(".zzc/symbols.txt"); // 计数形不走失败路：完整落盘可验
+        defer std.testing.allocator.free(b);
+        try std.testing.expectEqualStrings(EXPECT_LONG, b);
+    }
+    // A7 同体臂登记（探针网格实据·不占钉位）：另三臂（写等号/写 ASCII 名/写换行）需
+    //   「后续增容失败」方能命中，而 16 组合网格探针（双名 100/107 字节、
+    //   fail_index×resize_fail_index ∈ {0,1,2,3}²）实跑结论：除 fail_index=0 必落首臂外，
+    //   其余 15 组合全部走完且 allocations 恒为 1——testing allocator 栈上 ArrayList 后续
+    //   增容走 remap 就地扩容（不计 allocations）、被 neuter 后回退的 alignedAlloc 又即时
+    //   成交（resize_index 不增→下次 remap 再试即成）——所拟二臂均不可单点稳定诱发，
+    //   登记为同体观察面（首臂已由 A5 钉住、四臂同体的「母语措辞+不落盘+回收计数」三件
+    //   均已至少一处硬证）。三跑自捕：本段原拟「resize_fail_index=0」/「fail_index=1」
+    //   两度均为伪钉（文件照被完整写出），由网格探针现形后改为登记不占钉。
 }
