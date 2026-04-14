@@ -27,7 +27,7 @@ const PureFilter = @import("diag/pure_filter.zig").PureFilter;
 const UntranslatedList = @import("diag/pure_filter.zig").UntranslatedList;
 const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslatedJson;
 const UntranslatedPhrase = @import("diag/pure_filter.zig").UntranslatedPhrase; // 192 T1 造清单 entry 用（生产侧经 UntranslatedList 间接引用、无此别名先例）
-const untranslated_log_path = @import("diag/pure_filter.zig").default_log_path; // 197 D64：落盘路径取 pure_filter 单一真值（与 `Config.log_path` 默认同源、杜绝双字面量漂移）
+const untranslated_log_path_default = @import("diag/pure_filter.zig").default_log_path; // 197 D64 单一真值（此处取作默认初值、198 D66 下改为可覆写变量）
 const cli = @import("cli/args.zig");
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
@@ -76,11 +76,23 @@ var untranslated_list: UntranslatedList = .{};
 /// （diag.machineLines）已在测试图内单测，本旗标只做接线（行为面由 demos e2e 守卫钉）。
 var machine_mode: bool = false;
 
+/// 状态文件路径的**默认真值**（第 198 轮 D66）：与历史字面量一字未改。
+const symbols_path_default: []const u8 = ".zzc/symbols.txt";
+
+/// 符号表与未翻译清单的落盘路径（第 198 轮 D66·进程级可覆写形制，同 `machine_mode`/`werr` 先例）：
+/// 生产恒取默认值、行为零变更；做成变量只为测试图——路径若是编译期字面量，测块就无法给自己的盘上
+/// 产物改名，同一测试二进制被并跑时两份进程读写同名同径、帧首/defer 回清删的是别人正在用的文件
+/// （196 轮 D62 的在册残留面：main 图 24 路并跑 68/72 红全属此族）。测块形制：覆写 → defer 复原
+/// `*_default`（跨测块共享全局须显式回置，192 八案同族）。
+var symbols_path: []const u8 = symbols_path_default;
+var untranslated_log_path: []const u8 = untranslated_log_path_default;
+
 /// 落盘未翻译清单（F3）：空清单不建文件（防 CI 消费面把恒在的空文件误读为“零未译”信号——
 /// 缺失即“本次未发生过兜底”）。写失败是辅助信息面：母语提示但不改主流程退出码。
 /// 路径取 `untranslated_log_path`（= pure_filter `default_log_path` 单一真值，第 197 轮 D64：旧形制
-/// 与 `pure_filter.Config.log_path` 各持一份同值字面量，改任一侧无测可抓）；192 T1 对该点位持**字面量**
-/// 判据（独立于本常量、不构成自证循环），改真值即该块转红。
+/// 与 `pure_filter.Config.log_path` 各持一份同值字面量，改任一侧无测可抓）；198 T1 A0/A1 对该点位持
+/// **字面量**判据（独立于本常量、不构成自证循环），改真值即该钉转红——旧判据长在 192 T1 的盘上径名上，
+/// 本轮该块迁至私有径后判据上移到 198 T1（覆盖面不变：默认值漂移必现形）。
 fn flushUntranslated() void {
     if (untranslated_list.items.items.len == 0) return;
     const ts = @as(i64, @intCast(@divFloor(Io.Timestamp.now(io_, .real).nanoseconds, std.time.ns_per_s)));
@@ -195,12 +207,12 @@ fn printErr(comptime fmt: []const u8, args: anytype) void {
 
 // ---------------------------------------------------------------- 符号表持久化
 
-/// 恢复历史符号表：读 `.zzc/symbols.txt` 后交给 `Mangle.parseSymbolText`（格式解析属 zzc_core 测试图、有单测）。
+/// 恢复历史符号表：读 `symbols_path`（默认 `.zzc/symbols.txt`，198 D66 起为可覆写 seam）后交给 `Mangle.parseSymbolText`（格式解析属 zzc_core 测试图、有单测）。
 /// 恢复失败向上传播（台账 D16）：丢映射即破坏跨会话稳定、可能后续撞号；
 /// 仅“文件不存在”（首次运行尚无符号表）仍为正常路径。
 /// 超限（error.Failed，已在 readWhole 源头母语报出）不可静默跳过：照旧传播。
 fn loadSymbols(table: *Mangle) !void {
-    const bytes = readWhole(".zzc/symbols.txt") catch |e| switch (e) {
+    const bytes = readWhole(symbols_path) catch |e| switch (e) {
         error.FileNotFound => return, // 首次运行：尚无符号表，正常
         else => return e,
     };
@@ -231,7 +243,7 @@ fn saveSymbols(table: Mangle) void {
             return;
         };
     }
-    writeWhole(".zzc/symbols.txt", out.items) catch |e| {
+    writeWhole(symbols_path, out.items) catch |e| {
         printErr("zzc: 保存符号表失败（写入文件）：{s}", .{@errorName(e)});
     };
 }
@@ -904,7 +916,7 @@ fn bail(e: anyerror) noreturn {
         error.Failed => {}, // 母语报错已在编译阶段打印，无需重复
         // D36（第 84 轮）：符号表被手工编辑出同一 z_N 归两个不同母语名——若不容忍静默合并，
         // 必须源头拒并点名文件与修法（两标识符转码后共享同名会静默改变程序语义）。
-        error.DuplicateSymbol => printErr("zzc: 符号表 .zzc/symbols.txt 撞号：同一编号被分给两个不同母语名。请删除该文件让 zzc 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{}),
+        error.DuplicateSymbol => printErr("zzc: 符号表 {s} 撞号：同一编号被分给两个不同母语名。请删除该文件让 zzc 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{symbols_path}), // 198 D66：路径经 seam 可覆写，文案插值以保证点名与实际文件始终一致
         // 常见文件系统/内存错误给纯母语可操作提示（避免把 `NotDir`/`AccessDenied` 等
         // Zig 内部英文标识符直接泄给方言用户）；未收录错误保留中文句式、仅附一个诊断码。
         else => {
@@ -1354,11 +1366,12 @@ pub fn main(init: std.process.Init) !void {
 // 测内私有路径构件（第 196 轮 D62）：本文件测块的盘上产物名一律带进程私有随机后缀——同一测试
 // 二进制被并跑（手工重跑、CI 与本机构建交叠、压力自验）时，编译期固定的同径名会互删对方正在
 // 读写的文件，表现为「串行恒绿、偶发红」的间歇假红（机理与实锤数见 src/test_priv.zig 头注）。
-// 在册观察（同族残留面·另轮治理）：`loadSymbols`/`saveSymbols` 与 `flushUntranslated` 把路径
-// 硬编在生产码里（`.zzc/symbols.txt` L199/L230、`logs/untranslated_phrases.json` L88），测块无从
-// 改名；因这三块只存在于 main 图（`zig build test` 每图只跑一份）故常规形制不红，本机 24 路并跑
-// 同一 main 图二进制时它们恰为唯一残红点名（修复后 core 图 0/24 红、main 图 20/24 红全属此族）。
-// 私有化需换 cwd（`std.os.linux.chdir` 断代 windows CI 矩阵）或把目录名做成生产入参——留待专轮。
+// 第 198 轮收口（原在册观察·同族残留面）：`loadSymbols`/`saveSymbols` 与 `flushUntranslated` 曾把
+// 路径硬编在生产码里（`.zzc/symbols.txt`、`logs/untranslated_phrases.json`），测块无从改名；因这三块
+// 只存在于 main 图（`zig build test` 每图只跑一份）故常规形制不红，本机 24 路并跑同一 main 图二进制时
+// 它们恰是唯一残红点名（t2 基线实测定量：3 轮合计 68/72 红，红块逐一点名为 191 T2 / 192 T1 / 194 T1）。
+// 修法走第三条路——把落盘路径做成进程级可覆写变量 seam（`symbols_path`/`untranslated_log_path`，同
+// `machine_mode`/`werr` 先例）：既不动 CLI 面，也不用 `std.os.linux.chdir`（后者断代 windows CI 矩阵）。
 // 附带契约（本轮尾注自捕）：私有名把「固定名覆盖」换成「每跑一枚新名」，用毕须显式回清，否则
 // 由并发互踩转为 /tmp 累积（191/192 两块漏 `deleteFileAbsolute` 已补齐，193/194 形制为样）。
 const tpriv = @import("test_priv.zig");
@@ -1812,8 +1825,8 @@ test "第 190 轮 T2 eject 三件套：回读命中/名闸/无字段/NotDir + sp
 // 格式解析属 zzc_core 图有单测，而 wrapper 本身的三向决策臂（FileNotFound 静默
 // 正常 / D31 编码封口传播 / D36 撞号传播）全库零钉——把 else 臂改成静默吞（首次
 // 运行豁免扩成一切失败豁免）即跨会话映射静默丢失、无任何测可抓。盘上形制：路径
-// 硬编 `.zzc/symbols.txt` 相对 cwd，测试图 cwd=仓库根、`.zzc/` 已 gitignore；
-// 前置清理+defer 回清保幂等。观察面登册：SourceTooLarge 臂（10MB 门槛）不以重 IO
+// 经 `symbols_path` seam 取径（第 198 轮 D66）：本块覆写为 /tmp 下进程私有路径、defer 复原
+// 真值；deleteTree 整树归零保幂等（文件/目录/子树全形态）。观察面登册：SourceTooLarge 臂（10MB 门槛）不以重 IO
 // 诱发——同体传播臂已由 InvalidEncoding 形钉住。证伪撤号轮不占 D 号。
 
 test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢复端到端/InvalidEncoding 传播/DuplicateSymbol 传播）" {
@@ -1825,7 +1838,7 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     gpa_ = arena.allocator(); // 189/190 同族形制：文件级 arena 接线
     // werr 接线（探针即测自捕：readWhole wrapper 的 D31 编码封口臂经 printErr 打
     //   母语提示，测试图 werr=undefined 直崩）：挂到盘上日志文件、用毕回 undefined。
-    const priv = tpriv.Priv.init(io_); // D62：werr 日志名改进程私有
+    const priv = tpriv.Priv.init(io_); // D62/D66：werr 日志与符号表路径改进程私有（同一次 init 派生）
     var wb: [96]u8 = undefined;
     const werr_path = priv.path(&wb, "/tmp/zzc191-werr-", ".log");
     var wf: Io.File.Writer = undefined;
@@ -1841,12 +1854,19 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     //   defer LIFO：本行后注册=先跑，unlink 于 close/flush 之前，POSIX 下句柄仍可读到内容清零。
     defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {};
 
-    // 前置清理（A1「尚无符号表」须为真前提而非巧合）+ 尾部回清。
-    std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
-    std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
-    // defer LIFO：先注删目录（后跑）再注删文件（先跑）——反序则目录非空删失败、留空壳。
-    defer std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
-    defer std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+    // D66 seam 覆写（t2 基线 68/72 红的本块点名项）：符号表若是编译期字面量，并跑的多份进程
+    //   同读同写 `.zzc/symbols.txt`、帧首/defer 回清删的是别人正在用的文件。同一 `priv` 派生私有
+    //   根与私有文件名（同块内稳定、跨进程不撞）。
+    var srb: [96]u8 = undefined;
+    var sfb: [96]u8 = undefined;
+    const sym_root = priv.path(&srb, "/tmp/zzc198-sym-", "");
+    symbols_path = priv.path(&sfb, "/tmp/zzc198-sym-", "/symbols.txt");
+    // 跨测块共享的全局须显式回置：本块之后任何测块（含 194）拿到的都是默认真值。
+    defer symbols_path = symbols_path_default;
+    // 前置清理（A1「尚无符号表」须为真前提而非巧合）+ 尾部回清：整树归零对文件/目录/子树全
+    //   形态幂等（192 五跑同族形制），亦免去 defer LIFO 的「目录非空删失败留空壳」位序坑。
+    std.Io.Dir.cwd().deleteTree(io_, sym_root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, sym_root) catch {};
 
     // A1 首次运行形：FileNotFound → 静默正常返回、表零变化（唯一豁免臂）。
     {
@@ -1857,7 +1877,7 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     }
     // A2 恢复端到端：writeWhole 落盘 → loadSymbols 完整透传 parseSymbolText——
     //   既有映射命中不复派生、新名续接已恢复最大编号之后（D16 跨会话稳定契约）。
-    try writeWhole(".zzc/symbols.txt", "甲 = z_1\n乙 = z_2\n");
+    try writeWhole(symbols_path, "甲 = z_1\n乙 = z_2\n");
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
@@ -1874,7 +1894,7 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     //   本地化为母语提示（本次接线 werr 即打向日志文件）+ error.Failed 上传——
     //   wrapper 把 file_io 的 InvalidEncoding 折成 Failed 是产品契约（方言用户不见
     //   英文错误名），loadSymbols else 臂照传（丢映射不可静默吞）。
-    try writeWhole(".zzc/symbols.txt", "\xFF\xFE\x00\x01");
+    try writeWhole(symbols_path, "\xFF\xFE\x00\x01");
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
@@ -1882,7 +1902,7 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     }
     // A4 撞号传播臂（D36 形透传）：同一 z_1 归两名 → parseSymbolText 抛
     //   DuplicateSymbol → try 传播（源头拒并点名语义贯穿 wrapper）。
-    try writeWhole(".zzc/symbols.txt", "甲 = z_1\n乙 = z_1\n");
+    try writeWhole(symbols_path, "甲 = z_1\n乙 = z_1\n");
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
@@ -1897,10 +1917,11 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
 // 把恒在空文件误读为零未译）、real 时钟 generated_at（改 monotonic 族即落 1970）、双 catch
 // 静面（序列化失败/落盘失败均只 printErr、不改退出码——改成 try 传播即把辅面异常升格成主
 // 报错）、defer free(json) 泄漏防线（191 S1 同族）与 entry 字段透传/顺序契约。盘上形制：
-// writeWhole 自动 createDirPath("logs")（file_io L40）、logs/ **已** gitignore（仓根 .gitignore
-// 的「F3 未翻译短语落盘面」条目、第 52 轮随落盘一同加入——本注旧写「未 gitignore」属第 192 轮
-// 失实注释、第 197 轮 D65 据现状更正）——测试图以
-// deleteTree 回清（崩溃幂等：文件/目录/子树全形态归零）；werr 接线 /tmp 盘上日志
+// 经 `untranslated_log_path` seam 取径（第 198 轮 D66：本块覆写为 /tmp 私有路径、defer 复原真值；
+// 真值字面量的独立判据已迁至 198 T1 A0/A1），writeWhole 自动 createDirPath 父目录；`logs/` **已** gitignore
+// （仓根 .gitignore 的「F3 未翻译短语落盘面」条目、第 52 轮随落盘一同加入——本注旧写「未 gitignore」
+// 属第 192 轮失实注释、第 197 轮 D65 据现状更正）——测试图以 deleteTree 回清（崩溃幂等：文件/目录/
+// 子树全形态归零）；werr 接线 /tmp 盘上日志
 // （191 T2 同族：静面 printErr 臂 werr=undefined 直崩）。首跑自证注：0.17 断代候选
 // `f.deleteFile` 不存在；`deleteFileAbsolute` 内部 assert(isAbsolute) 传相对路径即
 // ABRT——回清统一 cwd().deleteFile 相对形；后因崩溃残留脏态改 deleteTree 整树归零
@@ -1921,7 +1942,7 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     gpa_ = arena.allocator(); // 189/190/191 同族形制：文件级 arena 接线
     // werr 接线（静面 printErr 臂需实流；191 T2 同族形制）：函数帧作用域一次接线、
     //   defer 回置——B/C 段内块会重开 append 句柄复用法帧的 wf/wbuf。
-    const priv = tpriv.Priv.init(io_); // D62：werr 日志名改进程私有
+    const priv = tpriv.Priv.init(io_); // D62/D66：werr 日志与落盘清单路径改进程私有（同一次 init 派生）
     var wb: [96]u8 = undefined;
     const werr_path = priv.path(&wb, "/tmp/zzc192-werr-", ".log");
     var wf: Io.File.Writer = undefined;
@@ -1933,17 +1954,24 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     defer werr = undefined; // 先注册=后跑：wf.flush 于其前执行完毕
     defer wf.interface.flush() catch {};
     defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {}; // 自捕（同 191：私有名须配回清）
+    // D66 seam 覆写（t2 基线 68/72 红的本块点名项）：两份并跑进程同读同写 logs/ 下同名清单时，
+    //   帧首/defer 的 deleteTree("logs") 删的是别人正在用的树。同一 `priv` 派生私有根与私有文件名。
+    var lrb: [96]u8 = undefined;
+    var lfb: [96]u8 = undefined;
+    const log_root = priv.path(&lrb, "/tmp/zzc198-log-", "");
+    untranslated_log_path = priv.path(&lfb, "/tmp/zzc198-log-", "/untranslated_phrases.json");
+    // 跨测块共享的全局须显式回置（同 191 T2：不回置则后续块误写私有径、且互相看不到改动）。
+    defer untranslated_log_path = untranslated_log_path_default;
     // 前置清理（A1「尚无文件」须为真前提）+ 尾部回清。自捕（五跑）：上一跑 ABRT 崩溃
-    //   把 logs/untranslated_phrases.json 残留成**目录**形态（C 段构造的失败注入态），
-    //   deleteFile 对目录失败、pathExists 仍真——改 deleteTree 递归删（文件/目录/子树
-    //   全形态归零，崩溃幂等）。
-    std.Io.Dir.cwd().deleteTree(io_, "logs") catch {};
-    defer std.Io.Dir.cwd().deleteTree(io_, "logs") catch {};
+    //   把落盘路径残留成**目录**形态（C 段构造的失败注入态），deleteFile 对目录失败、
+    //   pathExists 仍真——整树归零对文件/目录/子树全形态幂等（崩溃幂等）。
+    std.Io.Dir.cwd().deleteTree(io_, log_root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, log_root) catch {};
 
     // A1 F3 契约主钉：空清单 → 早退、不建文件（防 CI 把恒在空文件误读为「零未译」）。
     untranslated_list = .{};
     flushUntranslated();
-    try std.testing.expect(!pathExists("logs/untranslated_phrases.json"));
+    try std.testing.expect(!pathExists(untranslated_log_path));
 
     // A2 非空落盘端到端：entry 字段透传 + generated_at 走 real 时钟（下界=epoch 秒
     //   量级、上界拒 monotonic 族小值——ts 源被改成开机钟即红）+ 键名形制自证。
@@ -1955,11 +1983,11 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     try items_a.append(std.testing.allocator, .{ .phrase = PHRASE, .location = LOC, .timestamp = TS });
     untranslated_list = .{ .items = items_a };
     flushUntranslated();
-    try std.testing.expect(pathExists("logs/untranslated_phrases.json"));
+    try std.testing.expect(pathExists(untranslated_log_path));
     // 自捕（二跑）：JsonDoc 系 pure_filter 模块私有 const 不可 import——改动态
     //   std.json.Value 解析，键名形制（generated_at/phrase/…）在测试侧显式写死，
     //   反证面更宽（改键名即红）。
-    const raw_a = try readFileRaw("logs/untranslated_phrases.json");
+    const raw_a = try readFileRaw(untranslated_log_path);
     const dv = try std.json.parseFromSlice(std.json.Value, gpa_, raw_a, .{});
     defer dv.deinit();
     const doc = dv.value;
@@ -1996,7 +2024,7 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     try items_c.appendSlice(std.testing.allocator, lc_c.items.items);
     untranslated_list = .{ .items = items_c };
     flushUntranslated();
-    const raw_c = try readFileRaw("logs/untranslated_phrases.json");
+    const raw_c = try readFileRaw(untranslated_log_path);
     var vd_c = try std.json.parseFromSlice(std.json.Value, gpa_, raw_c, .{});
     defer vd_c.deinit();
     const arr_c = vd_c.value.object.get("phrases").?.array;
@@ -2007,7 +2035,7 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     // B1 同清单重写=覆盖非追加（createFile 默认 truncate 经壳成立）：条数仍 2
     //   （generated_at 秒级可变，不拿全文相等当判据、防跨秒假红）。
     flushUntranslated();
-    const raw_b1 = try readFileRaw("logs/untranslated_phrases.json");
+    const raw_b1 = try readFileRaw(untranslated_log_path);
     var vd_b1 = try std.json.parseFromSlice(std.json.Value, gpa_, raw_b1, .{});
     defer vd_b1.deinit();
     try std.testing.expectEqual(@as(usize, 2), vd_b1.value.object.get("phrases").?.array.items.len);
@@ -2041,8 +2069,8 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
         //   接诱发 render 巨量分配 integer overflow）。回清归段内职责、跨段交接
         //   须显式重置全局（188/189 全局接线回置守则同族延伸）。
         untranslated_list = .{};
-        std.Io.Dir.cwd().deleteTree(io_, "logs") catch {}; // 承上：整树归零再造目录态
-        try std.Io.Dir.cwd().createDirPath(io_, "logs/untranslated_phrases.json");
+        std.Io.Dir.cwd().deleteTree(io_, log_root) catch {}; // 承上：整树归零再造目录态
+        try std.Io.Dir.cwd().createDirPath(io_, untranslated_log_path);
         wf = Io.File.Writer.init(wfile, io_, &wbuf);
         werr = &wf.interface;
         var c_items = std.ArrayList(UntranslatedPhrase).empty;
@@ -2054,7 +2082,7 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
         const wraw = try readFileRaw(werr_path);
         try std.testing.expect(std.mem.indexOf(u8, wraw, "落盘失败") != null);
         try std.testing.expect(std.mem.indexOf(u8, wraw, "已跳过") != null);
-        std.Io.Dir.cwd().deleteDir(io_, "logs/untranslated_phrases.json") catch {};
+        std.Io.Dir.cwd().deleteDir(io_, untranslated_log_path) catch {};
     }
 
     // B3 defer free(json) 泄漏钉（191 S1 同族反证靶）：gpa_ 换 FailingAllocator 直连
@@ -2254,8 +2282,9 @@ test "第 193 轮 T1 stageEmbedAssets：越界/symlink 拒拷/源缺静默/写�
 // （四个 append 失败臂提前 return 同样不回收）——每落一次盘泄一只缓冲；生产 gpa_ 为进程
 // arena 故长期无感、属累积面（与 193 轮 D58 同族形制）。本测 gpa_ 裸 testing.allocator 直调，
 // 首跑即应由 runner 直报 leaked 坐实，再补单手 `defer out.deinit(gpa_)` 转绿（D37 先例）。
-// 盘上形制：路径硬编 `.zzc/symbols.txt` 相对 cwd（测试图 cwd=仓库根、`.zzc/` 已 gitignore）
-// ——191 轮前置清理 + defer 回清（LIFO 反序注删）先例直用。观察面登册：四臂 append 失败同体
+// 盘上形制：落盘经 `symbols_path` seam 取径（第 198 轮 D66）——本块覆写为 /tmp 下进程私有
+// 路径、defer 复原真值（旧形制直写仓库根 `.zzc/`，并跑同二进制时多份进程互踩、198 轮
+// t2 基线的本块点名残红即此）；deleteTree 整树归零保幂等。观察面登册：四臂 append 失败同体
 // 行为（母语措辞 + 提前 return 不落盘 + 回收计数），本轮硬钉两处：首臂（fail_index=0 必落
 // 「写符号名」）与成功臂回收形（A6 无失败点纯计数：allocations=1 与 deallocations 齐平，
 // 原码必 1/0）。后三臂需「后续增容失败」方能命中，16 组合 fail/resize 索引网格探针实证：
@@ -2277,7 +2306,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
     }
     gpa_ = std.testing.allocator; // 裸直调（D37/D58 实锤形制）：壳任何未回收分配由 runner 直报 leaked
     // werr 接线：五处失败臂全经 printErr，测试图 werr=undefined 直崩（191 同族）。
-    const priv = tpriv.Priv.init(io_); // D62：werr 日志名改进程私有
+    const priv = tpriv.Priv.init(io_); // D62/D66：werr 日志与符号表路径改进程私有（同一次 init 派生）
     var wb: [96]u8 = undefined;
     const werr_path = priv.path(&wb, "/tmp/zzc194-werr-", ".log");
     var wf: Io.File.Writer = undefined;
@@ -2290,11 +2319,17 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
     defer wf.interface.flush() catch {};
     defer std.Io.Dir.deleteFileAbsolute(io_, werr_path) catch {};
 
-    // 前置清理 + 尾部回清（LIFO：先注 deleteDir（后跑）再注 deleteFile（先跑））。
-    std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
-    std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
-    defer std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
-    defer std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+    // D66 seam 覆写（t2 基线 68/72 红的本块点名项）：路径若是编译期字面量，并跑的多份进程
+    //   同写仓库根 `.zzc/symbols.txt`、帧首/defer 回清删的是别人正在用的文件。同一 `priv` 派生
+    //   私有根与私有文件名（与 191 T2 同形：覆写 → defer 复原真值 → 整树归零）。
+    var srb: [96]u8 = undefined;
+    var sfb: [96]u8 = undefined;
+    const sym_root = priv.path(&srb, "/tmp/zzc198-s2-", "");
+    symbols_path = priv.path(&sfb, "/tmp/zzc198-s2-", "/symbols.txt");
+    defer symbols_path = symbols_path_default; // 跨测块共享的全局须显式回置
+    // 前置清理 + 尾部回清（整树归零：文件/目录/子树全形态幂等，不依赖 defer LIFO 位序）。
+    std.Io.Dir.cwd().deleteTree(io_, sym_root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, sym_root) catch {};
 
     // A0 空表仍落盘：建零字节文件（与 flushUntranslated「空清单不建文件」形制相反——空符号
     //   表的「本次无映射」是显式落盘事实，读侧跳空行天然兼容；改成空表早退即红）。
@@ -2302,8 +2337,8 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
         saveSymbols(t);
-        try std.testing.expect(pathExists(".zzc/symbols.txt"));
-        const b = try readFileRaw(".zzc/symbols.txt");
+        try std.testing.expect(pathExists(symbols_path));
+        const b = try readFileRaw(symbols_path);
         defer std.testing.allocator.free(b);
         try std.testing.expectEqual(@as(usize, 0), b.len);
     }
@@ -2315,7 +2350,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         _ = try t.intern("甲");
         _ = try t.intern("乙");
         saveSymbols(t);
-        const b = try readWhole(".zzc/symbols.txt");
+        const b = try readWhole(symbols_path);
         defer std.testing.allocator.free(b);
         try std.testing.expectEqualStrings("甲 = z_1\n乙 = z_2\n", b);
         var t2 = Mangle.init(std.testing.allocator);
@@ -2341,7 +2376,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         _ = try t.intern("b");
         _ = try t.intern("a");
         saveSymbols(t);
-        const b = try readWhole(".zzc/symbols.txt");
+        const b = try readWhole(symbols_path);
         defer std.testing.allocator.free(b);
         try std.testing.expectEqualStrings("b = z_1\na = z_2\n", b);
     }
@@ -2352,18 +2387,18 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         defer t.deinit();
         try t.putExisting("丁", "z_9");
         saveSymbols(t);
-        const b = try readWhole(".zzc/symbols.txt");
+        const b = try readWhole(symbols_path);
         defer std.testing.allocator.free(b);
         try std.testing.expectEqualStrings("丁 = z_9\n", b);
     }
-    // A4 写失败静面：`.zzc/symbols.txt` 预建为目录 → createFile 报 IsDir → printErr 点名
+    // A4 写失败静面：落盘路径预建为目录 → createFile 报 IsDir → printErr 点名
     //   「保存符号表失败（写入文件）」，void 签名不改主流程出码（改 try 传播则编译期自守）。
     {
-        // 自捕（首跑）：A3 刚把 `.zzc/symbols.txt` 当**文件**写过，createDirPath 见到已存在
+        // 自捕（首跑）：A3 刚把落盘路径当**文件**写过，createDirPath 见到已存在
         //   非目录节点直报 NotDir（dirCreateDirPath 的 kind 检查）——预建目录前必先删文件形。
-        std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
-        try std.Io.Dir.cwd().createDirPath(io_, ".zzc/symbols.txt");
-        defer std.Io.Dir.cwd().deleteDir(io_, ".zzc/symbols.txt") catch {};
+        std.Io.Dir.cwd().deleteFile(io_, symbols_path) catch {};
+        try std.Io.Dir.cwd().createDirPath(io_, symbols_path);
+        defer std.Io.Dir.cwd().deleteDir(io_, symbols_path) catch {};
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
         _ = try t.intern("戊");
@@ -2377,8 +2412,8 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
     //   **不落盘**（坏包不留半个文件；把 return 改 continue 即红——后续 append 成功、
     //   writeWhole 写出截断内容）。本臂 out 零分配，计数 0/0 仅作形制对照。
     {
-        std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
-        try std.testing.expect(!pathExists(".zzc/symbols.txt"));
+        std.Io.Dir.cwd().deleteFile(io_, symbols_path) catch {};
+        try std.testing.expect(!pathExists(symbols_path));
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
         _ = try t.intern("甲");
@@ -2386,7 +2421,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         gpa_ = fa.allocator();
         saveSymbols(t);
         gpa_ = std.testing.allocator; // 回置早于块尾（fa 计数已定格，192 形制）
-        try std.testing.expect(!pathExists(".zzc/symbols.txt"));
+        try std.testing.expect(!pathExists(symbols_path));
         wf.interface.flush() catch {};
         const wraw = try readFileRaw(werr_path);
         defer std.testing.allocator.free(wraw);
@@ -2411,7 +2446,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         gpa_ = std.testing.allocator; // 回置早于块尾（fa 计数已定格）
         try std.testing.expectEqual(@as(usize, 1), fa.allocations);
         try std.testing.expectEqual(fa.deallocations, fa.allocations);
-        const b = try readWhole(".zzc/symbols.txt"); // 计数形不走失败路：完整落盘可验
+        const b = try readWhole(symbols_path); // 计数形不走失败路：完整落盘可验
         defer std.testing.allocator.free(b);
         try std.testing.expectEqualStrings(EXPECT_LONG, b);
     }
@@ -2424,4 +2459,102 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
     //   登记为同体观察面（首臂已由 A5 钉住、四臂同体的「母语措辞+不落盘+回收计数」三件
     //   均已至少一处硬证）。三跑自捕：本段原拟「resize_fail_index=0」/「fail_index=1」
     //   两度均为伪钉（文件照被完整写出），由网格探针现形后改为登记不占钉。
+}
+
+// 第 198 轮审计注（D66）：`loadSymbols`/`saveSymbols`/`flushUntranslated` 的落盘路径曾系编译期
+// 字面量硬编在生产码里，测块无法给自己的盘上产物改名——196 轮把测内产物私有化后，main 图 24 路
+// 并跑的残红点名恰是这三块（t2 基线实测定量：3 轮合计 68/72 红）。本轮把路径做成进程级可覆写
+// 变量 seam（默认值一字未改 → 生产行为零变更，同 `machine_mode`/`werr` 先例；既不须换 cwd——那会
+// 断代 windows CI 矩阵——也不须动 CLI 面），三块测随之迁至 /tmp 私有径。本块钉 seam 契约自身：
+// A0 起始态钉（顺带把「跨块共享全局须显式回置」做成可跑锚）、A1 默认真值字面量钉（pure_filter 真值
+// 一改即本钉红——主侧默认由该常量初始化，197 登记的「同源不可锚」面在此转为可跑锚）、A2 覆写真的
+// 改变读/写落点且不波及异径（seam 被改回字面量即红）、A3 帧尾复原后字面量判据钉回真值（判据不复用
+// 被测常量，遵 196/197 形制通则）、A4 空清单早退臂经 seam 仍成立。
+// 不可锚面如实登册：bail 的 DuplicateSymbol 文案插值——bail 系 noreturn（exit 不跑帧 defer）、
+// 测试图无法直调；该臂形制由编译期自守（fmt 串去掉 `{s}` 则多传实参即编译拒），非运行期红锚。
+
+test "第 198 轮 T1 状态路径 seam 契约：起始态/默认真值字面量钉 + 覆写改变读写落点不波及异径 + 帧尾回置 + 空清单早退经 seam 仍成立" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io_prev = io_;
+    const gpa_prev = gpa_;
+    io_ = threaded.io();
+    defer {
+        io_ = io_prev;
+        gpa_ = gpa_prev;
+    }
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 191/194 同族：loadSymbols 的借用视图须有界 arena 拮抗
+
+    // A0 起始态钉：本块之前已跑过 191/192/194 三块覆写，此处拿到的必是默认真值——「帧尾回置」
+    //   若在任何一块遗漏即在本行现红（跨块共享全局的回置契约由盘上形制升格为可跑锚）。
+    try std.testing.expectEqualStrings(".zzc/symbols.txt", symbols_path);
+    try std.testing.expectEqualStrings("logs/untranslated_phrases.json", untranslated_log_path);
+
+    // A1 默认真值：判据全用字面量。主侧默认由 pure_filter `default_log_path` 初始化（197 D64 单一
+    //   真值），故改那一侧即本钉红——同源链的可跑锚就落在这里。
+    try std.testing.expectEqualStrings(".zzc/symbols.txt", symbols_path_default);
+    try std.testing.expectEqualStrings("logs/untranslated_phrases.json", untranslated_log_path_default);
+
+    const priv = tpriv.Priv.init(io_);
+    var b1: [96]u8 = undefined;
+    var b2: [96]u8 = undefined;
+    var b3: [96]u8 = undefined;
+    var b4: [96]u8 = undefined;
+    const p1 = priv.path(&b1, "/tmp/zzc198-seam-", "/a/symbols.txt");
+    const p2 = priv.path(&b2, "/tmp/zzc198-seam-", "/b/symbols.txt");
+    const lpath = priv.path(&b4, "/tmp/zzc198-seam-", "/a/untranslated_phrases.json");
+    const root = priv.path(&b3, "/tmp/zzc198-seam-", "");
+    std.Io.Dir.cwd().deleteTree(io_, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io_, root) catch {};
+
+    // A2 读侧覆写生效：p1 有内容、p2 从未写过—— seam 指 p1 则恢复到 2 条，指 p2 则走
+    //   FileNotFound 静默臂、表零变化。 seam 被改回编译期字面量（或 readWhole 硬编路径）则第一段即红；
+    //   两径相互波及（拼接漏了尾段、两次 init 撞名）则第二段即红。
+    try writeWhole(p1, "甲 = z_1\n乙 = z_2\n");
+    symbols_path = p1;
+    defer symbols_path = symbols_path_default;
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t);
+        try std.testing.expectEqual(@as(usize, 2), t.count());
+    }
+    symbols_path = p2;
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t);
+        try std.testing.expectEqual(@as(usize, 0), t.count());
+    }
+    // 写侧同理：saveSymbols 只落当前 seam 指向的 p2，p1 字节面不被改写（落点硬编则 p1 被覆盖、本钉红）。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        _ = try t.intern("丙");
+        saveSymbols(t);
+        try std.testing.expectEqualStrings("丙 = z_1\n", try readWhole(p2));
+        try std.testing.expectEqualStrings("甲 = z_1\n乙 = z_2\n", try readWhole(p1));
+    }
+
+    // A3 复原臂：另开嵌套块自证「覆写 → 回置」闭环，块外用**字面量**判据钉回真值——判据若复用
+    //   `symbols_path_default` 则默认值怎么漂移都自洽绿（196 t3 变异现形的自证循环形制通则）。
+    {
+        symbols_path = p2;
+        defer symbols_path = symbols_path_default;
+        try std.testing.expectEqualStrings(p2, symbols_path); // 覆写在块内生效
+    }
+    try std.testing.expectEqualStrings(".zzc/symbols.txt", symbols_path); // 块尾已复原
+
+    // A4 空清单早退臂经 seam 仍成立：F3 契约与路径来源无关（把早退改成无条件落盘即在私有径留下
+    //   空文件；把 `untranslated_log_path` 写死成字面量则本行误判仓库根 logs/——本机不存在该文件，
+    //   相形下私有径对照更稳，故判据只拿本块私有径）。
+    const ul_prev = untranslated_list;
+    untranslated_list = .{};
+    defer untranslated_list = ul_prev;
+    untranslated_log_path = lpath;
+    defer untranslated_log_path = untranslated_log_path_default;
+    flushUntranslated();
+    try std.testing.expect(!pathExists(lpath));
 }
