@@ -1769,3 +1769,80 @@ test "第 190 轮 T2 eject 三件套：回读命中/名闸/无字段/NotDir + sp
     //   dest、生产不可达此形，不构成在线缺陷；钉死现语义防两臂静默拆分或措辞改动无测知。
     try std.testing.expectEqual(BuildVerify.no_zig, verifyBuild("/tmp/zzc190-no-such-dir"));
 }
+
+// 第 191 轮审计注（二）：loadSymbols（L196·符号表恢复入口）系测面零直调——唯
+// main 分发 L1283 生产直调；101 轮 D46 只证了其失败退出补位面、parseSymbolText
+// 格式解析属 zzc_core 图有单测，而 wrapper 本身的三向决策臂（FileNotFound 静默
+// 正常 / D31 编码封口传播 / D36 撞号传播）全库零钉——把 else 臂改成静默吞（首次
+// 运行豁免扩成一切失败豁免）即跨会话映射静默丢失、无任何测可抓。盘上形制：路径
+// 硬编 `.zzc/symbols.txt` 相对 cwd，测试图 cwd=仓库根、`.zzc/` 已 gitignore；
+// 前置清理+defer 回清保幂等。观察面登册：SourceTooLarge 臂（10MB 门槛）不以重 IO
+// 诱发——同体传播臂已由 InvalidEncoding 形钉住。证伪撤号轮不占 D 号。
+
+test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢复端到端/InvalidEncoding 传播/DuplicateSymbol 传播）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    io_ = threaded.io();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 189/190 同族形制：文件级 arena 接线
+    // werr 接线（探针即测自捕：readWhole wrapper 的 D31 编码封口臂经 printErr 打
+    //   母语提示，测试图 werr=undefined 直崩）：挂到盘上日志文件、用毕回 undefined。
+    const werr_path = "/tmp/zzc191-werr.log";
+    var wf: Io.File.Writer = undefined;
+    var wbuf: [512]u8 = undefined;
+    var wfile = std.Io.Dir.createFileAbsolute(io_, werr_path, .{}) catch return error.TestUnexpectedResult;
+    defer wfile.close(io_);
+    wf = Io.File.Writer.init(wfile, io_, &wbuf);
+    werr = &wf.interface;
+    defer wf.interface.flush() catch {};
+    defer werr = undefined;
+
+    // 前置清理（A1「尚无符号表」须为真前提而非巧合）+ 尾部回清。
+    std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+    std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
+    // defer LIFO：先注删目录（后跑）再注删文件（先跑）——反序则目录非空删失败、留空壳。
+    defer std.Io.Dir.cwd().deleteDir(io_, ".zzc") catch {};
+    defer std.Io.Dir.cwd().deleteFile(io_, ".zzc/symbols.txt") catch {};
+
+    // A1 首次运行形：FileNotFound → 静默正常返回、表零变化（唯一豁免臂）。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t);
+        try std.testing.expectEqual(@as(usize, 0), t.count());
+    }
+    // A2 恢复端到端：writeWhole 落盘 → loadSymbols 完整透传 parseSymbolText——
+    //   既有映射命中不复派生、新名续接已恢复最大编号之后（D16 跨会话稳定契约）。
+    try writeWhole(".zzc/symbols.txt", "甲 = z_1\n乙 = z_2\n");
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t);
+        try std.testing.expectEqual(@as(usize, 2), t.count());
+        const a = try t.intern("甲"); // 缓存命中：不消耗新编号
+        try std.testing.expectEqualStrings("z_1", a);
+        const b = try t.intern("乙");
+        try std.testing.expectEqualStrings("z_2", b);
+        const c = try t.intern("丙"); // next_index 已推至 3：续接编号
+        try std.testing.expectEqualStrings("z_3", c);
+    }
+    // A3 编码封口传播臂（D31 形透传）：UTF-16LE BOM 字节非法 UTF-8 → readWhole
+    //   本地化为母语提示（本次接线 werr 即打向日志文件）+ error.Failed 上传——
+    //   wrapper 把 file_io 的 InvalidEncoding 折成 Failed 是产品契约（方言用户不见
+    //   英文错误名），loadSymbols else 臂照传（丢映射不可静默吞）。
+    try writeWhole(".zzc/symbols.txt", "\xFF\xFE\x00\x01");
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try std.testing.expectError(error.Failed, loadSymbols(&t));
+    }
+    // A4 撞号传播臂（D36 形透传）：同一 z_1 归两名 → parseSymbolText 抛
+    //   DuplicateSymbol → try 传播（源头拒并点名语义贯穿 wrapper）。
+    try writeWhole(".zzc/symbols.txt", "甲 = z_1\n乙 = z_1\n");
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try std.testing.expectError(error.DuplicateSymbol, loadSymbols(&t));
+    }
+}

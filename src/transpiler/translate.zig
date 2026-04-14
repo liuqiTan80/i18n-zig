@@ -2334,3 +2334,73 @@ test "matchAliasChain：链贪心匹配核直调钉——初始/扩展/回溯 be
         try std.testing.expectEqualStrings("var n = alpha.beta;\n", res.zig_str);
     }
 }
+
+// 第 191 轮审计注：preCheck（本文件 L34·`lexer.scan` + `fullwidth.check` 薄组合壳）
+// 测面零直调——唯 main.zig L340 cmdCheck 快路与 lsp/server.zig L405 didSave 两生产直调；
+// fullwidth.zig 各测手动「scan→check」两步钉尽下层本体，而组合壳自身（defer gpa.free(toks)
+// 漏防臂、check 调用透传、错误集传播）全库零钉——删 defer 无任一测可抓（泄漏唯生产
+// 调用路可见）。测面 gpa 皆 std.testing.allocator，泄漏由分配器自捕（删 defer 即红、
+// load-bearing 成立）。探针即测：期望首跑自证。证伪撤号轮不占 D 号。
+
+test "第 191 轮 T1 preCheck：组合壳透传契约钉（空源/合法形零违例/危险表字段逐项/手动形等价/双违例序）" {
+    const gpa = std.testing.allocator;
+    // P1 空源 → 0 项。
+    {
+        const v = try preCheck(gpa, "");
+        defer gpa.free(v);
+        try std.testing.expectEqual(@as(usize, 0), v.len);
+    }
+    // P2 纯 ASCII 合法源 → 0 项（BOM 面归 stripBom、preCheck 不处理）。
+    {
+        const v = try preCheck(gpa, "const a = 1;\nvar b = 2;\n");
+        defer gpa.free(v);
+        try std.testing.expectEqual(@as(usize, 0), v.len);
+    }
+    // P3 全角分号危险表命中 → 恰 1 项、六字段逐项钉（组合壳透传 fullwidth.check 字段的字节契约）。
+    const src3 = "；\n";
+    {
+        const v = try preCheck(gpa, src3);
+        defer gpa.free(v);
+        try std.testing.expectEqual(@as(usize, 1), v.len);
+        try std.testing.expectEqual(@as(usize, 0), v[0].off);
+        try std.testing.expectEqual(@as(usize, 3), v[0].len); // UTF-8 三字节
+        try std.testing.expectEqualStrings("；", v[0].word);
+        try std.testing.expectEqualStrings("；", v[0].danger.?);
+        try std.testing.expectEqualStrings(";", v[0].ascii);
+        try std.testing.expectEqualStrings("全角分号", v[0].hint);
+    }
+    // P4 手动形等价：薄壳恒等于 scan→check 两步透传——违例逐项字段全等（钉组合语义，
+    //   防参数预处理/调用次序静默改；fullwidth.zig 测试区的两步形与本壳输出同源同形）。
+    {
+        const toks = try lexer.scan(gpa, src3);
+        defer gpa.free(toks);
+        const manual = try fullwidth.check(gpa, src3, toks);
+        defer gpa.free(manual);
+        const auto = try preCheck(gpa, src3);
+        defer gpa.free(auto);
+        try std.testing.expectEqual(manual.len, auto.len);
+        for (manual, auto) |m, a| {
+            try std.testing.expectEqual(m.off, a.off);
+            try std.testing.expectEqual(m.len, a.len);
+            try std.testing.expectEqualStrings(m.word, a.word);
+            if (m.danger) |md| {
+                try std.testing.expectEqualStrings(md, a.danger.?);
+            } else {
+                try std.testing.expectEqual(@as(?[]const u8, null), a.danger);
+            }
+            try std.testing.expectEqualStrings(m.ascii, a.ascii);
+            try std.testing.expectEqualStrings(m.hint, a.hint);
+        }
+    }
+    // P5 双违例：条目数=命中词元数、序=词元扫描序（off 升序）——多违例聚合不吞不换序。
+    {
+        const v = try preCheck(gpa, "；\n＝\n");
+        defer gpa.free(v);
+        try std.testing.expectEqual(@as(usize, 2), v.len);
+        try std.testing.expectEqual(@as(usize, 0), v[0].off);
+        try std.testing.expectEqualStrings(";", v[0].ascii);
+        try std.testing.expectEqual(@as(usize, 4), v[1].off); // "；\n" 占 4 字节
+        try std.testing.expectEqualStrings("=", v[1].ascii);
+        try std.testing.expectEqualStrings("全角等号", v[1].hint);
+    }
+}
