@@ -2094,3 +2094,146 @@ test "punctChar：?u8 返回形单 punct 判据——越界/词类/多字符/空
         try std.testing.expectEqual(@as(?u8, null), punctChar(toks, s, 0));
     }
 }
+
+// 护栏（第 184 轮增量审计·证伪撤号）：`isExtendedDeclNamePos`（L193·句法位避让分发核）系
+// 109/179/180 历轮消费注反复点名、却从未被直调的判据合体——消费链已各自钉齐（回扫配对三谓词
+// 109、isPunctAt/punctChar/mappedIs 等共享核与门 179/180），本测补第五面：四分支 A/B/C/D 真形、
+// 首领 enum/union/error 三值白名单与 `)`/`;` 排除形、非末位实参形、i==0 与 i>=toks.len 双防御门。
+// 零喂入坐实：D1b 首词皆 `常数`/`函数`（i==0 词元位全库零喂入）、`f(词)` 末位/非末位实参形与
+// `;` 尾形从未入测、`i>=toks.len` 臂零调用者（生产两调用位 L262/L896 恒有界）；e2e 仅行为钉 C 分支
+// 未声明词点后形（`x.文本` 整词查表替换）——其余真形皆间接触达。探针即测以本测首跑承担，
+// 一次绿坐实真形皆符声明→证伪撤号不占 D 号。
+test "isExtendedDeclNamePos：四分支分发核直调钉——真词流 A/B/C/D 形 + 首领三值白名单 + `)`/`;` 排除形 + 双防御门 + e2e 点后未声明词形（第 184 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const min_kw =
+        "[keywords]\n" ++
+        "常数 = const\n" ++
+        "枚举 = enum\n" ++
+        "联合 = union\n" ++
+        "错误 = error\n" ++
+        "结构 = struct\n" ++
+        "文本 = []const u8\n";
+    var lang = try Pack.parse(gpa, min_kw);
+    defer lang.deinit();
+
+    // 扫描小源并返回指定词元的下标（词元文本恰为 word 的第一个位置）。
+    const T = struct {
+        fn idx(toks: []const lexer.Token, src: []const u8, word: []const u8) usize {
+            for (toks, 0..) |t, j| {
+                if (std.mem.eql(u8, t.text(src), word)) return j;
+            }
+            unreachable; // 测内固定源，词元必在
+        }
+    };
+
+    // ---- 真词流：分支 A（组开头 + `:`）----
+    {
+        const s = "枚举 { 甲: 乙 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // A
+    }
+    // ---- 分支 B：首领三值白名单（enum/union/error），裸/尾/值/载荷/逗号续形 ----
+    {
+        const s = "枚举 { 甲 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲")));
+    }
+    {
+        const s = "枚举 { 甲, 乙 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // next=`,`
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "乙"))); // prev=`,`
+    }
+    {
+        const s = "枚举(u8) { 甲 = 7 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // next=`=`、首领跳一层参数括号
+    }
+    {
+        const s = "联合(枚举) { 甲(u8) }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // next=`(`、首领 联合→union
+    }
+    {
+        const s = "错误 { 甲 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // D42 面：首领 error
+    }
+    // ---- 分支 B 首领白名单外与 next 排除形（皆假）----
+    {
+        const s = "结构 { 甲, 乙 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "乙"))); // 首领 struct 非白名单
+    }
+    {
+        const s = "枚举 { 甲; }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // next=`;` ∉ 集合
+    }
+    {
+        const s = "f(文本)";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "文本"))); // 观察点：next=`)` 排除形——末位实参恰为词表词仍须取词表义
+    }
+    {
+        const s = "f(甲, 文本)";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "文本"))); // 非末位实参（prev=`,`、next=`)`）
+    }
+    // ---- 分支 C（prev=`.`）与 D（prev/next 同 `|`）----
+    {
+        const s = "x.文本";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "文本"))); // ASCII 词点后形（L896 调用位同核）
+    }
+    {
+        const s = "for (v) |甲|";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(isExtendedDeclNamePos(lang, s, toks, T.idx(toks, s, "甲"))); // D
+    }
+    // ---- 双防御门直钉（真流零喂入形，179/180 同族手法）----
+    {
+        const s = "甲";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, toks, 0)); // i==0 门：摘门即 toks[usize_max] 下溢 panic
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, toks, 1)); // i>=toks.len 门：摘门即 toks[len] 越尾 panic
+        const empty: []const lexer.Token = &.{};
+        try std.testing.expect(!isExtendedDeclNamePos(lang, "", empty, 0)); // 空流 i==0 短路（len 门不可达、i==0 臂独防）
+    }
+    // 合成多字符 punct `->`：其 `-` 臂若被误并组开头，prev=`->` 词即假阳（真流不产 len>1 punct、180 同族形）。
+    {
+        const s = "甲 -> 乙"; // 0 甲 | 1 punct "->"(off 4,len 2) | 2 乙(off 7,len 3)
+        const toks = [_]lexer.Token{
+            .{ .kind = .nonascii_word, .off = 0, .len = 3 },
+            .{ .kind = .punct, .off = 4, .len = 2 },
+            .{ .kind = .nonascii_word, .off = 7, .len = 3 },
+        };
+        try std.testing.expect(!isExtendedDeclNamePos(lang, s, &toks, 2));
+    }
+    // ---- e2e 行为钉：C 分支未声明词点后形——避让整词查表替换（否则 文本→[]const u8 碎码）、
+    // 走第 3 步转码名（与声明路径同名一致；D1b 仅以已声明 `戊.文本` 经 occupied 兜住、零占位形全库零喂入坐实）----
+    {
+        const src = "常数 甲 = 乙.文本;\n";
+        var table = Mangle.init(gpa);
+        defer table.deinit();
+        const res = try translate(gpa, src, lang, &table);
+        try std.testing.expectEqualStrings("const z_1 = z_2.z_3;\n", res.zig_str);
+        try std.testing.expectEqualStrings("文本", table.unmangle("z_3").?); // 点后词整词登记为名、绝非类型残体
+    }
+}
