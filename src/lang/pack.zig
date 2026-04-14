@@ -962,3 +962,60 @@ test "CRLF 行尾语言包容错：空 \\r 行被跳、$format 不被误拒、�
     try std.testing.expectEqualStrings("const", mixed.keywords.get("常数").?);
     try std.testing.expectEqualStrings("var", mixed.keywords.get("变量").?);
 }
+
+// 护栏（第 182 轮证伪撤号落位）：`upsertDiagnostic`（L129）系 diagnostics 段跨层后写覆盖
+// （R11）的唯一上游，其「命中同 pattern → 就地替换、保持位置」分支的 firing 源唯有叠加层
+// 场景（同层内 D40 封口先拒、替换臂于单次 parseInto 恒不 fired）。既有 R11 叠加测（L678）的
+// overlay 行序恰为「同模式 d1x 在前、新模式在后」：此序下把替换sabotage成「摘旧元素再追加到
+// 尾」，列表只含基包单条、摘后追加位仍居首——len/序/逐条目字段逐字节不变、R11 测不红。
+// 即「保持位置」不变量在 R11 特定行序下全库隐形，而 matchDiag（diag/translate.zig L91）
+// 「表序即优先级」（D6/R1/D41 族）恰依赖条目位置——误改让叠加覆盖把被覆盖条目甩到表尾，
+// 匹配优先级静默重排、无任何自动防线。本测于三条目列表中位/首位/末位命中形直接钉住，
+// 另钉空表追加、异 pattern 保序追加、三字段整体换、换后再换链式覆盖、唯 tip 可空（D30）诸臂。
+// Entry 字段系输入字节借用视图、非本包拥有（L126-128 注）：替换路径无释放——本测以
+// std.testing.allocator 全程跑替，替换零分配/释放即行为性钉住「不得释放旧字段」契约
+// （误加 gpa.free(old) 对常量串视图释放即 abort）。
+test "upsertDiagnostic 直调：就地替换保持位置/首末中三命中位/异 pattern 追加/换后再换/tip 可空（第 182 轮）" {
+    const gpa = std.testing.allocator;
+    var pack = Pack.init(gpa);
+    defer pack.deinit();
+
+    // ① 空表首追加 + 异 pattern 保序追加（未命中臂走 for 全扫后 append）。
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "A", .message = "a出", .tip = "a提" });
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "B", .message = "b出", .tip = "b提" });
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "C", .message = "c出", .tip = "c提" });
+    try std.testing.expectEqual(@as(usize, 3), pack.diagnostics.items.len);
+    try std.testing.expectEqualStrings("A", pack.diagnostics.items[0].pattern);
+    try std.testing.expectEqualStrings("B", pack.diagnostics.items[1].pattern);
+    try std.testing.expectEqualStrings("C", pack.diagnostics.items[2].pattern);
+
+    // ② 中位命中→就地替换：len 不变、A/C 不动、B 的 message/tip 整体换（pattern 命中键不变形）。
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "B", .message = "b覆", .tip = "" });
+    try std.testing.expectEqual(@as(usize, 3), pack.diagnostics.items.len);
+    try std.testing.expectEqualStrings("A", pack.diagnostics.items[0].pattern);
+    try std.testing.expectEqualStrings("C", pack.diagnostics.items[2].pattern);
+    try std.testing.expectEqualStrings("B", pack.diagnostics.items[1].pattern);
+    try std.testing.expectEqualStrings("b覆", pack.diagnostics.items[1].message);
+    // 唯 tip 可空（D30 契约：`tip.len != 0` 才渲染提示行）：替换后空 tip 照位写入。
+    try std.testing.expectEqualStrings("", pack.diagnostics.items[1].tip);
+
+    // ③ 换后再换（链式覆盖）：第二次叠加层仍中位就地、不增殖条目。
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "B", .message = "b再覆", .tip = "b再提" });
+    try std.testing.expectEqual(@as(usize, 3), pack.diagnostics.items.len);
+    try std.testing.expectEqualStrings("b再覆", pack.diagnostics.items[1].message);
+    try std.testing.expectEqualStrings("b再提", pack.diagnostics.items[1].tip);
+
+    // ④ 首位命中就地（for 首步即中）：B/C 不动。
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "A", .message = "a覆", .tip = "a提" });
+    try std.testing.expectEqual(@as(usize, 3), pack.diagnostics.items.len);
+    try std.testing.expectEqualStrings("a覆", pack.diagnostics.items[0].message);
+    try std.testing.expectEqualStrings("B", pack.diagnostics.items[1].pattern);
+    try std.testing.expectEqualStrings("C", pack.diagnostics.items[2].pattern);
+
+    // ⑤ 末位命中就地：A/B 不动。
+    try pack.upsertDiagnostic(gpa, .{ .pattern = "C", .message = "c覆", .tip = "c提" });
+    try std.testing.expectEqual(@as(usize, 3), pack.diagnostics.items.len);
+    try std.testing.expectEqualStrings("a覆", pack.diagnostics.items[0].message);
+    try std.testing.expectEqualStrings("b再覆", pack.diagnostics.items[1].message);
+    try std.testing.expectEqualStrings("c覆", pack.diagnostics.items[2].message);
+}
