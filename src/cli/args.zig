@@ -1173,3 +1173,56 @@ test "findReferencedRels：方言/ASCII 两形都解、非 .zz 与越根跳过�
     try std.testing.expectEqualStrings("src/共享/模板.zz", list.items[0]);
     try std.testing.expectEqualStrings("src/正文.zz", list.items[1]);
 }
+
+// ---------------------------------------------------------------- 第 178 轮证伪撤号增量审计
+//
+// 承 111/175 词边界对称不变量方法论，转审本文件两个**私有零直调谓词**——全仓仅经
+// `collectConstStringBindings`/`extractEmbedPaths`/`extractEmbedPathsForms` 间接触达，其精确字节集
+// 从未被任一端到端测钉住（既有测只喂：超串尾随 ASCII 数字 `嵌入文件1`、超串前导 CJK `我的嵌入文件`、
+// 空格空白形 `@embedFile (  ".." )`）：
+//   · `isWordCharByte`（L863）——D2「超串不拆分命中」词边界判据，`_` 下划线臂与高字节 `>=0x80`
+//     边界端（0x7F 界外 vs 0x80 界内）现行数据/测试零触达；误删 `_` 臂即令 `foo_嵌入文件`/
+//     `嵌入文件_x` 形超串被误拆为独立 lead 命中、错误采集路径；`>=0x80` 收窄一格即令 UTF-8 续字节
+//     0x80 被当词边界、母语超串静默漏检。
+//   · `skipWs`（L728）——刻意只认 `{' ','\t','\r','\n'}` **四字节**空白集（异于 `std.ascii.isWhitespace`
+//     另含 0x0B 垂直制表/0x0C 进纸），lead 与 `(`、`=` 与字面量间跨 CRLF 源换行的空白全靠此跳过；
+//     误摘 `\r` 臂即令 CRLF 源里 `嵌入文件\r\n(..)` 跳过停在 `\r`、非 `(` 而漏采资产。
+// 探针先行以独立 oracle（不借 `std.ascii.isAlphanumeric`、显式字节区间）对全 256 字节 iff 穷举坐实
+// `isWordCharByte` 真形恰为 `[0-9A-Za-z_] ∪ [0x80..0xFF]`、`skipWs` 四字节集与越界/停位边界皆自洽，
+// 无在线缺陷 → 证伪撤号不占 D 号（同 111/116/170-176 判例）。落 T1+T2 两组直钉护栏测。
+
+test "isWordCharByte：全字节 iff 穷举钉词边界集 [0-9A-Za-z_] ∪ [0x80..0xFF]（独立 oracle·第 178 轮）" {
+    // 独立 oracle：显式字节区间，不复用被测函数依赖的 std.ascii.isAlphanumeric——两侧同写即失却对账意义。
+    var c: usize = 0;
+    while (c < 256) : (c += 1) {
+        const b: u8 = @intCast(c);
+        const word = (b >= '0' and b <= '9') or (b >= 'A' and b <= 'Z') or
+            (b >= 'a' and b <= 'z') or (b == '_') or (b >= 0x80);
+        try std.testing.expect(word == isWordCharByte(b));
+    }
+    // 关键边界逐例点名（把 iff 穷举里最易被误改的四形固化为可读锚）。
+    try std.testing.expect(isWordCharByte('_')); // 下划线臂——现行任何端到端测零喂，本测独防
+    try std.testing.expect(isWordCharByte(0x80)); // 高字节含端下界（UTF-8 续字节可为 0x80）
+    try std.testing.expect(!isWordCharByte(0x7F)); // DEL：紧邻 0x80 之下、系词边界非词内字符
+    try std.testing.expect(!isWordCharByte('-')); // 连字符：蛇形/中划线名两侧须为词边界
+}
+
+test "skipWs：钉四字节空白集 {' ','\\t','\\r','\\n'} 跳过 + 非空白停位 + 越界/末段边界（第 178 轮）" {
+    // 四类空白一并跳过——单测即钉 `\r`/`\n` 两臂（CRLF 源跨行 lead 与 `(` 间空白的跳过依赖）。
+    try std.testing.expectEqual(@as(usize, 4), skipWs(" \t\r\nx", 0));
+    // 非空白字节绝不跳：0x0B 垂直制表/0x0C 进纸刻意不在集内（异于 std.ascii.isWhitespace），
+    // 若有人「顺手扩大」空白集即本断言红——钉住四字节显式集的定义性边界。
+    try std.testing.expectEqual(@as(usize, 0), skipWs("\x0B\x0C", 0));
+    // 首字节即非空白 → 原位返回（lead 紧接 `(` 的常见形）。
+    try std.testing.expectEqual(@as(usize, 0), skipWs("(abc", 0));
+    // from 落在非空白字节 → 不越位（即便其后有空白）。
+    try std.testing.expectEqual(@as(usize, 2), skipWs("a b", 2));
+    // 连续空白后停在首个非空白（lead 与字面量间多空白跳过至 `"`）。
+    try std.testing.expectEqual(@as(usize, 3), skipWs("a  (", 1));
+    // 末段全空白 → 返回 src.len（不越界，跳过整尾）。
+    try std.testing.expectEqual(@as(usize, 4), skipWs("ab  ", 2));
+    try std.testing.expectEqual(@as(usize, 4), skipWs(" \t\n\r", 0));
+    // from == src.len 边界 → 恒返回 len（空尾不越界）。
+    try std.testing.expectEqual(@as(usize, 2), skipWs("ab", 2));
+    try std.testing.expectEqual(@as(usize, 0), skipWs("", 0));
+}
