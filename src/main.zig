@@ -886,10 +886,6 @@ fn verifyBuild(dest: []const u8) BuildVerify {
     return if (res.term.success()) .ok else .fail;
 }
 
-fn constTable(t: *const Mangle) *Mangle {
-    return @constCast(t);
-}
-
 /// 统一失败退出：把已缓冲的输出刷出后静默退出，
 /// 避免把 zzc 自身的 Zig 错误返回跟踪（stderr 栈帧）暴露给方言用户。
 fn bail(e: anyerror) noreturn {
@@ -1462,4 +1458,100 @@ test "第 181 轮 T4 uriToFilesystemPath：file:// 剥前缀 + 盘符门 + 百�
     //   `%` 满足 j+2 >= s.len（条件 `j+2 < s.len` 假）→ else 分支原样输出
     try std.testing.expectEqualStrings("/%", uriToFilesystemPath(a, "file:///%").?);
     try std.testing.expectEqualStrings("/%2", uriToFilesystemPath(a, "file:///%2").?);
+}
+
+// 第 188 轮审计注（一）·D57 新登并消：本文件曾有死码 `fn constTable(t: *const
+// Mangle) *Mangle { return @constCast(t); }`（937fd6f [9.1.2] 引入后成孤儿，全仓
+// grep 含文档唯定义一处、零引用）。结构性盲区登册：Zig 只报 unused local/param、
+// 不报未引用文件级私有 fn——死码于编译期完全隐形，唯引用对账能抓，与 181 轮
+// L1335 死测（test 块恒不执行）同属「文件级失守、局部级自守」族。
+//
+// 第 188 轮审计注（二）：lspSemanticCall（cmdLsp 接线位注入的语义供给钩子）系
+// 全库零直调（any=1 call=0，唯 cmdLsp L1075 接线）——156/159 轮 demos e2e 只从
+// didSave 间接触达、无任何形状钉。既有守卫面：本文件 181 轮 T1..T4 钉四纯函数
+// 本体，钩子层（ctx 往返 / text 恒忽略 / 五道降级臂 / 过滤链 / scratch 借用契约）
+// 零钉。探针即测：下方 T1 首跑自证，期望全部实跑坐实。
+
+test "第 188 轮 T1 lspSemanticCall：接线钩子契约钉（ctx 往返/text 恒忽略/降级全臂/真 spawn 非空出口）" {
+    // 测试图永不跑 main（181 轮注：test 构建下 pub fn main 被编译排除）——文件级
+    // 全局 io_ 恒为 undefined，而 run 内 std.process.run 消费它；本测手动接线一次，
+    // 形态与 cmdMain 入口 L1155 `io_ = init.io` 同构（Threaded 后端、page_allocator，
+    // 承 file_io.zig 测图既有 Threaded.init 先例）。
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    io_ = threaded.io();
+
+    // —— A1..A4：exe=null 优雅降级（159 轮声明形）——text 四形全不被读、uri 四形全喂。
+    //   ctx 往返同步钉：钩子收到的 *anyopaque 即 &LspSemantic（cmdLsp L1075 接线形），
+    //   解不回则第一行读 exe 即崩。
+    var sem_null = LspSemantic{ .exe = null, .scratch = std.heap.ArenaAllocator.init(std.testing.allocator) };
+    defer sem_null.scratch.deinit();
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_null, "file:///x.zz", "任意文本").len);
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_null, "http://x", "").len);
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_null, "", "file:///bin/true").len); // text 呈合法 URI 形亦不被当 uri 用
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_null, "FILE:///x", "a\nb\nc").len); // 大小写敏感拒形（与 T4 口径一致）
+
+    // —— A5：exe 在、uri 指不存在文件 → spawn 失败（探针 P1 实跑坐实 throw FileNotFound）
+    //   catch 降级。另喂空串 uri（剥前缀失败第一道 null）与非 file:// 形（http）。
+    const badexe = if (builtin.os.tag == .windows) "C:/zzc188-no-such.zz" else "/bin/zzc188-nope";
+    var sem_bad = LspSemantic{ .exe = badexe, .scratch = std.heap.ArenaAllocator.init(std.testing.allocator) };
+    defer sem_bad.scratch.deinit();
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_bad, "file:///tmp/zzc188-none.zz", "t").len);
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_bad, "", "t").len);
+
+    // —— A5b：uri 剥前缀后恰空串 → dirname("")=null 第三道降级臂（'/x' 形 dirname 是 "/"、非本臂）。
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_bad, "file://", "t").len);
+
+    // —— A5c：百分号哨兵截断形——uri 以 "%40" 结尾，j+2 < s.len 恰假走透传 else 臂；
+    //   若变异改 j 步进则尾部字节形变，但仍指不存在文件——本臂钉透传形不崩不泄，
+    //   真 decode 全臂已由 181 T4 钉住，此处只加钩子层透传过点。
+    try std.testing.expectEqual(@as(usize, 0), lspSemanticCall(&sem_bad, "file:///zzc188-nope%40", "t").len);
+
+    if (builtin.os.tag != .windows) {
+        // —— A6：POSIX 真 spawn 非空出口（堵纯桩 `return &.{}` 与 uri/text 换位变异）。
+        //   run 的子进程形定（探针实跑兼得）：argv 恒 = {exe, "check", "--machine",
+        //   basename(uri 解码形)}、cwd = dirname(同一解码形)——uri 在木层的作面就
+        //   是供这一对 (dir, base)（所传 exe 形参不参与拼接、%20 在 uri 里不会分词；
+        //   前三轮探针沿“%20 拆 argv”的错误模型建模、均误，已自捕入注）。
+        //   本臂置一个盘上探针脚本（首跑建、defer 删）：argv 前两参须恰为
+        //   check / --machine 才往 stderr 写一行合法机读行（钉 run 的 argv 拼接形），
+        //   且所写 file 段恒为 zzc188-probe.sh（使 A7 的 base 不等形可钉过滤链）。
+        //   exe 与 uri 同指该脚本：dir=/tmp、base=脚本名→fileMatchesDoc 等长命中，
+        //   过滤链恰 1 项、字段逐一钉（kind 段后须 `: `、故行形为 `err: x`）：
+        //   line/col 1 基转 0 基、kind=err 退 1、
+        //   char_len=0、message=x。base 取错（如误喂整路径）则后缀前字节非 /=\ 而拒→红。
+        const probe_path = "/tmp/zzc188-probe.sh";
+        {
+            var f = std.Io.Dir.createFileAbsolute(io_, probe_path, .{
+                .read = true,
+                .permissions = .executable_file,
+            }) catch |e| {
+                std.debug.print("A6 探针脚本创建失败：{s}\n", .{@errorName(e)});
+                return error.TestUnexpectedResult;
+            };
+            defer f.close(io_);
+            var buf: [512]u8 = undefined;
+            var w = Io.File.Writer.init(f, io_, &buf);
+            w.interface.writeAll("#!/bin/sh\n[ \"$1\" = check ] && [ \"$2\" = --machine ] && printf 'zzc188-probe.sh:1:2: err: x\\n' 1>&2\n") catch |e| {
+                std.debug.print("A6 探针脚本写入失败：{s}\n", .{@errorName(e)});
+                return error.TestUnexpectedResult;
+            };
+            w.interface.flush() catch {};
+        }
+        defer std.Io.Dir.cwd().deleteFile(io_, probe_path) catch {};
+        var sem_probe = LspSemantic{ .exe = probe_path, .scratch = std.heap.ArenaAllocator.init(std.testing.allocator) };
+        defer sem_probe.scratch.deinit();
+        const got = lspSemanticCall(&sem_probe, "file:///tmp/zzc188-probe.sh", "file:///bin/false");
+        try std.testing.expectEqual(@as(usize, 1), got.len);
+        try std.testing.expectEqual(@as(usize, 0), got[0].line); // 1 基→0 基回映
+        try std.testing.expectEqual(@as(usize, 1), got[0].character); // 2-1
+        try std.testing.expectEqual(@as(usize, 0), got[0].char_len); // 单字符下划形（核内视作 1）
+        try std.testing.expectEqual(@as(u8, 1), got[0].severity); // kind "err" 非三特例退 1
+        try std.testing.expectEqualStrings("x", got[0].message);
+
+        // —— A7：同 exe、uri 换基名形——argv[3] 变了但脚本仍写固定 file 段（前两参门仍过），
+        //   该行基名与本次 base 不等→fileMatchesDoc 拒→ 0 项（钉过滤链、而非只要 spawn 成功就产出）。
+        const got2 = lspSemanticCall(&sem_probe, "file:///tmp/zzc188-other.sh", "t");
+        try std.testing.expectEqual(@as(usize, 0), got2.len);
+    }
 }
