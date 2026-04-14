@@ -47,8 +47,25 @@ pub fn build(b: *std.Build) void {
 
     // 注：子模块测试已经由 zzc_core（src/root.zig）汇总；不再单独跑 exe
     // 测试可执行文件，避免同一 test block 被编入两个模块时符号重名。
+    // 第 181 轮例外接线：main.zig 的 test 块此前恒不执行（L1335 注在册），但其 LSP 接线侧
+    // 四纯函数（parseMachineDiag/kindSeverity/fileMatchesDoc/uriToFilesystemPath）系全库
+    // 零直调面——接线本体不入图则无任何钉住通道。单独 addTest 以 main.zig 为 root：其
+    // test 块仅此一图（root.zig 不 import main.zig），无重名风险；test 构建下 root 的
+    // `pub fn main` 被编译排除，不与测试 runner 冲突。
+    const main_mod = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .imports = &.{
+            .{ .name = "zzc_core", .module = mod },
+            .{ .name = "pack_registry", .module = pack_mod },
+        },
+    });
+    const main_tests = b.addTest(.{ .root_module = main_mod });
+    const run_main_tests = b.addRunArtifact(main_tests);
+
     const test_step = b.step("test", "运行单元与快照测试");
     test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_main_tests.step);
 
     // 第 154 轮：tmLanguage 语法高亮生成器（编辑器集成 MVP）。
     const gen_tmlang_exe = b.addExecutable(.{

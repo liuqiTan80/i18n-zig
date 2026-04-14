@@ -1335,3 +1335,131 @@ pub fn main(init: std.process.Init) !void {
 // 基础 IO 的读写/BOM/pathExists 单测已随函数下沉至 file_io.zig（第 62 轮，zzc_core 测试图内真跑）。
 // main.zig 不在测试图、其 test 块从不执行，原此四段死测（且引用 0.17 已移除的 std.fs.createFileAbsolute/
 // std.testing.tmpDir 等旧 API、根本编译不过）予以删除。
+//
+// 第 181 轮改接线：本文件 LSP 接线侧四纯函数（parseMachineDiag/kindSeverity/
+// fileMatchesDoc/uriToFilesystemPath）系全库零直调且仅本文件可达——build.zig 已新增
+// main 专测图（root=main.zig、test 构建下 pub fn main 被编译排除、root.zig 不 import
+// 本文件故无重名风险），下方 test 块真跑。既有守卫面：156/159 轮 demos e2e 只喂合法形
+// 机读行间接触达、防御臂零钉——问题形状（盘符形 URI、顶格冒号、空 message、CRLF 残留、
+// 伪后缀词边界）全库无钉。探针即测：本块首跑即坐实真形，发现与 problemMatcher 正则
+// 契约两处已知分歧（空 message 函数拒、正则允；盘符绝对路径函数拒）——均为调用方
+// 实际不传此形、不构成在线缺陷，按契约钉住并登记观察面。
+
+test "第 181 轮 T1 parseMachineDiag：合法形提取 + 防御拒形全臂钉（直接命中的每个拒绝分支都喂一例）" {
+    const d = parseMachineDiag("src/main.zz:5:10: 错误: 未声明标识符").?;
+    try std.testing.expectEqualStrings("src/main.zz", d.file);
+    try std.testing.expectEqual(@as(usize, 5), d.line);
+    try std.testing.expectEqual(@as(usize, 10), d.col);
+    try std.testing.expectEqualStrings("错误", d.kind);
+    try std.testing.expectEqualStrings("未声明标识符", d.message);
+    // 列号多位/kind 含多字节 UTF-8：扫描按字节、数字段按 ASCII Digit、kind 段终止子只识 ASCII 空格与冒号。
+    const d2 = parseMachineDiag("a.zz:123:4567: 内部错误: xyz").?;
+    try std.testing.expectEqual(@as(usize, 123), d2.line);
+    try std.testing.expectEqual(@as(usize, 4567), d2.col);
+    try std.testing.expectEqualStrings("内部错误", d2.kind);
+    try std.testing.expectEqualStrings("xyz", d2.message);
+
+    // 拒形全臂：每例标注命中的那条拒绝分支。
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("")); // 空串
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag(" :1:1: 错误: x")); // 前导空格（顶格无空白契约）
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("\t:1:1: 错误: x")); // 前导制表符
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag(":x:1:1: 错误: y")); // 前导冒号（防把坐标分隔当 file 冒号）
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("no-colon-here")); // 无冒号
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag(":1:1: 错误: x")); // 冒号在 0 → file 段空
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:x:1: 错误: y")); // 行号位非数字
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1x2:3: 错误: y")); // 行号含字母
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1;2: 错误: y")); // 行号后缺冒号
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1: 错误: y")); // 缺列号段
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1:2错误: y")); // 列后缺空格（要求 ": "）
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1:2:错误: y")); // 列后直接接冒号（要求 ": "）
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1:2: : y")); // kind 空
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1:2: 错 误: y")); // kind 含空格 → 命中后后续非冒号
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1:2: 错误:y")); // kind 后缺空格
+    try std.testing.expectEqual(@as(?MachineDiag, null), parseMachineDiag("a:1:2: 错误: ")); // message 空（函数拒，与正则 (.*) 允许 0 长分歧）
+    // 探针坐实真形（非拒臂）：盘符形 "C:1:2: 错误: x" 解析成功 file="C"——首冒号取法对盘符无防备，
+    // 恰因 digit 段落在位置 2/4 而全解析通过；problemMatcher 正则 `[^\s:]` 拒此行、函数收之。
+    // 分歧登记观察面：生产消费链（emit 侧 L220 工相对路径 + L1036 调用方 trimEnd）不喂此形，
+    // 不构成在线缺陷；若改首冒号取法即破本钉，故按真形钉住防静默变_contract_。
+    const ddrive = parseMachineDiag("C:1:2: 错误: x").?;
+    try std.testing.expectEqualStrings("C", ddrive.file);
+    try std.testing.expectEqual(@as(usize, 1), ddrive.line);
+    try std.testing.expectEqual(@as(usize, 2), ddrive.col);
+    try std.testing.expectEqualStrings("错误", ddrive.kind);
+    try std.testing.expectEqualStrings("x", ddrive.message);
+    // 探针登记：函数形态拒的合法行（e2e 不喂此形、不构成在线缺陷、观察面）：
+    //   CRLF 残留行（调用方已 trimEnd "\r"、此例验证未 trim 则消息含尾 \r 仍解析成功——不拒）：
+    const dcr = parseMachineDiag("a.zz:1:1: 错误: msg\r").?;
+    try std.testing.expectEqualStrings("msg\r", dcr.message); // 函数不剔 \r、交给调用方 trimEnd
+}
+
+test "第 181 轮 T2 kindSeverity：四 Unicode 转义 kind 精确命中 + 全臂近邻拒" {
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("错误")); // 默认（未命中三特例退错误）
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("内部错误")); // 未命中
+    try std.testing.expectEqual(@as(u8, 2), kindSeverity("警告")); // 精确
+    try std.testing.expectEqual(@as(u8, 3), kindSeverity("说明")); // 精确
+    try std.testing.expectEqual(@as(u8, 4), kindSeverity("被引用于")); // 精确
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("")); // 空串
+    // 近邻：前缀/后缀/大小写异体/全角/同形异体——全不命中三特例、退 1。
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("警"));
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("警告x"));
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("错 误")); // 含空格
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("warning")); // 英文异体
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("Warning")); // 英文异体
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("ＷＡＲＮ")); // 全角英文
+}
+
+test "第 181 轮 T3 fileMatchesDoc：后缀精确 / 等长 / 词边界门 / 伪后缀拒" {
+    // 命中：完全等长
+    try std.testing.expect(fileMatchesDoc("main.zz", "main.zz"));
+    // 命中：后缀 + 分隔符（两种分隔符均认）
+    try std.testing.expect(fileMatchesDoc("src/main.zz", "main.zz"));
+    try std.testing.expect(fileMatchesDoc("a\\b\\main.zz", "main.zz"));
+    try std.testing.expect(fileMatchesDoc("deep/sub/path/main.zz", "main.zz"));
+    // 拒：长 needle 直 false
+    try std.testing.expect(!fileMatchesDoc("main.zz", "src/main.zz"));
+    // 拒：字节后缀命中但缺词边界（前缀同形异体、不是路径段）
+    try std.testing.expect(!fileMatchesDoc("domain.zz", "main.zz"));
+    try std.testing.expect(!fileMatchesDoc("xyzmain.zz", "main.zz"));
+    // 拒：后缀前的分隔符既非 / 亦非 \（例如字母/数字/连字符紧接 needle）
+    try std.testing.expect(!fileMatchesDoc("v2/main.zz", "n.zz")); // 前缀 "v2/ma" 中 needle "n.zz" 非后缀
+    // 注：needle 与 mfile 同后缀但前字节是 ASCII 词字符 → 拒（词边界只接 /=\）
+    try std.testing.expect(!fileMatchesDoc("mainzz/main.zz", "/main.zz"));
+    // 边界：空 base——endsWith 恒真、mfile.len > base.len 时查前字节：'b' 非 /=\ 仍应 false
+    try std.testing.expect(!fileMatchesDoc("a/b.zz", "")); // 真形坐实：空 base 仅当 mfile 亦空串才 true
+    try std.testing.expect(fileMatchesDoc("", "")); // 等长 0 形直 true
+}
+
+test "第 181 轮 T4 uriToFilesystemPath：file:// 剥前缀 + 盘符门 + 百分号解码全臂（非法 hex 透传 / 越界拒 / 边界）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    // 非 file:// 前缀一律 null。
+    try std.testing.expectEqual(@as(?[]const u8, null), uriToFilesystemPath(a, "http://x"));
+    try std.testing.expectEqual(@as(?[]const u8, null), uriToFilesystemPath(a, ""));
+    try std.testing.expectEqual(@as(?[]const u8, null), uriToFilesystemPath(a, "FILE:///x")); // 大小写敏感
+    // Unix 直形：file:///abs/path → /abs/path
+    try std.testing.expectEqualStrings("/abs/path", uriToFilesystemPath(a, "file:///abs/path").?);
+    // 盘符门：s.len >= 3 且 s[0]=='/' && isAlphabetic(s[1]) && s[2]==':' → 去首斜杠
+    //   注：Windows 归一（'/' → '\'）仅在 os.tag == .windows 生效、Linux 测图不执行此分支，
+    //   本函数返回的仍是 '/' 分隔形——契约钉「去前导斜杠 + 百分号解码」两步、不归一。
+    try std.testing.expectEqualStrings("C:/x", uriToFilesystemPath(a, "file:///C:/x").?);
+    // 盘符门不命中的边界形（拒剥前导 /）：
+    //   s.len < 3：短串不剥
+    try std.testing.expectEqualStrings("/a", uriToFilesystemPath(a, "file:///a").?);
+    //   s[1] 非字母：不剥
+    try std.testing.expectEqualStrings("/1:/x", uriToFilesystemPath(a, "file:///1:/x").?);
+    //   s[2] 非冒号：不剥
+    try std.testing.expectEqualStrings("/ab/x", uriToFilesystemPath(a, "file:///ab/x").?);
+    // 百分号解码：合法 hex 替换
+    try std.testing.expectEqualStrings("/a b", uriToFilesystemPath(a, "file:///a%20b").?);
+    try std.testing.expectEqualStrings("/a/b", uriToFilesystemPath(a, "file:///a%2Fb").?);
+    try std.testing.expectEqualStrings("/A", uriToFilesystemPath(a, "file:///%41").?); // 'A'=0x41（前导 / + 解码）
+    // 十六进制大小写不敏感坐实例（小写 hex 同字节 0x41='A'）：
+    try std.testing.expectEqualStrings("/aA", uriToFilesystemPath(a, "file:///a%41").?);
+    // 非法 hex 透传 '%'、j 前进 1：
+    try std.testing.expectEqualStrings("/a%zzb", uriToFilesystemPath(a, "file:///a%zzb").?);
+    // 截断形（末尾不足 2 字节）走 else 分支透传 '%'：
+    //   `%` 满足 j+2 >= s.len（条件 `j+2 < s.len` 假）→ else 分支原样输出
+    try std.testing.expectEqualStrings("/%", uriToFilesystemPath(a, "file:///%").?);
+    try std.testing.expectEqualStrings("/%2", uriToFilesystemPath(a, "file:///%2").?);
+}
