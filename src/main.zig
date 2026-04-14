@@ -27,6 +27,7 @@ const PureFilter = @import("diag/pure_filter.zig").PureFilter;
 const UntranslatedList = @import("diag/pure_filter.zig").UntranslatedList;
 const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslatedJson;
 const UntranslatedPhrase = @import("diag/pure_filter.zig").UntranslatedPhrase; // 192 T1 造清单 entry 用（生产侧经 UntranslatedList 间接引用、无此别名先例）
+const untranslated_log_path = @import("diag/pure_filter.zig").default_log_path; // 197 D64：落盘路径取 pure_filter 单一真值（与 `Config.log_path` 默认同源、杜绝双字面量漂移）
 const cli = @import("cli/args.zig");
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
@@ -77,6 +78,9 @@ var machine_mode: bool = false;
 
 /// 落盘未翻译清单（F3）：空清单不建文件（防 CI 消费面把恒在的空文件误读为“零未译”信号——
 /// 缺失即“本次未发生过兜底”）。写失败是辅助信息面：母语提示但不改主流程退出码。
+/// 路径取 `untranslated_log_path`（= pure_filter `default_log_path` 单一真值，第 197 轮 D64：旧形制
+/// 与 `pure_filter.Config.log_path` 各持一份同值字面量，改任一侧无测可抓）；192 T1 对该点位持**字面量**
+/// 判据（独立于本常量、不构成自证循环），改真值即该块转红。
 fn flushUntranslated() void {
     if (untranslated_list.items.items.len == 0) return;
     const ts = @as(i64, @intCast(@divFloor(Io.Timestamp.now(io_, .real).nanoseconds, std.time.ns_per_s)));
@@ -85,7 +89,7 @@ fn flushUntranslated() void {
         return;
     };
     defer gpa_.free(json);
-    writeWhole("logs/untranslated_phrases.json", json) catch |e| {
+    writeWhole(untranslated_log_path, json) catch |e| {
         printErr("zzc: 未翻译清单落盘失败（{s}），已跳过。", .{@errorName(e)});
     };
 }
@@ -1893,7 +1897,9 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
 // 把恒在空文件误读为零未译）、real 时钟 generated_at（改 monotonic 族即落 1970）、双 catch
 // 静面（序列化失败/落盘失败均只 printErr、不改退出码——改成 try 传播即把辅面异常升格成主
 // 报错）、defer free(json) 泄漏防线（191 S1 同族）与 entry 字段透传/顺序契约。盘上形制：
-// writeWhole 自动 createDirPath("logs")（file_io L40）、logs/ 未 gitignore——测试图以
+// writeWhole 自动 createDirPath("logs")（file_io L40）、logs/ **已** gitignore（仓根 .gitignore
+// 的「F3 未翻译短语落盘面」条目、第 52 轮随落盘一同加入——本注旧写「未 gitignore」属第 192 轮
+// 失实注释、第 197 轮 D65 据现状更正）——测试图以
 // deleteTree 回清（崩溃幂等：文件/目录/子树全形态归零）；werr 接线 /tmp 盘上日志
 // （191 T2 同族：静面 printErr 臂 werr=undefined 直崩）。首跑自证注：0.17 断代候选
 // `f.deleteFile` 不存在；`deleteFileAbsolute` 内部 assert(isAbsolute) 传相对路径即

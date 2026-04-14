@@ -45,12 +45,23 @@ pub const Whitelist = struct {
     }
 };
 
+/// 未翻译清单落盘路径的**单一真值**（第 197 轮 D64）：此前 `Config.log_path` 默认值与 `main.zig`
+/// 落盘点的字面量各写一份、互不引用——改任一侧都无人报警（探针实锤：只改 `Config.log_path` 默认值，
+/// 全库测试仍绿，因该字段零消费者；而改 main 侧字面量则 192 块抓红），同时
+/// `docs/纯母语过滤器架构设计.md` 又把该字段作为可配项公开。现两侧同取本常量，双源漂移面消除；
+/// 实例级生效边界见 `Config.log_path` 注。
+pub const default_log_path: []const u8 = "logs/untranslated_phrases.json";
+
 /// 纯母语过滤器配置
 pub const Config = struct {
     enabled: bool = true,
     min_english_length: usize = 3,
     fallback_message: []const u8 = "[未翻译] 此报错暂未提供中文翻译，请参考英文原文",
-    log_path: []const u8 = "logs/untranslated_phrases.json",
+    /// 落盘路径默认值（= `default_log_path`，与 main 层落盘点同源）。生效边界：实际落盘由 main 层按
+    /// `default_log_path` 执行，本字段传非默认值**不改变**落盘点位——filter 系 `zigCompile` 帧内局部
+    /// （`main.zig` L444）、进程出口 `flushUntranslated` 拿不到它；要按实例生效须把 filter 或路径
+    /// 提到进程级（同 `machine_mode` 先例），当前无此需求，字段只承载默认形制（第 197 轮 T1 钉）。
+    log_path: []const u8 = default_log_path,
     strict_mode: bool = false, // true = 严格模式，任何英文都拦截
 };
 
@@ -652,4 +663,35 @@ test "detectEnglish 护栏：引号区隔离、孤撇号断链、min 长度与 e
     var foff = try PureFilter.init(gpa, .{ .enabled = false }, null);
     defer foff.deinit();
     try std.testing.expect(!foff.detectEnglish("expected type, found 'i64'"));
+}
+
+// 第 197 轮审计注（D64）：`Config.log_path` 系**零消费者**死字段（全仓仅 L53 定义处一枚命中），
+// 真实落盘路径另由 `main.zig` 字面量硬编——两处同值字面量双源。探针实锤：只改本字段默认值
+// 为别的路径、全库测试仍绿；只改 main 侧字面量则 192 T1 转红（写侧早有**字面量**判据钉住——
+// 该钉独立于真值常量、非自证循环，承 196 轮 t3 通则）。修：抽 `default_log_path` 为单一真值、
+// Config 默认与 main 写侧同取。同源形制本身无可运行判据（值相等即可、指针身份测不稳），靠注释
+// 与本块 A1/A2 双侧字面量钉兼顾：改真值→A1 红与 192 红、改 Config 默认偏离真值→A2 红。
+
+test "第 197 轮 T1 未翻译落盘路径单一真值：真值字面量钉 + Config 默认同源 + 路径形制契约 + init 忠实透传" {
+    const gpa = std.testing.allocator;
+
+    // A1 真值本身（判据用**字面量**、不复用 `default_log_path`——同源判据怎么改都自洽，即 196 轮
+    //   t3 现形的自证循环伪钉）。与 F3 历史落盘位一致，改名即红（CI/语言包作者消费面在仓外，不可跟改）。
+    try std.testing.expectEqualStrings("logs/untranslated_phrases.json", default_log_path);
+
+    // A2 Config 默认与真值同源：有人把默认写回独立字面量且值不同即红（双源漂移面的运行侧防线）。
+    try std.testing.expectEqualStrings(default_log_path, (Config{}).log_path);
+
+    // A3 路径形制契约：相对 cwd、正斜杠、`logs/` 目录段——三条各有跨面依赖：`.gitignore` 以 `logs/`
+    //   条目兼容、`file_io.writeWhole` 自动建父目录只对**相对**路径与正斜杠分段成立、`main.zig` 192 T1
+    //   的回清走 `cwd().deleteTree("logs")`。真值被改成绝对路径/反斜杠/换目录则此处先红。
+    try std.testing.expect(std.mem.startsWith(u8, default_log_path, "logs/"));
+    try std.testing.expect(std.mem.indexOfScalar(u8, default_log_path, '\\') == null);
+    try std.testing.expect(!std.fs.path.isAbsolute(default_log_path));
+
+    // A4 init 忠实透传：字段随 config 存入、本模块不抹平也不默认化（钉住「可传但仅透传」的现状契约：
+    //   若日后把它接成真效面或干脆删字段，此处转红即为改动须同步登记 D64 的信号）。
+    var f = try PureFilter.init(gpa, .{ .log_path = "自定义/路径.json" }, null);
+    defer f.deinit();
+    try std.testing.expectEqualStrings("自定义/路径.json", f.config.log_path);
 }
