@@ -1555,3 +1555,86 @@ test "第 188 轮 T1 lspSemanticCall：接线钩子契约钉（ctx 往返/text �
         try std.testing.expectEqual(@as(usize, 0), got2.len);
     }
 }
+
+// 第 189 轮审计注：D57 后全库私有 fn 引用对账刷新（死码归零首轮），`src/main.zig`
+// 生产层两枚**测面零直调**核落位钉：
+// ①describePackError（L456·B6 契约缺失母语报错文案表 14 臂）——唯 cmdLangAdd L519 与
+//   主分发 L1255/1257/1259 三消息位生产直调，全库测面零钉；pack.zig 只钉错误值**产生侧**
+//   （validate 判序/expectError/err_for 序），本文案表**消费侧**的臂-文案映射换位/增臂
+//   断代（ValidationError 集合扩而 switch 未补则编译拒、文案错而集合未动则全库无防）零防。
+// ②ejectZoneText（L830·毕业构建 build.zig.zon 模板构建器）——唯 cmdEject L810/813 两形
+//   直调（fp=null 首写/回写）；102 轮 parseFingerprintFromZone 只钉**读侧**、写侧的
+//   fingerprint 行插位与关键行措辞（.name/.version/.minimum_zig_version/.paths）系 zig
+//   工具链字节契约，全库零钉。
+// 两皆活路径探针即测：T1/T2 期望值全部自本文件源码逐字节抽取生成（防手抄漂移即自捕形）。
+// 证伪撤号轮——通读未见缺陷不占 D 号。
+
+test "第 189 轮 T1 describePackError：B6 报错文案表 14 臂一一映射钉（换位即红·与 ValidationError 同源）" {
+    const Case = struct { e: PackParseError, want: []const u8 };
+    // 期望表逐字节取自本文件 L457-470 定义（脚本抽取生成、非手抄）。
+    const cases = [_]Case{
+        .{ .e = error.PackMissingCode, .want = "缺少 `$code = xx` 元数据行（语言代码用于版本/列表展示，不得默认为 `??`）" },
+        .{ .e = error.PackMissingConst, .want = "缺少映射到 `const` 的关键字（声明位识别与 `常数` 单跳数据流预扫描依赖它）" },
+        .{ .e = error.PackMissingVar, .want = "缺少映射到 `var` 的关键字" },
+        .{ .e = error.PackMissingFn, .want = "缺少映射到 `fn` 的关键字（入口链与声明位识别依赖它）" },
+        .{ .e = error.PackMissingIf, .want = "缺少映射到 `if` 的关键字" },
+        .{ .e = error.PackMissingElse, .want = "缺少映射到 `else` 的关键字" },
+        .{ .e = error.PackMissingReturn, .want = "缺少映射到 `return` 的关键字" },
+        .{ .e = error.PackMissingStruct, .want = "缺少映射到 `struct` 的关键字" },
+        .{ .e = error.PackMissingEnum, .want = "缺少映射到 `enum` 的关键字（枚举成员声明位识别依赖它）" },
+        .{ .e = error.PackMissingUnion, .want = "缺少映射到 `union` 的关键字（变体名声明位识别依赖它）" },
+        .{ .e = error.PackMissingSwitch, .want = "缺少映射到 `switch` 的关键字" },
+        .{ .e = error.PackMissingImport, .want = "缺少映射到 `@import` 的关键字（`.zz` 资产豁免与 import 目标反查依赖它）" },
+        .{ .e = error.PackMissingEmbedFile, .want = "缺少映射到 `@embedFile` 的关键字（嵌入资产预扫描与 staging 依赖它）" },
+        .{ .e = error.PackMissingMain, .want = "缺少映射到 `main` 的关键字（语义编译根——含主入口的文件——判据依赖它）" },
+    };
+    // 主钉：逐臂 expectEqualStrings 全文对照（任一臂文案换位/措辞漂移即红）。
+    for (cases) |c| try std.testing.expectEqualStrings(c.want, describePackError(c.e));
+    // 完备钉：cases 与 ValidationError 全 14 员对齐（switch 穷举在编译期自守、本钉防
+    // 「cases 漏收新臂」的测面断代——与编译期穷举互补成双线）。
+    try std.testing.expectEqual(@as(usize, 14), cases.len);
+    // 第二防线：任意两臂文案互异（复制粘贴同文案形——即便 oracle 表随本体同步腐坏，互异性仍可点名）。
+    for (cases, 0..) |a, i| {
+        for (cases[0..i]) |b| {
+            try std.testing.expect(!std.mem.eql(u8, a.want, b.want));
+        }
+    }
+}
+
+test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp 缺/有·行序·关键行措辞）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 文件级 arena 手动接线（生产 main L1150 同形制、188 轮 io_ 同族先例）
+
+    const tail =
+        "    .minimum_zig_version = \"0.17.0\",\n" ++
+        "    .dependencies = .{},\n" ++
+        "    .paths = .{\n        \"build.zig\",\n        \"build.zig.zon\",\n        \"src\",\n    },\n}\n";
+
+    // 形 A：fp=null（首写占位 zon，fp 行必须缺席——存在即被回写覆盖前的非法中间态泄漏）。
+    const want_a =
+        "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n" ++
+        "    .name = .pj,\n" ++
+        "    .version = \"0.1.0\",\n" ++
+        tail;
+    try std.testing.expectEqualStrings(want_a, try ejectZoneText("pj", null));
+
+    // 形 B：fp 非空——fingerprint 行恰插于 .version 之后、.minimum_zig_version 之前（字节位钉）。
+    const want_b =
+        "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n" ++
+        "    .name = .pj,\n" ++
+        "    .version = \"0.1.0\",\n" ++
+        "    .fingerprint = 0xdeadbeef,\n" ++
+        tail;
+    try std.testing.expectEqualStrings(want_b, try ejectZoneText("pj", "0xdeadbeef"));
+
+    // 边界透传形登记（观察面）：函数不校验 app_name——安全性由调用侧 init/eject 名字闸门
+    // 拦（cmdInit 不安全名判定），空名直落模板生 `.name = .,` 非法 zon 形。按真形钉透传、
+    // 防日后在本函数静默加判致两侧双闸或措辞改动无人知。
+    const want_c =
+        "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n" ++
+        "    .name = .,\n" ++
+        "    .version = \"0.1.0\",\n" ++
+        tail;
+    try std.testing.expectEqualStrings(want_c, try ejectZoneText("", null));
+}
