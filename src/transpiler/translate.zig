@@ -1767,3 +1767,100 @@ test "护栏：转译声明位回扫谓词边界形——未闭合/畸形括号�
         try std.testing.expectEqual(null, findOpenBracket(toks, s, Find.punct(toks, s, ',')));
     }
 }
+
+// 护栏（第 179 轮增量审计·证伪撤号）：`isAsciiAlphaByte`（L750·`expectNoEnglishSentence` 的词内
+// 字符判据）、`isDeclVerb`（L67·`prevIsDeclKeyword`/D1 声明位避让的声明动词判据）与 `isPunctAt`
+// （L96·`prevIsColon`/`isExtendedDeclNamePos` 诸句法位标点核查的共享核）皆同文件私有纯谓词、
+// 全库零直调。isAsciiAlphaByte 精确字节集从未被钉——它系 111 isIdentByte/175 isIdentChar/178
+// isWordCharByte 同族的第四面且区别点恰在**数字与 `_` 于此非词字符**（`abc1def` 计两词、`a_b`
+// 被下划线断开）：误扩成 alnum 形即静默改变守卫二计词粒度，而 117 测各例皆不喂数字/下划线相邻
+// 形不受累；isDeclVerb 恰集 {const,var,fn} 之全等/大小写/前后缀 near-miss 从未被钉——误并一个
+// 动词（如 `pub`）即令 D1 避让对「该词后声明名」静默过度保护、查表替换静默失效；isPunctAt 四
+// 守卫（越界 k/词类门/单字符/字符全等）与 prevIsColon 的 i==0 下溢门 109 轮仅推演证伪从未落
+// 形钉——尤其 `k >= toks.len` 臂背着 L198/L269 的 i+1 peek 词尾形态，而真 lexer 流永不产 len>1
+// punct 或含冒号的非 punct 词元，防御形唯合成词元可钉。探针先行即以本测首跑承担（对独立
+// oracle `std.ascii.isAlphabetic` 做 iff 对照 + 合成词元形实跑），一次绿坐实无在线缺陷→不占 D 号。
+test "isAsciiAlphaByte：全字节 iff 穷举钉 ASCII 字母集恰 [A-Za-z]（数字/_ 非词字符·区别 111/175/178 同族集，第 179 轮）" {
+    var c: usize = 0;
+    while (c < 256) : (c += 1) {
+        const b: u8 = @intCast(c);
+        // 独立 oracle 取 std.ascii.isAlphabetic（手写区间判据 vs 标准库），双向 iff 锁死恰集。
+        try std.testing.expect(std.ascii.isAlphabetic(b) == isAsciiAlphaByte(b));
+    }
+    // 关键边界点名：字母放行；数字/下划线/DEL/高字节拒（与同族词字符集的定义性区别）。
+    try std.testing.expect(isAsciiAlphaByte('a'));
+    try std.testing.expect(isAsciiAlphaByte('Z'));
+    try std.testing.expect(!isAsciiAlphaByte('0'));
+    try std.testing.expect(!isAsciiAlphaByte('_'));
+    try std.testing.expect(!isAsciiAlphaByte(0x7F));
+    try std.testing.expect(!isAsciiAlphaByte(0x80));
+}
+
+test "isDeclVerb：声明动词恰集 {const,var,fn} 全等 + near-miss/大小写/空白形全拒（D1 避让判据核，第 179 轮）" {
+    try std.testing.expect(isDeclVerb("const"));
+    try std.testing.expect(isDeclVerb("var"));
+    try std.testing.expect(isDeclVerb("fn"));
+    // 全等非前缀：超串/子串/拼串形皆非声明动词。
+    try std.testing.expect(!isDeclVerb(""));
+    try std.testing.expect(!isDeclVerb("con"));
+    try std.testing.expect(!isDeclVerb("constx"));
+    try std.testing.expect(!isDeclVerb("xconst"));
+    try std.testing.expect(!isDeclVerb("fnx"));
+    try std.testing.expect(!isDeclVerb("var1"));
+    // 超集防卫：pub/struct 等其它关键字非声明动词——误并一律即令 D1 避让对「该词后声明名」
+    // 静默过度保护；大小写与带空白形亦拒（精确字节全等、无折叠无 trim）。
+    try std.testing.expect(!isDeclVerb("pub"));
+    try std.testing.expect(!isDeclVerb("struct"));
+    try std.testing.expect(!isDeclVerb("Const"));
+    try std.testing.expect(!isDeclVerb("VAR"));
+    try std.testing.expect(!isDeclVerb(" fn"));
+    try std.testing.expect(!isDeclVerb("fn "));
+}
+
+test "isPunctAt 四守卫 + prevIsColon i==0 下溢门：合成词元与真词流直钉（句法位标点共享核，第 179 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    // 合成词元钉 isPunctAt 防御臂：真 lexer 流永不产这些形。
+    {
+        const s = ":->:"; // 0 ':' | 1..2 "->"（合成多字符 punct）| 3 ':'（合成 ascii_word 含冒号）
+        const toks = [_]lexer.Token{
+            .{ .kind = .punct, .off = 0, .len = 1 },
+            .{ .kind = .punct, .off = 1, .len = 2 },
+            .{ .kind = .ascii_word, .off = 3, .len = 1 },
+        };
+        // ① 基线命中：单字符 punct 全等。
+        try std.testing.expect(isPunctAt(&toks, s, 0, ':'));
+        // ② 字符不等拒。
+        try std.testing.expect(!isPunctAt(&toks, s, 0, '-'));
+        // ③ 多字符 punct len!=1 拒（首字符恰等亦不命中——len 门 load-bearing 形）。
+        try std.testing.expect(!isPunctAt(&toks, s, 1, '-'));
+        // ④ 词类门：文本为 ':' 的 ascii_word 非 punct。
+        try std.testing.expect(!isPunctAt(&toks, s, 2, ':'));
+        // ⑤ 越界 k>=toks.len 拒（L198/L269 i+1 peek 词尾形态、不越界读）。
+        try std.testing.expect(!isPunctAt(&toks, s, 3, ':'));
+        // ⑥ 空词流 k==0>=len 拒。
+        const empty: []const lexer.Token = &.{};
+        try std.testing.expect(!isPunctAt(empty, s, 0, ':'));
+    }
+
+    // 真词流钉 prevIsColon 三门：i==0 下溢防词门/非 punct 前词/异标点前词。
+    {
+        const s = "a : b";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        // ⓪ i==0：无 toks[-1]、 usize 下溢防御门返 false。
+        try std.testing.expect(!prevIsColon(s, toks, 0));
+        // 前词为 ascii_word → false；紧邻 punct ':' → true（类型标注位）。
+        try std.testing.expect(!prevIsColon(s, toks, 1));
+        try std.testing.expect(prevIsColon(s, toks, 2));
+    }
+    {
+        const s = "a . b";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        // 前词为异 punct '.' → false（字符全等门而非仅词类门）。
+        try std.testing.expect(!prevIsColon(s, toks, 2));
+    }
+}
