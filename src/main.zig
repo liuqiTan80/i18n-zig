@@ -1638,3 +1638,134 @@ test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp �
         tail;
     try std.testing.expectEqualStrings(want_c, try ejectZoneText("", null));
 }
+
+// 第 190 轮审计注：承 189 对账，main.zig 再锁定测面零直调两域——
+// ①findUnit（L394·入口→unit 三层检索：samePathRel 精确臂（分隔符归一）→ stem
+//   宽松臂 → null）唯 cmdCheck L549 / cmdBuild L609 两生产直调；samePathRel/stem
+//   各已下层钉，但三层**序**（精确先于宽松）、同 stem first-wins、stem 臂扩展名
+//   盲区形全库零钉——序颠倒即 entry 指名目录时被首 stem 单元劫持（语义反转）。
+// ②eject 回读/验证三件套（readExistingFingerprint L866·probeFingerprint L844·
+//   verifyBuild L878）唯 cmdEject L809/811/819 直调——102 轮 parseFingerprintFromZone
+//   只钉解析本体，wrapper 四降级臂（allocPrint/readWhole catch、parse orelse、dupe
+//   catch）与 spawn 失败 catch（probe→null、verify→.no_zig）全库零防；verifyBuild
+//   把一切 spawn throw 判 .no_zig——cwd 不存在形与「未检测到 zig」同臂，观察面登册
+//   （调用方先 writeWhole 建 dest、生产不可达此形，不构成在线缺陷）。
+// 探针即测：T1/T2 期望皆首跑自证。证伪撤号轮不占 D 号。
+
+test "第 190 轮 T1 findUnit：三层检索契约钉（精确先于宽松·反斜杠精确形·stem first-wins·扩展名盲区·null 臂）" {
+    const ta = std.testing.allocator;
+    var list: std.ArrayList(Unit) = .empty;
+    defer list.deinit(ta);
+    try list.append(ta, .{ .native_rel = "src/main.zz", .gen_rel = "g_src", .nat_src = "n1", .zig_str = "z1", .map = .{ .entries = .empty } });
+    try list.append(ta, .{ .native_rel = "lib/a.zz", .gen_rel = "g_lib", .nat_src = "n2", .zig_str = "z2", .map = .{ .entries = .empty } });
+    try list.append(ta, .{ .native_rel = "sub/main.zz", .gen_rel = "g_sub", .nat_src = "n3", .zig_str = "z3", .map = .{ .entries = .empty } });
+    const proj = Project{ .units = list };
+
+    // A1 精确臂命中。
+    try std.testing.expectEqualStrings("g_src", findUnit(proj, "src/main.zz").?.gen_rel);
+    // A2 分隔符归一：Windows 反斜杠形在精确臂命中（非宽松臂兜住——samePathRel 契约透传钉）。
+    try std.testing.expectEqualStrings("g_src", findUnit(proj, "src\\main.zz").?.gen_rel);
+    // A3/A4 stem 宽松臂：无扩展形、无目录形。
+    try std.testing.expectEqualStrings("g_src", findUnit(proj, "src/main").?.gen_rel);
+    try std.testing.expectEqualStrings("g_src", findUnit(proj, "main.zz").?.gen_rel);
+    // A5 精确先于宽松 + first-wins 序反证锚：entry="sub/main.zz" 虽 stem "main" 与首单元
+    //   撞名、仍须取第三单元——若两层顺序颠倒（宽松臂先跑）此处得 g_src 即红。
+    try std.testing.expectEqualStrings("g_sub", findUnit(proj, "sub/main.zz").?.gen_rel);
+    // A6 stem 形择首：entry="main"（无扩展）→ 表序首个 stem 命中 g_src（非 g_sub）。
+    try std.testing.expectEqualStrings("g_src", findUnit(proj, "main").?.gen_rel);
+    // A7 扩展名盲区真形（观察面钉）：.zig 标准扩展同被 stem 臂命中——宽松臂不看扩展名，
+    //   用户误传生成物形也照取 .zz 单元（无害·钉住防判据静默改）。
+    try std.testing.expectEqualStrings("g_src", findUnit(proj, "src/main.zig").?.gen_rel);
+    // A8 全不命中 → null。
+    try std.testing.expect(findUnit(proj, "other.zz") == null);
+    // A9 空 entry：精确臂无 0 长单元、stem("")="" 亦不中 → null。
+    try std.testing.expect(findUnit(proj, "") == null);
+    // A10 宽松臂分隔符盲区真形（观察面钉·探针首跑自捕）：std.fs.path.stem 按 machine
+    //   分隔符切段——Linux 图不切反斜杠，"lib\\a" 整体成 stem、精确臂同不中 → null；
+    //   Windows 机 stem 切 '\\' 得 "a" 可命中——本函数宽松臂行为随 os.tag 异（生产形：
+    //   Windows 用户传反斜杠无扩展形在其本机命中、Linux 传此形属罕见且落 null 安全侧）。
+    try std.testing.expect(findUnit(proj, "lib\\a") == null);
+    // A10b 裸名宽松命中：entry="a" → stem "a" 命中表内 "lib/a.zz"。
+    try std.testing.expectEqualStrings("g_lib", findUnit(proj, "a").?.gen_rel);
+}
+
+test "第 190 轮 T2 eject 三件套：回读命中/名闸/无字段/NotDir + spawn 失败降级臂（probe→null·verify→no_zig 同臂观察面）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    io_ = threaded.io();
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 文件级 arena 接线（189 T2 同族形制）
+
+    const dir = "/tmp/zzc190proj";
+    const zon = "/tmp/zzc190proj/build.zig.zon";
+    // 前置清理历史残留（保 A1 幂等：目录/文件不存在须为真前提而非巧合）。
+    std.Io.Dir.cwd().deleteFile(io_, zon) catch {};
+    std.Io.Dir.cwd().deleteDir(io_, dir) catch {};
+    // A1 目录不存在（zon 必缺）→ readWhole FileNotFound → null。
+    try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(dir, "pj"));
+
+    std.Io.Dir.cwd().createDirPath(io_, dir) catch |e| {
+        std.debug.print("T2 setup createDirPath 失败：{s}", .{@errorName(e)});
+        return error.TestUnexpectedResult;
+    };
+    defer std.Io.Dir.cwd().deleteFile(io_, zon) catch {};
+    defer std.Io.Dir.cwd().deleteDir(io_, dir) catch {};
+
+    const good = "// zzc\n.{\n    .name = .pj,\n    .fingerprint = 0xdeadbeef,\n}\n";
+    {
+        var f = std.Io.Dir.createFileAbsolute(io_, zon, .{ .read = true }) catch |e| {
+            std.debug.print("T2 setup createFile 失败：{s}", .{@errorName(e)});
+            return error.TestUnexpectedResult;
+        };
+        defer f.close(io_);
+        var buf: [256]u8 = undefined;
+        var w = Io.File.Writer.init(f, io_, &buf);
+        w.interface.writeAll(good) catch |e| {
+            std.debug.print("T2 setup 写入失败：{s}", .{@errorName(e)});
+            return error.TestUnexpectedResult;
+        };
+        w.interface.flush() catch {};
+    }
+    // A2 命中臂：连同 "0x" 前缀一并返回（读侧契约透传）。
+    try std.testing.expectEqualStrings("0xdeadbeef", readExistingFingerprint(dir, "pj").?);
+    // A3 名闸透传：app_name 不匹配 → parse null → wrapper null（防把别家工程指纹复用）。
+    try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(dir, "other"));
+    // A4 无 fingerprint 字段：truncate 重写后 → parse orelse 臂 → null。
+    {
+        const nofp = "// zzc\n.{\n    .name = .pj,\n}\n";
+        var f = std.Io.Dir.createFileAbsolute(io_, zon, .{ .read = true }) catch |e| {
+            std.debug.print("T2 setup 重写失败：{s}", .{@errorName(e)});
+            return error.TestUnexpectedResult;
+        };
+        defer f.close(io_);
+        var buf: [256]u8 = undefined;
+        var w = Io.File.Writer.init(f, io_, &buf);
+        w.interface.writeAll(nofp) catch |e| {
+            std.debug.print("T2 setup 重写写入失败：{s}", .{@errorName(e)});
+            return error.TestUnexpectedResult;
+        };
+        w.interface.flush() catch {};
+    }
+    try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(dir, "pj"));
+
+    // A5 dest 系普通文件：zon_path 落文件之下 → NotDir → readWhole catch → null（第三降级形）。
+    const file_path = "/tmp/zzc190plain";
+    {
+        var f = std.Io.Dir.createFileAbsolute(io_, file_path, .{ .read = true }) catch |e| {
+            std.debug.print("T2 setup 建普通文件失败：{s}", .{@errorName(e)});
+            return error.TestUnexpectedResult;
+        };
+        f.close(io_);
+    }
+    defer std.Io.Dir.cwd().deleteFile(io_, file_path) catch {};
+    try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(file_path, "pj"));
+
+    // B probeFingerprint spawn 失败降级：dest 不存在 → run throw（FileNotFound 族）→ catch null。
+    try std.testing.expectEqual(@as(?[]const u8, null), probeFingerprint("/tmp/zzc190-no-such-dir"));
+
+    // C verifyBuild 同形 → 统一 catch 臂 → .no_zig。观察面钉：本把一切 spawn throw（含 cwd
+    //   不存在）判「未检测到 zig」——措辞与真因可能错位，唯调用方 cmdEject 必先成功写盘建
+    //   dest、生产不可达此形，不构成在线缺陷；钉死现语义防两臂静默拆分或措辞改动无测知。
+    try std.testing.expectEqual(BuildVerify.no_zig, verifyBuild("/tmp/zzc190-no-such-dir"));
+}
