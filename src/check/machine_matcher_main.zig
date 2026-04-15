@@ -228,9 +228,13 @@ pub fn main(init: std.process.Init) !void {
     // 四支硬编数值同 src clamp 界／快路恒码互为跨侧手抄、守卫从未核码值语义——
     // 漂即诊断分级静默错色，四枚 needle 数值全由 `sv_*` 派生。
     checkFace(ext_path, &lsp_srv.sv_face, ext);
+    // —— 对面十五：`extension.js` 的 JSON-RPC 错误码应答面（第 223 轮 D91）。js 对
+    //   服务端发起请求应答臂手抄 -32601 同 src 写侧三臂码值、守卫从未核错误码——
+    //   漂即协议错误语义跨侧塌陷，needle 数值由 `ec_*` 派生（t2 P1 静默面）。
+    checkFace(ext_path, &lsp_srv.errors_face, ext);
 
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
     );
 }

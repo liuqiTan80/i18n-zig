@@ -188,6 +188,16 @@ pub const sv_warning: u8 = 2;
 pub const sv_information: u8 = 3;
 pub const sv_hint: u8 = 4;
 
+/// —— D91 JSON-RPC 错误码族（第 223 轮）：协议标准错误码三员（-32700 解析失败／-32600 请求非法／
+/// -32601 方法不支持）——src 写侧 handle 三臂内联数值字面、测侧值钉与宽松子串钉，同客户端
+/// `extension.js` dispatch 对服务端发起请求的应答臂 `error: { code: -32601, ... }` 互为跨侧手抄、
+/// 互不引用——守卫 214–222 核过参数键/结果字段/严重度码值而从未核错误码；t2 探针 P1 js 同码支
+/// 漂全绿静默，P4 写侧 `-32601`→`-326011` 加尾亦全绿（宽松子串伪钉——键前缀与完整数值测面零钉）。
+/// `ec_*` 三枚为唯一真值，写侧臂、改严形钉、`errors_face` needle 与测侧数值钉全由此派生。
+pub const ec_parse_error: i64 = -32700;
+pub const ec_invalid_request: i64 = -32600;
+pub const ec_method_not_found: i64 = -32601;
+
 /// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
 const ek_jsonrpc = "\"" ++ k_jsonrpc ++ "\"";
 const ek_id = "\"" ++ k_id ++ "\"";
@@ -265,6 +275,13 @@ pub const sv_face = [_]jsonrpc.FaceCheck{
     .{ .needle = std.fmt.comptimePrint(": s === {d} ? vscode.DiagnosticSeverity.Warning", .{sv_warning}), .why = "sev() 第二支——2↔Warning 漂即警告错渲染" },
     .{ .needle = std.fmt.comptimePrint(": s === {d} ? vscode.DiagnosticSeverity.Information", .{sv_information}), .why = "sev() 第三支——3↔Information 漂即信息级错渲染" },
     .{ .needle = ": vscode.DiagnosticSeverity.Hint);", .why = "sev() 兜底支落点词形钉——VS Code 枚举名系 js 侧单面词（src 无同概念真值），此枚为码值族穷尽后的兜底臂锚，漂即未知码虚报灰字（t2 P6 静默面）" },
+};
+
+/// 对面·`extension.js` 错误码应答面 needle 清单（守卫对面十五——同 `sv_face` 形制）。
+/// js dispatch 对 window/ 发起请求的应答臂手抄 JSON-RPC 标准 -32601，数值由
+/// `ec_method_not_found` 派生 comptime 拼出——跨侧同码分道即协议错误语义塌陷（t2 P1 静默面转锚）。
+pub const errors_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = "error: { code: " ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found}), .why = "客户端应答臂错误码逐字节钉=协议标准真值——js 侧另立码值即错误语义跨侧塌陷（t2 P1 -32601→-32602 全绿静默实锤）" },
 };
 
 pub const OutList = std.ArrayList([]const u8);
@@ -462,7 +479,7 @@ pub const Server = struct {
         var parsed = std.json.parseFromSlice(std.json.Value, gpa, body, .{}) catch {
             const id_null = try gpa.dupe(u8, "null");
             defer gpa.free(id_null);
-            try out.append(gpa, try errorResponse(gpa, id_null, -32700, "解析失败：不是合法 JSON 报文"));
+            try out.append(gpa, try errorResponse(gpa, id_null, ec_parse_error, "解析失败：不是合法 JSON 报文"));
             return;
         };
         defer parsed.deinit();
@@ -470,7 +487,7 @@ pub const Server = struct {
         const root = asObject(parsed.value) orelse {
             const id_null = try gpa.dupe(u8, "null");
             defer gpa.free(id_null);
-            try out.append(gpa, try errorResponse(gpa, id_null, -32600, "解析失败：报文根不是对象"));
+            try out.append(gpa, try errorResponse(gpa, id_null, ec_invalid_request, "解析失败：报文根不是对象"));
             return;
         };
         const method = strField(root, k_method) orelse return; // 应答形（无 method）：本服务器不发请求，忽略
@@ -557,7 +574,7 @@ pub const Server = struct {
             defer gpa.free(id_json);
             const msg = try std.fmt.allocPrint(gpa, "不支持的方法：{s}", .{method});
             defer gpa.free(msg);
-            try out.append(gpa, try errorResponse(gpa, id_json, -32601, msg));
+            try out.append(gpa, try errorResponse(gpa, id_json, ec_method_not_found, msg));
         }
         // 不支持的通知（无 id）：静默丢弃——JSON-RPC 对通知不发 error 应答
     }
@@ -1006,13 +1023,13 @@ test "lsp.server：exit 置停、未知请求 -32601、坏 JSON -32700、通知�
 
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"textDocument/completion\",\"params\":{}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "-32601") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":\"abc\"") != null); // 字符串 id 原样回显
     freeOut(gpa, &out);
 
     try srv.handle("not-json{{{", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "-32700") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_parse_error})) != null);
     freeOut(gpa, &out);
 
     // 未知通知（无 id）：静默
@@ -1503,14 +1520,14 @@ test "lsp.server：strField 三分支 + result/errorResponse 骨架与 message �
 
     // errorResponse：message 含引号+反斜杠（模拟客户端 method 串）须被转义——缺转义则 parseFromSlice 即失败。
     const emsg = "不支持的方法：x\"y\\z";
-    const er = try errorResponse(gpa, "2", -32601, emsg);
+    const er = try errorResponse(gpa, "2", ec_method_not_found, emsg);
     defer gpa.free(er);
     var pe = try std.json.parseFromSlice(std.json.Value, gpa, er, .{});
     defer pe.deinit();
     const eerr = asObject(asObject(pe.value).?.get(k_error).?).?;
     try testing.expectEqualStrings(emsg, strField(eerr, k_message).?);
     asserts += 1;
-    try testing.expectEqual(@as(i64, -32601), intField(eerr, k_code).?);
+    try testing.expectEqual(@as(i64, ec_method_not_found), intField(eerr, k_code).?);
     asserts += 1;
 
     std.debug.print("T1 asserts={d}\n", .{asserts});
@@ -1694,7 +1711,7 @@ test "lsp.server：asObject/objIn/intField 取值器分支真形与帧根非对�
             try srv.handle(body, &out);
             try testing.expectEqual(@as(usize, 1), out.items.len);
             asserts += 1;
-            try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":-32600") != null);
+            try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_invalid_request})) != null);
             asserts += 1;
             try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":null") != null);
             asserts += 1;
@@ -1984,7 +2001,7 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     try testing.expect(std.mem.indexOf(u8, out.items[1], "\"method\":\"" ++ m_publishDiagnostics ++ "\"") != null); // 写侧词即 hub 真值（publishRaw 委派）
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"" ++ m_initialize ++ "X\",\"params\":{}}", &out);
     try testing.expectEqual(@as(usize, 3), out.items.len);
-    try testing.expect(std.mem.indexOf(u8, out.items[2], "-32601") != null); // 漂形落不支持面（通知形则静默丢弃，请求形必报错）
+    try testing.expect(std.mem.indexOf(u8, out.items[2], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null); // 漂形落不支持面（通知形则静默丢弃，请求形必报错）
     // A5 覆盖钉：十一枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
     try testing.expectEqual(@as(usize, 11), methods_face.len);
 }
@@ -2171,12 +2188,12 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
         const c3 = objIn(asObject(p3.value).?.get(k_contents)).?;
         try testing.expectEqualStrings(v_markdown, strField(c3, k_kind).?);
         try testing.expectEqualStrings("甲", strField(c3, k_value).?);
-        const four = try std.fmt.allocPrint(tg, f_error_response, .{ "5", @as(i64, -32601), mj });
+        const four = try std.fmt.allocPrint(tg, f_error_response, .{ "5", @as(i64, ec_method_not_found), mj });
         defer tg.free(four);
         var p4 = try std.json.parseFromSlice(std.json.Value, tg, four, .{});
         defer p4.deinit();
         const e4 = objIn(asObject(p4.value).?.get(k_error)).?;
-        try testing.expectEqual(@as(i64, -32601), intField(e4, k_code).?);
+        try testing.expectEqual(@as(i64, ec_method_not_found), intField(e4, k_code).?);
         try testing.expectEqualStrings("甲", strField(e4, k_message).?);
     }
     var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
@@ -2289,4 +2306,60 @@ test "222 T0：诊断严重度码值族 hub 单源＋clamp 边界 round-trip＋�
     try testing.expect(std.mem.indexOf(u8, sv_face[3].needle, "Hint") != null);
     asserts += 4;
     std.debug.print("222 T0 asserts={d}\n", .{asserts});
+}
+
+// A3 补钉助手：应答帧 reparse 后回读 error.code 精确值——串钉只钉前缀，加尾漂即漏网。
+fn expectErrCode(tg: std.mem.Allocator, frame: []const u8, want: i64) !void {
+    var p = try std.json.parseFromSlice(std.json.Value, tg, frame, .{});
+    defer p.deinit();
+    const e = objIn(asObject(p.value).?.get(k_error)).?;
+    try testing.expectEqual(want, intField(e, k_code).?);
+}
+
+// 223 T0（第 223 轮 · D91）：错误码族 hub——A1 三枚协议值钉／A2 f_error_response 三码渲染
+// reparse round-trip／A3 handle 活体三臂改严形钉（坏 JSON→-32700、不支持方法→-32601、
+// 根非对象→-32600——P4 加尾漂移形再现即红）／A4 errors_face 成员数钉＋派生形钉。
+test "223 T0：JSON-RPC 错误码族 hub 单源＋应答体 round-trip＋客户端应答面钉（第 223 轮）——D91" {
+    const tg = testing.allocator;
+    // A1 三枚协议值钉
+    try testing.expectEqual(@as(i64, -32700), ec_parse_error);
+    try testing.expectEqual(@as(i64, -32600), ec_invalid_request);
+    try testing.expectEqual(@as(i64, -32601), ec_method_not_found);
+    // A2 f_error_response 渲染 round-trip：三码渲染后以 k_code 回读——与 handle 应答同骨
+    const mj = "\"x\"";
+    const codes = [_]i64{ ec_parse_error, ec_invalid_request, ec_method_not_found };
+    for (codes) |code| {
+        const fr = try std.fmt.allocPrint(tg, f_error_response, .{ "1", code, mj });
+        defer tg.free(fr);
+        var p = try std.json.parseFromSlice(std.json.Value, tg, fr, .{});
+        defer p.deinit();
+        const e = objIn(asObject(p.value).?.get(k_error)).?;
+        try testing.expectEqual(code, intField(e, k_code).?);
+    }
+    // A3 handle 活体三臂改严形钉（键前缀＋派生数值逐字节）
+    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(tg, &lang);
+    defer srv.deinit();
+    var out: OutList = .empty;
+    defer freeOut(tg, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/completion\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null);
+    // 加尾形（-32601→-326011）子串形漏网——补 reparse 精确值钉封死（t2 P4 静默面转锚）。
+    try expectErrCode(tg, out.items[0], ec_method_not_found);
+    freeOut(tg, &out);
+    try srv.handle("not-json{{{", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_parse_error})) != null);
+    try expectErrCode(tg, out.items[0], ec_parse_error);
+    freeOut(tg, &out);
+    try srv.handle("[]", &out); // 根非对象形
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_invalid_request})) != null);
+    try expectErrCode(tg, out.items[0], ec_invalid_request);
+    freeOut(tg, &out);
+    // A4 errors_face 成员数钉＋needle 派生形钉
+    try testing.expectEqual(@as(usize, 1), errors_face.len);
+    try testing.expectEqualStrings("error: { code: -32601", errors_face[0].needle);
 }
