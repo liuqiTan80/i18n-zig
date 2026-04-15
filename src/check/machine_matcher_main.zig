@@ -17,6 +17,7 @@ const paths = @import("zzc_core").paths; // 第 210 轮 D78：程序名单一真
 const lid = @import("zzc_core").lang_id; // 第 215 轮 D83：编辑器语言标识族真值与三面对账 needle 清单
 const lcfg = @import("zzc_core").lsp_cfg; // 第 216 轮 D84：LSP 客户端接线族真值与清单/客户端两面 needle 清单
 const jrpc = @import("zzc_core").lsp_jsonrpc; // 第 217 轮 D85：LSP 基座协议帧族真值与 client_frames.js 对面 needle 清单
+const lsp_srv = @import("zzc_core").lsp_server; // 第 218 轮 D86：LSP 方法名族真值与 extension.js 对面 needle 清单
 
 /// 一面（needle 清单）逐字节对账：缺任一枚即分道退出。判据（needle 与后果描述）全在 hub，
 /// 本函数只做「在已读入的对面文本里找」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
@@ -201,8 +202,15 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(frames);
     checkFace(frames_path, &jrpc.frames_face, frames);
 
+    // —— 对面十一：`extension.js` 的 LSP 方法名族十一员（第 218 轮 D86）。服务端 dispatch
+    //   十臂与写侧 publishDiagnostics 同客户端十一处发起/消费面此前互不引用，守卫 214–217
+    //   核过图例/标识/接线/帧形而从未核方法词——t2 探针 P1–P4 四路 js 侧改名 571/571 全绿
+    //   静默，真跑 P7 坐实漂形 didSave 不发诊断且零应答：功能级断裂而构建链恒绿。
+    //   本片复用对面四已读的 ext（零新增 I/O），按 hub needle 清单逐字节对账。
+    checkFace(ext_path, &lsp_srv.methods_face, ext);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
     );
 }

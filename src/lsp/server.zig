@@ -100,6 +100,41 @@ pub fn parseClientLegendArray(comptime body: []const u8) ?[legend_types.len][]co
     return out;
 }
 
+/// LSP 方法名族（第 218 轮 D86 单一真值）：服务端 dispatch 十臂、`publishDiagnostics` 通知
+/// 写侧（`publishRaw`）与客户端 `editors/vscode/extension.js` 的十一处发起/消费面共此一份——
+/// 此前两侧互不引用（t2 探针 P1–P4 实锤 js 侧改名对构建链零信号、真跑 P7 坐实漂形 `didSave`
+/// 不发诊断且无任何应答——通知形失联静默），方法词分道即握手不成/诊断冻结/悬停永空，
+/// 功能级断裂而测试恒绿。值钉与对面 needle 形钉见本文件 218 T0；客户端对面由守卫步
+/// check-machine-matcher 的对面十一对账（复用对面四已读 `extension.js`，零新增 I/O；
+/// 202/203 轮判例）。FaceCheck/missing 判据复用 `jsonrpc.zig` 的 217 形制，不另立第二套。
+pub const m_initialize = "initialize";
+pub const m_initialized = "initialized";
+pub const m_shutdown = "shutdown";
+pub const m_exit = "exit";
+pub const m_didOpen = "textDocument/didOpen";
+pub const m_didChange = "textDocument/didChange";
+pub const m_didClose = "textDocument/didClose";
+pub const m_didSave = "textDocument/didSave";
+pub const m_hover = "textDocument/hover";
+pub const m_semanticTokensFull = "textDocument/semanticTokens/full";
+pub const m_publishDiagnostics = "textDocument/publishDiagnostics";
+
+/// 对面·`extension.js` 十一枚 needle（守卫判据的构造也在 hub，守卫视仅只读 I/O——
+/// 同 215/216/217 形制；序：生命周期四 → 文档同步四 → 请求二 → 服务端通知消费一）。
+pub const methods_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = "request('" ++ m_initialize ++ "', initialize)", .why = "客户端握手发起词须逐字节等于服务端 dispatch 真值——分道即 initialize 应答都收不了，LSP 全废（真跑 P7 坐实漂形零应答）" },
+    .{ .needle = "method: '" ++ m_initialized ++ "', params: {} }", .why = "初始化完毕通知词须等于服务端真值——通知形无应答，分道即服务端静默丢弃、无人感知" },
+    .{ .needle = "id: ++seq, method: '" ++ m_shutdown ++ "' }", .why = "关闭请求发起词须等于服务端真值——分道即收到 -32601 而非 null 应答，退出序列退化为强杀" },
+    .{ .needle = "method: '" ++ m_exit ++ "' })", .why = "退出通知词须等于服务端真值——分道即服务端不置停旗标，只能等管道 EOF 兜底（附 ` })` 尾防误配进程级 child.on('exit') 面）" },
+    .{ .needle = "method: '" ++ m_didOpen ++ "',", .why = "打开同步发起词须等于服务端真值——分道即文档不入表，诊断/悬停/语义 token 全空" },
+    .{ .needle = "method: '" ++ m_didChange ++ "',", .why = "全文变更同步词须等于服务端真值——分道即诊断冻结在打开一刻，键击零波形" },
+    .{ .needle = "method: '" ++ m_didClose ++ "',", .why = "关闭清理词须等于服务端真值——分道即服务端文档表泄漏且波浪线不清空" },
+    .{ .needle = "method: '" ++ m_didSave ++ "',", .why = "保存触发 on-save 语义诊断的词须等于服务端真值——分道即语义编译失联（t2 P1 静默 + 真跑 P7 坐实漂形不发诊断）" },
+    .{ .needle = "request('" ++ m_hover ++ "', {", .why = "悬停请求词须等于服务端真值——分道即悬停永空（t2 P3 静默面）" },
+    .{ .needle = "request('" ++ m_semanticTokensFull ++ "', {", .why = "语义 token 请求词须等于服务端真值——分道即母语高亮退白底" },
+    .{ .needle = "msg.method === '" ++ m_publishDiagnostics ++ "'", .why = "服务端发布诊断通知的消费订阅词须等于 publishRaw 写侧真值——分道即服务端照发、客户端全瞎，诊断面板恒空（t2 P2 静默面）" },
+};
+
 pub const OutList = std.ArrayList([]const u8);
 
 /// 语义诊断项（第 159 轮 · on-save 语义接入）：坐标已是文档 text 的 0 基行 + 0 基
@@ -314,7 +349,7 @@ pub const Server = struct {
         const idv = root.get("id");
         const params_obj = objIn(root.get("params"));
 
-        if (std.mem.eql(u8, method, "initialize")) {
+        if (std.mem.eql(u8, method, m_initialize)) {
             // textDocumentSync 升级为对象形（第 159 轮）：声明 openClose + 全量 change + save（includeText:false，
             // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
             // semanticTokensProvider（第 161 轮）：声明语义 token 图例（token 类型索引即下表顺序）+ full 供给，
@@ -323,16 +358,16 @@ pub const Server = struct {
             try self.respond(out, idv, res);
             return;
         }
-        if (std.mem.eql(u8, method, "initialized")) return; // 通知、无应答
-        if (std.mem.eql(u8, method, "shutdown")) {
+        if (std.mem.eql(u8, method, m_initialized)) return; // 通知、无应答
+        if (std.mem.eql(u8, method, m_shutdown)) {
             try self.respond(out, idv, "null");
             return;
         }
-        if (std.mem.eql(u8, method, "exit")) {
+        if (std.mem.eql(u8, method, m_exit)) {
             self.stop = true;
             return;
         }
-        if (std.mem.eql(u8, method, "textDocument/didOpen")) {
+        if (std.mem.eql(u8, method, m_didOpen)) {
             const p = params_obj orelse return;
             const td = objIn(p.get("textDocument")) orelse return;
             const uri = strField(td, "uri") orelse return;
@@ -341,7 +376,7 @@ pub const Server = struct {
             try self.publish(out, uri, text);
             return;
         }
-        if (std.mem.eql(u8, method, "textDocument/didChange")) {
+        if (std.mem.eql(u8, method, m_didChange)) {
             const p = params_obj orelse return;
             const td = objIn(p.get("textDocument")) orelse return;
             const uri = strField(td, "uri") orelse return;
@@ -358,7 +393,7 @@ pub const Server = struct {
             try self.publish(out, uri, text);
             return;
         }
-        if (std.mem.eql(u8, method, "textDocument/didClose")) {
+        if (std.mem.eql(u8, method, m_didClose)) {
             const p = params_obj orelse return;
             const td = objIn(p.get("textDocument")) orelse return;
             const uri = strField(td, "uri") orelse return;
@@ -371,7 +406,7 @@ pub const Server = struct {
             try self.publishRaw(out, uri, "[]");
             return;
         }
-        if (std.mem.eql(u8, method, "textDocument/didSave")) {
+        if (std.mem.eql(u8, method, m_didSave)) {
             const p = params_obj orelse return;
             const td = objIn(p.get("textDocument")) orelse return;
             const uri = strField(td, "uri") orelse return;
@@ -380,11 +415,11 @@ pub const Server = struct {
             try self.publishSave(out, uri, text);
             return;
         }
-        if (std.mem.eql(u8, method, "textDocument/hover")) {
+        if (std.mem.eql(u8, method, m_hover)) {
             try self.hover(out, idv, params_obj);
             return;
         }
-        if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+        if (std.mem.eql(u8, method, m_semanticTokensFull)) {
             try self.semanticTokensFull(out, idv, params_obj);
             return;
         }
@@ -471,7 +506,7 @@ pub const Server = struct {
         defer gpa.free(uri_js);
         try out.append(gpa, try std.fmt.allocPrint(
             gpa,
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/publishDiagnostics\",\"params\":{{\"uri\":{s},\"diagnostics\":{s}}}}}",
+            "{{\"jsonrpc\":\"2.0\",\"method\":\"" ++ m_publishDiagnostics ++ "\",\"params\":{{\"uri\":{s},\"diagnostics\":{s}}}}}",
             .{ uri_js, diags_json },
         ));
     }
@@ -1761,4 +1796,74 @@ test "第 214 轮 T1 图例派生面与客户端声明判据：needle/legend_jso
     try testing.expect(parseClientLegendArray("'a', 'b'") == null);
     try testing.expect(parseClientLegendArray("'keyword', 'type', 'function', 'variable', 'string', 'comment', 'number', 'extra'") == null);
     try testing.expect(parseClientLegendArray("'unclosed, 'x'") == null);
+}
+
+// ---------------------------------------------------------------------------
+// 第 218 轮 D86：LSP 方法名族单一真值钉
+// ---------------------------------------------------------------------------
+
+test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + 判据正反小样 + dispatch 同骨 round-trip + 覆盖钉（防 js 侧改名静默失联而构建链恒绿）" {
+    // A1 值钉：十一枚真值逐字节锚定 LSP 标准词形——改真值必先在此声明意图（t2 P5/P6 坐实
+    // 旧形下 src 侧漂移仅同文件手抄 fixture 自照红，本钉把「改词」变成显式动作）。
+    try testing.expectEqualStrings("initialize", m_initialize);
+    try testing.expectEqualStrings("initialized", m_initialized);
+    try testing.expectEqualStrings("shutdown", m_shutdown);
+    try testing.expectEqualStrings("exit", m_exit);
+    try testing.expectEqualStrings("textDocument/didOpen", m_didOpen);
+    try testing.expectEqualStrings("textDocument/didChange", m_didChange);
+    try testing.expectEqualStrings("textDocument/didClose", m_didClose);
+    try testing.expectEqualStrings("textDocument/didSave", m_didSave);
+    try testing.expectEqualStrings("textDocument/hover", m_hover);
+    try testing.expectEqualStrings("textDocument/semanticTokens/full", m_semanticTokensFull);
+    try testing.expectEqualStrings("textDocument/publishDiagnostics", m_publishDiagnostics);
+    // A2 needle 形钉：十一枚对面声明形逐字节锚当前 extension.js 活路形——needle 拼装改样
+    // 即红，免得守卫与对面两头猜书写形。
+    try testing.expectEqualStrings("request('initialize', initialize)", methods_face[0].needle);
+    try testing.expectEqualStrings("method: 'initialized', params: {} }", methods_face[1].needle);
+    try testing.expectEqualStrings("id: ++seq, method: 'shutdown' }", methods_face[2].needle);
+    try testing.expectEqualStrings("method: 'exit' })", methods_face[3].needle);
+    try testing.expectEqualStrings("method: 'textDocument/didOpen',", methods_face[4].needle);
+    try testing.expectEqualStrings("method: 'textDocument/didChange',", methods_face[5].needle);
+    try testing.expectEqualStrings("method: 'textDocument/didClose',", methods_face[6].needle);
+    try testing.expectEqualStrings("method: 'textDocument/didSave',", methods_face[7].needle);
+    try testing.expectEqualStrings("request('textDocument/hover', {", methods_face[8].needle);
+    try testing.expectEqualStrings("request('textDocument/semanticTokens/full', {", methods_face[9].needle);
+    try testing.expectEqualStrings("msg.method === 'textDocument/publishDiagnostics'", methods_face[10].needle);
+    // A3 判据正反小样：真 extension.js 实形为「不缺」；P1–P4 探针漂形为「缺」（本轮把
+    // 四路静默面预先钉为有锚）；exit 针附尾防误配：进程级 child.on('exit') 形不算命中。
+    try testing.expect(!jsonrpc.missing("request('initialize', initialize).then((res) => {", methods_face[0].needle));
+    try testing.expect(!jsonrpc.missing("send({ jsonrpc: '2.0', method: 'initialized', params: {} });", methods_face[1].needle));
+    try testing.expect(!jsonrpc.missing("send({ jsonrpc: '2.0', id: ++seq, method: 'shutdown' });", methods_face[2].needle));
+    try testing.expect(!jsonrpc.missing("send({ jsonrpc: '2.0', method: 'exit' });", methods_face[3].needle));
+    try testing.expect(!jsonrpc.missing("send({ jsonrpc: '2.0', method: 'textDocument/didSave', params: 0 });", methods_face[7].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/hover', {", methods_face[8].needle));
+    try testing.expect(!jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnostics') {", methods_face[10].needle));
+    try testing.expect(jsonrpc.missing("send({ jsonrpc: '2.0', method: 'textDocument/didSve', params: 0 });", methods_face[7].needle)); // P1 形
+    try testing.expect(jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnosticX') {", methods_face[10].needle)); // P2 形
+    try testing.expect(jsonrpc.missing("const res = await request('textDocument/hove', {", methods_face[8].needle)); // P3 形
+    try testing.expect(jsonrpc.missing("request('initializeX', initialize).then(() => {});", methods_face[0].needle)); // P4 形
+    try testing.expect(jsonrpc.missing("child.on('exit', () => { ready = false; });", methods_face[3].needle)); // 防误配反样
+    // A4 dispatch 同骨 round-trip：以 hub 真值构造的报文必命中活臂（initialize 有应答、
+    // didOpen 发诊断且 method 词等于写侧真值）；真值加尾即落不支持面 -32601（漂移的
+    // 运行期后果钉，不再只靠同文件手抄 fixture 自照）。
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"" ++ m_initialize ++ "\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":7") != null);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"" ++ m_didOpen ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.zz\",\"text\":\"常数 a = 1，\\n\"}}}", &out);
+    try testing.expectEqual(@as(usize, 2), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[1], "\"method\":\"" ++ m_publishDiagnostics ++ "\"") != null); // 写侧词即 hub 真值（publishRaw 委派）
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"" ++ m_initialize ++ "X\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 3), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[2], "-32601") != null); // 漂形落不支持面（通知形则静默丢弃，请求形必报错）
+    // A5 覆盖钉：十一枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
+    try testing.expectEqual(@as(usize, 11), methods_face.len);
 }
