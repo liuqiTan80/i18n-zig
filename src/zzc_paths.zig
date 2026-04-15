@@ -85,6 +85,12 @@ pub const logs_dir: []const u8 = "logs";
 /// 未翻译清单文件名（`logs_dir` 下的落点名；`pure_filter.default_log_path` 自此派生，第 197 轮 D64 的公开面位置不动）。
 pub const log_file_name: []const u8 = "untranslated_phrases.json";
 
+/// eject 缺省导出目录名（不带 `[目录]` 参数时的落点，第 213 轮 D81）：同值字面量散在
+/// `main.zig` 缺省 dest 与报错文案示例、`cli/args.zig` usage「默认 standard/」与仓根
+/// `.gitignore` 的 `**/standard/` 条目四处互不引用——t2 探针 P1 改缺省 dest → 559/559 全绿
+/// （真跑 eject 落 `stan-d/` 而 usage/忽略面分道）、P3 删忽略条目 → 守卫恒 OK（旧清单不含本员）。
+pub const eject_default_dest: []const u8 = "standard";
+
 /// 我方**落盘族**全员（第 202 轮 D70）：凡我方会在工程根写出的目录/文件路径都须列在此处，
 /// 由 `zig build check-ignore-coverage` 逐个核对是否被仓根 `.gitignore` 覆盖——清单本身是守卫的输入，
 /// 故新增成员即自动进入覆盖核对；测试图另以「首段必落在族根集内」钉住其形制（202 T0 A2）。
@@ -98,6 +104,9 @@ pub const disk_family = [_][]const u8{
     check_root,
     logs_dir,
     logs_dir ++ "/" ++ log_file_name,
+    // 第 213 轮 D81：在工程根跑不带参数的 `zzc eject` 会写出本目录——旧形制下它只在
+    // `.gitignore` 里以 `**/standard/` 孤立存在、不在核对集内，删该行守卫恒绿而产物入 `git status`。
+    eject_default_dest,
 };
 
 /// 源码面（忽略面**不得**吞掉的成员，第 202 轮 D70）：我方自己仓里的源码目录与语言包目录——与方言布局族
@@ -329,9 +338,9 @@ test "第 202 轮 T0 落盘族 ↔ .gitignore 忽略面：族根值钉 + 清单�
         try std.testing.expect(!std.fs.path.isAbsolute(p));
         try std.testing.expect(std.mem.indexOfScalar(u8, p, '\\') == null);
         const seg = if (std.mem.indexOfScalar(u8, p, '/')) |i| p[0..i] else p;
-        try std.testing.expect(std.mem.eql(u8, ".zzc", seg) or std.mem.eql(u8, "logs", seg));
+        try std.testing.expect(std.mem.eql(u8, ".zzc", seg) or std.mem.eql(u8, "logs", seg) or std.mem.eql(u8, "standard", seg)); // 第 213 轮 D81：eject 缺省落点入第三族根
     }
-    try std.testing.expectEqual(@as(usize, 9), disk_family.len);
+    try std.testing.expectEqual(@as(usize, 10), disk_family.len); // 第 213 轮收编 eject_default_dest
 
     // A3 判据形制小样（字面量给定、独立于真文件）：三形各一枚命中，注释行/无尾斜杠（文件规则）/近名/
     //    空 rules/空段一律不覆盖——判据若被放宽（如「子串含即覆盖」）即在此现形。
@@ -450,4 +459,20 @@ test "第 211 轮 T0 产品版本族：值钉／zzc_version_token 派生钉／zo
     try std.testing.expect(!zonDeclaresVersion(".minimum_zig_version = \"0.1.0\",")); // 首点锚防子串假命中
     try std.testing.expect(!zonDeclaresVersion(".version = \"0.1.0")); // 缺尾引号不算声明
     try std.testing.expect(!zonDeclaresVersion("")); // 空文本
+}
+test "第 213 轮 T0 eject 缺省目录名族：值钉＋收编落盘族＋忽略判据正反小样（防 dest↔usage↔.gitignore 四源手抄静默脱钩）" {
+    // A1 值钉：缺省导出目录名是对外的 CLI 契约（usage 与报错文案照此宣示、用户 .gitignore 照此配置），
+    // 不复用常量、直接写死（196/197 通则）。
+    try std.testing.expectEqualStrings("standard", eject_default_dest);
+    // A2 收编钉：本员必在 disk_family 核对集内——守卫据此要求忽略面覆盖它（删 `**/standard/` 即 FAIL、
+    // P3 探针盲区自此有关闸通道）。
+    var found = false;
+    for (disk_family) |p| found = found or std.mem.eql(u8, p, eject_default_dest);
+    try std.testing.expect(found);
+    // A3 判据正反小样：仓根实用形 `**/standard/` 命中；近名／无尾斜杠／裸名异形 皆不覆盖。
+    try std.testing.expect(dirIgnored("**/standard/\n", eject_default_dest));
+    try std.testing.expect(dirIgnored("**/standard/\n", eject_default_dest ++ "/build.zig")); // 首段命中即盖整树
+    try std.testing.expect(!dirIgnored("**/standar-d/\n", eject_default_dest)); // 近名不混（P1 探针形）
+    try std.testing.expect(!dirIgnored("standard\n", eject_default_dest)); // 无尾斜杠＝文件规则
+    try std.testing.expect(!dirIgnored("standard/\n", "stan-d")); // 反向：异名产物不被本条目冒充覆盖
 }

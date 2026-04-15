@@ -1570,3 +1570,9 @@ test "第 205 轮 T1 标定基线吃工具链族真值：同源断言 + 漂移�
     try std.testing.expectEqual(zzc.zig_major, parsed.major);
     try std.testing.expectEqual(zzc.zig_minor, parsed.minor);
 }
+test "第 213 轮 T1 usage eject 行默认目录名与族 hub 耦合：字面量宣示段要求命中派生形（防 usage 与缺省 dest 分道）" {
+    // usage_text 系 `\\` 逐行字面量（210/211 先例：不改写文本、以测耦合）——此处钉
+    // 「（默认 <eject_default_dest>/）」派生段必须命中；缺省 dest 或 usage 任一侧漂移即红。
+    const want = "（默认 " ++ zzc.eject_default_dest ++ "/）";
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, want) != null);
+}

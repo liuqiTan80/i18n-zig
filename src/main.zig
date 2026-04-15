@@ -743,10 +743,10 @@ const eject_ok_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.ou
 const eject_no_zig_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；未检测到 zig，无法自动验证构建。";
 
 fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
-    const dest = if (args.len > 0) args[0] else "standard";
+    const dest = if (args.len > 0) args[0] else zzc.eject_default_dest; // 第 213 轮 D81：缺省落点取族 hub（usage/文案/忽略面同源）
     // 防毁源：在做任何工作（采集/翻译/写盘/清空）前先拒绝与源码树重叠的目标。
     if (cli.ejectDestHitsSourceTree(dest)) {
-        printErr(zzc.prog_prefix ++ "eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录" ++ "（如 `" ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " standard`）。", .{dest});
+        printErr(zzc.prog_prefix ++ "eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录" ++ "（如 `" ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " " ++ zzc.eject_default_dest ++ "`）。", .{dest});
         return error.Failed;
     }
     const proj = try collectAndTranslate(zzc.default_entry, lang, table); // 第 201 轮 D69：入口真值取族 hub
