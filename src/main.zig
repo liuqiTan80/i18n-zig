@@ -31,6 +31,7 @@ const untranslated_log_path_default = @import("diag/pure_filter.zig").default_lo
 const cli = @import("cli/args.zig");
 const zzc = @import("zzc_paths.zig"); // 第 200 轮 D68：内部状态/产物路径族（符号表、产物目录、深检临时发射物）取单一真值
 const mcon = @import("machine_contract.zig"); // 第 203 轮 D71：机读出口契约族（旗标名/子命令名/单行骨架）取单一真值
+const kdiag = @import("diag/kind.zig"); // 第 208 轮 D76：机读 kind 词→LSP severity 取单一真值 hub（与生成侧 kind_zh 同源）
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
 const userpack = @import("lang/userpack.zig");
@@ -1002,11 +1003,10 @@ fn parseMachineDiag(line: []const u8) ?MachineDiag {
 }
 
 /// 机读 kind（`kind_zh` 值面）→ LSP DiagnosticSeverity（1..4）；未知退 1（错误）。
+/// 第 208 轮 D76：委派 kind 词汇 hub `severityOf`——与生成侧 `kind_zh` 共读同一真值表，
+/// 消除原先本函数内 Unicode 转义硬编与 translate.kind_zh 的两份手抄（跨模块静默漂移面）。
 fn kindSeverity(kind: []const u8) u8 {
-    if (std.mem.eql(u8, kind, "\u{8B66}\u{544A}")) return 2; // 警告
-    if (std.mem.eql(u8, kind, "\u{8BF4}\u{660E}")) return 3; // 说明
-    if (std.mem.eql(u8, kind, "\u{88AB}\u{5F15}\u{7528}\u{4E8E}")) return 4; // 被引用于
-    return 1; // 错误 / 内部错误 / 其他
+    return kdiag.severityOf(kind);
 }
 
 /// 机读 `file`（工程相对、`/` 分隔）是否属于当前文档（basename 匹配、需词边界）。
@@ -1454,6 +1454,20 @@ test "第 181 轮 T2 kindSeverity：四 Unicode 转义 kind 精确命中 + 全�
     try std.testing.expectEqual(@as(u8, 1), kindSeverity("warning")); // 英文异体
     try std.testing.expectEqual(@as(u8, 1), kindSeverity("Warning")); // 英文异体
     try std.testing.expectEqual(@as(u8, 1), kindSeverity("ＷＡＲＮ")); // 全角英文
+}
+
+test "第 208 轮 Ｔ１ kind 词汇跨模块 round-trip 穷举对账：生成侧 en→zh 喂消费侧 kindSeverity 必得 hub 声明 severity" {
+    // 真 round-trip 锚：以生成侧实际使用的映射（hub `en_to_zh`、即 translate.kind_zh）把英文 zig
+    // 种类名渲成母语 kind 词，再喂消费侧 kindSeverity（LSP 严重级），逐条须等于 hub 声明的 severity。
+    // 原缺口：kind_zh 与 kindSeverity 各持一份手抄、无测把生成 token 喂回消费侧（P1 漂移全绿坐实）。
+    for (kdiag.entries) |e| {
+        const gen_zh = kdiag.lookupZh(e.en).?; // 生成侧实际渲出的 kind 段词
+        try std.testing.expectEqualStrings(e.zh, gen_zh);
+        try std.testing.expectEqual(e.severity, kindSeverity(gen_zh)); // 消费侧据同一 token 定级
+    }
+    // 未知/未收录 kind（如 zzc 原生「词法」、英文异体）恒退 1，不误升为 warning/info/hint。
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("词法"));
+    try std.testing.expectEqual(@as(u8, 1), kindSeverity("warning"));
 }
 
 test "第 181 轮 T3 fileMatchesDoc：后缀精确 / 等长 / 词边界门 / 伪后缀拒" {

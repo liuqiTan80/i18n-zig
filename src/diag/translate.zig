@@ -17,6 +17,7 @@ const PureFilter = @import("pure_filter.zig").PureFilter; // 取嵌套 struct，
 const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：内部路径族的隐藏判据与族成员同源
 const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读单行格式串取契约 hub 真值
+const kdiag = @import("kind.zig"); // 第 208 轮 D76：机读 kind 词汇(en↔zh↔severity)取单一真值 hub
 
 /// 产品时间源（F3）：主层启动时经 `setIo` 注入；单测图不注入保持默认 null → 取时回 0，
 /// 诊断纯函数测试图不被 Io 污染（D7 可测性守则）。
@@ -42,13 +43,8 @@ pub const Unit = struct {
     map: ColumnMap,
 };
 
-const kind_zh = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "error", "错误" },
-    .{ "warning", "警告" },
-    .{ "note", "说明" },
-    .{ "referenced by", "被引用于" },
-    .{ "unknown", "内部错误" },
-});
+// 机器 kind 段词表已下沉至 D76 单一真值 hub `diag/kind.zig`：本文件经 `kdiag.lookupZh`（en→zh）
+// 与 `kdiag.zh_values`（值面·machineHead 判据）读之，消费侧 main.kindSeverity 同源读 `severityOf`。
 
 fn isIdentChar(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_';
@@ -121,7 +117,7 @@ pub fn renderDiag(
     msg: []const u8,
     filter: ?*PureFilter, // 纯母语过滤器（可选）
 ) ![]const u8 {
-    const kind_cn = kind_zh.get(kind) orelse kind;
+    const kind_cn = kdiag.lookupZh(kind) orelse kind;
     const msg_native = try unmangleText(gpa, msg, table);
     defer gpa.free(msg_native);
     const m = matchDiag(lang, msg_native);
@@ -201,7 +197,7 @@ fn machineHead(line: []const u8) ?struct { kind: []const u8, msg: []const u8 } {
     if (colon == 0) return null;
     if (line.len < colon + 2 or line[colon + 1] != ' ') return null;
     const kind = line[0..colon];
-    for (kind_zh.values()) |v| {
+    for (kdiag.zh_values) |v| {
         if (std.mem.eql(u8, v, kind)) return .{ .kind = kind, .msg = line[colon + 2 ..] };
     }
     return null;
@@ -682,7 +678,7 @@ pub fn translateStderr(
                 }
             }
             defer if (owned_filtered) |o| gpa.free(o);
-            const kind_cn = kind_zh.get("error") orelse "error";
+            const kind_cn = kdiag.lookupZh("error") orelse "error";
             try appendPrintF(&out, gpa, "{s}: {s}\n", .{ kind_cn, shown });
             if (m.tip.len != 0) {
                 try appendPrintF(&out, gpa, "  \u{1f4a1} {s}\n", .{m.tip});
@@ -2956,6 +2952,35 @@ test "machineLines：块/说明/已是单行/无位量块/孤立位量行/透传
     const k = try machineLines(gpa, "error: leaked english\n");
     defer gpa.free(k);
     try std.testing.expectEqualStrings("error: leaked english\n", k);
+}
+
+// 第 208 轮 D76：生成侧词面与 kind 词汇 hub 同源对账——本文件经 kdiag.lookupZh 取 en→zh。
+// 除静态对账外，更跑真 `renderDiag`：渲英文种类名 → 机器行 kind 段必等于 hub 声明的 zh 词。
+// 原缺口：生成侧本地 `kind_zh` 与消费侧各持手抄，P1 漂移生成值时全仓无测把实际渲染输出
+// 回对 hub。本测把「renderDiag 实际输出的 kind 段」钉在 hub 真值上——若生成侧重立本地手抄
+// 并与 hub 分道，本测即红（与 main 侧 208 T1 于 hub 中会，合成 en→渲染→severity 全链）。
+test "第 208 轮 T2 生成侧 kind 词面 == hub 真值（静态 en→zh + 真 renderDiag 输出 kind 段逐字节）" {
+    for (kdiag.entries) |e| {
+        try std.testing.expectEqualStrings(e.zh, kdiag.lookupZh(e.en).?);
+    }
+    // 反向：hub 值面集合与 machineHead 判据所取 zh_values 等长（不漏词）。
+    try std.testing.expectEqual(kdiag.entries.len, kdiag.zh_values.len);
+
+    // 真渲染：逐条以英文 zig 种类名走 renderDiag，输出行首 kind 段必为 hub 声明的 zh 词。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    for (kdiag.entries) |e| {
+        const rendered = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 6, 8, e.en, "probe", null);
+        defer gpa.free(rendered);
+        try std.testing.expect(rendered.len > e.zh.len + 2);
+        try std.testing.expectEqualStrings(e.zh, rendered[0..e.zh.len]); // 行首 kind 段 == hub 值
+        try std.testing.expectEqualStrings(": ", rendered[e.zh.len .. e.zh.len + 2]); // 紧跟 kind 分隔
+    }
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {

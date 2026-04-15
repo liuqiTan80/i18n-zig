@@ -8,6 +8,7 @@ pub const registry = @import("lang/registry.zig");
 pub const userpack = @import("lang/userpack.zig");
 pub const fullwidth = @import("diag/fullwidth.zig");
 pub const diag = @import("diag/translate.zig");
+pub const kind = @import("diag/kind.zig"); // 第 208 轮 D76：机读 kind 词汇单一真值 hub
 pub const cli = @import("cli/args.zig");
 pub const file_io = @import("file_io.zig");
 pub const tmlang = @import("editor/tmlang.zig");
@@ -29,6 +30,7 @@ test {
     _ = userpack;
     _ = fullwidth;
     _ = diag;
+    _ = kind;
     _ = cli;
     _ = file_io;
     _ = tmlang;
