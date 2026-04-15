@@ -175,6 +175,19 @@ pub const k_error = "error";
 pub const k_code = "code";
 pub const v_markdown = "markdown";
 
+/// —— D90 诊断严重度码值族（第 222 轮）：LSP `DiagnosticSeverity` 四枚数值码语义映射
+/// （1=Error／2=Warning／3=Information／4=Hint）——src 侧 clamp 边界（`semItem` 的
+/// `>= 1 and <= 4 else 1`）、快路恒码（`f_fast_item` 之 `:1`）、测侧数值钉，同客户端
+/// `extension.js` `sev()` 四支硬编（`s === 1 ? ...Error : s === 2 ? ...Warning :
+/// s === 3 ? ...Information : ...Hint`）互为跨侧手抄、互不引用——守卫 214–221 核过
+/// 结果体键词而从未核码值语义；t2 探针 P1/P2/P6 js 映射漂／对调全绿静默，P3 clamp
+/// 上界 4→3 亦全绿静默（测面对边界 4 零采样钉——Hint 级语义项被钳成 Error、分级虚报）。
+/// `sv_*` 四枚为唯一真值，clamp 界、快路渲染、`sv_face` needle 数值与测侧数值钉全由此派生。
+pub const sv_error: u8 = 1;
+pub const sv_warning: u8 = 2;
+pub const sv_information: u8 = 3;
+pub const sv_hint: u8 = 4;
+
 /// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
 const ek_jsonrpc = "\"" ++ k_jsonrpc ++ "\"";
 const ek_id = "\"" ++ k_id ++ "\"";
@@ -207,7 +220,7 @@ const f_error_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ 
 const f_range_json = "{{" ++ ek_start ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}," ++ ek_end ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}}}";
 const f_publish_diagnostics = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_method ++ ":\"" ++ m_publishDiagnostics ++ "\"," ++ ek_params ++ ":{{" ++ ek_uri ++ ":{s}," ++ ek_diagnostics ++ ":{s}}}}}";
 const f_sem_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
-const f_fast_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":1," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
+const f_fast_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
 const f_hover_result = "{{" ++ ek_contents ++ ":{{" ++ ek_kind ++ ":" ++ em_markdown ++ "," ++ ek_value ++ ":{s}}}," ++ ek_range ++ ":{s}}}";
 
 /// 消息本体形串骨架（写侧拼接与测内 fixture 共用派生——同 214 `legend_json` 同骨形制：
@@ -242,6 +255,16 @@ pub const results_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "if (!res || !res." ++ k_contents ++ ")", .why = "hover 结果 contents 守门读——漂即悬停恒 null（t2 P3 静默面）" },
     .{ .needle = "res." ++ k_contents ++ "." ++ k_value ++ " ||", .why = "contents.value 读须等于 f_hover_result 写侧键——漂即悬停正文坠空串" },
     .{ .needle = "contentFormat: ['" ++ v_markdown ++ "'", .why = "hover 声明的 contentFormat 值须等于 f_hover_result 写侧 kind 值——漂即声明面与供给面格式分道（t2 P4 静默面）" },
+};
+
+/// 对面·`extension.js` severity 码值映射面 needle 清单（守卫对面十四——同 `results_face`
+/// 形制）。四支硬编的数值由 `sv_*` 派生 comptime 拼出：js 映射表与 src clamp/快路码值
+/// 分道即诊断分级静默错色（t2 P1/P2/P3/P6 全绿静默面转锚）。
+pub const sv_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = std.fmt.comptimePrint("s === {d} ? vscode.DiagnosticSeverity.Error", .{sv_error}), .why = "sev() 首支数值＋落点词逐字节钉——1↔Error 对调即错误降级红报（t2 P1/P2 静默面）" },
+    .{ .needle = std.fmt.comptimePrint(": s === {d} ? vscode.DiagnosticSeverity.Warning", .{sv_warning}), .why = "sev() 第二支——2↔Warning 漂即警告错渲染" },
+    .{ .needle = std.fmt.comptimePrint(": s === {d} ? vscode.DiagnosticSeverity.Information", .{sv_information}), .why = "sev() 第三支——3↔Information 漂即信息级错渲染" },
+    .{ .needle = ": vscode.DiagnosticSeverity.Hint);", .why = "sev() 兜底支落点词形钉——VS Code 枚举名系 js 侧单面词（src 无同概念真值），此枚为码值族穷尽后的兜底臂锚，漂即未知码虚报灰字（t2 P6 静默面）" },
 };
 
 pub const OutList = std.ArrayList([]const u8);
@@ -593,7 +616,7 @@ pub const Server = struct {
     fn semItem(self: *Server, s: SemanticItem) ![]const u8 {
         const gpa = self.gpa;
         const w = if (s.char_len == 0) 1 else s.char_len;
-        const sev = if (s.severity >= 1 and s.severity <= 4) s.severity else 1;
+        const sev = if (s.severity >= sv_error and s.severity <= sv_hint) s.severity else sv_error;
         const range = try std.fmt.allocPrint(gpa, f_range_json, .{ s.line, s.character, s.line, s.character + w });
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, s.message);
@@ -656,7 +679,7 @@ pub const Server = struct {
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, msg);
         defer gpa.free(msg_js);
-        return std.fmt.allocPrint(gpa, f_fast_item, .{ range, msg_js });
+        return std.fmt.allocPrint(gpa, f_fast_item, .{ range, sv_error, msg_js });
     }
 
     /// 悬停：光标词（含点链）反查语言包；未命中/越界/文档不在表 → result null。
@@ -1044,7 +1067,7 @@ fn fakeBoundarySemanticProvider(ctx: *anyopaque, uri: []const u8, text: []const 
 // 假语义供给器（第 159 轮单测）：返回一个静态借用项，验核内合并与保存门控。
 var fake_sem_marker: u8 = 0;
 var fake_sem_items = [_]SemanticItem{
-    .{ .line = 0, .character = 3, .char_len = 4, .severity = 1, .message = "错误: 假语义诊断XYZ" },
+    .{ .line = 0, .character = 3, .char_len = 4, .severity = sv_error, .message = "错误: 假语义诊断XYZ" },
 };
 fn fakeSemanticProvider(ctx: *anyopaque, uri: []const u8, text: []const u8) []SemanticItem {
     _ = ctx;
@@ -1348,7 +1371,7 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
     try testing.expectEqual(@as(i64, 2), intField(s0, k_line).?);
     try testing.expectEqual(@as(i64, 5), intField(s0, k_character).?);
     try testing.expectEqual(@as(i64, 1), intField(e0, k_character).? - intField(s0, k_character).?); // w=1
-    try testing.expectEqual(@as(i64, 1), intField(d0, k_severity).?); // 99→1
+    try testing.expectEqual(@as(i64, sv_error), intField(d0, k_severity).?); // 99→sv_error 兜底
 
     // item 1: char_len=3, severity=0 → clamp 1
     const d1 = asObject(diags[1]).?;
@@ -1356,7 +1379,7 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
     const s1 = asObject(r1.get(k_start).?).?;
     const e1 = asObject(r1.get(k_end).?).?;
     try testing.expectEqual(@as(i64, 3), intField(e1, k_character).? - intField(s1, k_character).?); // w=3
-    try testing.expectEqual(@as(i64, 1), intField(d1, k_severity).?); // 0→1
+    try testing.expectEqual(@as(i64, sv_error), intField(d1, k_severity).?); // 0→sv_error 兜底
 
     // 断言数： 10
 }
@@ -2127,20 +2150,20 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
         defer tg.free(rg);
         const mj = try jsonrpc.jsonString(tg, "甲");
         defer tg.free(mj);
-        const one = try std.fmt.allocPrint(tg, f_sem_item, .{ rg, @as(u8, 2), mj });
+        const one = try std.fmt.allocPrint(tg, f_sem_item, .{ rg, sv_warning, mj });
         defer tg.free(one);
         var p1 = try std.json.parseFromSlice(std.json.Value, tg, one, .{});
         defer p1.deinit();
         const o1 = asObject(p1.value).?;
         try testing.expect(objIn(o1.get(k_range)) != null);
-        try testing.expectEqual(@as(i64, 2), intField(o1, k_severity).?);
+        try testing.expectEqual(@as(i64, sv_warning), intField(o1, k_severity).?);
         try testing.expectEqualStrings(paths.prog_name, strField(o1, k_source).?);
         try testing.expectEqualStrings("甲", strField(o1, k_message).?);
-        const two = try std.fmt.allocPrint(tg, f_fast_item, .{ rg, mj });
+        const two = try std.fmt.allocPrint(tg, f_fast_item, .{ rg, sv_error, mj });
         defer tg.free(two);
         var p2 = try std.json.parseFromSlice(std.json.Value, tg, two, .{});
         defer p2.deinit();
-        try testing.expectEqual(@as(i64, 1), intField(asObject(p2.value).?, k_severity).?); // 快路 severity 恒 1 值形钉
+        try testing.expectEqual(@as(i64, sv_error), intField(asObject(p2.value).?, k_severity).?); // 快路 severity 恒 sv_error 值形钉
         const three = try std.fmt.allocPrint(tg, f_hover_result, .{ mj, rg });
         defer tg.free(three);
         var p3 = try std.json.parseFromSlice(std.json.Value, tg, three, .{});
@@ -2184,7 +2207,7 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
     const st = objIn(rng.get(k_start)).?;
     try testing.expect(intField(st, k_line) != null);
     try testing.expect(intField(st, k_character) != null);
-    try testing.expectEqual(@as(i64, 1), intField(d0, k_severity).?); // 快路诊断项 severity=1
+    try testing.expectEqual(@as(i64, sv_error), intField(d0, k_severity).?); // 快路诊断项 severity=sv_error
     try testing.expectEqualStrings(paths.prog_name, strField(d0, k_source).?);
     try testing.expect(strField(d0, k_message).?.len > 0);
     // A4 hover 活体 round-trip（半角合法源·220 A3b 同骨）：result 对象回读 contents/kind/value ＋ range。
@@ -2210,4 +2233,60 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
     try testing.expect(objIn(ro.get(k_range)) != null);
     // A5 对面十三清单成员数钉：八枚 needle 全由 hub k_*/v_markdown/paths.prog_name 派生（对账在守卫对面十三）。
     try testing.expectEqual(@as(usize, 8), results_face.len);
+}
+
+// 222 T0（第 222 轮 · D90）：severity 码值族 hub——A1 四枚协议值钉／A2 clamp 边界
+// round-trip（四支在界透传＋5/0 越界兜底·t2 P3 上界漂即此钉红）／A3 快路恒码委派渲染
+// 回读／A4 sv_face 成员数钉＋派生数值形钉。
+test "222 T0：诊断严重度码值族 hub 单源＋clamp 边界 round-trip＋客户端映射面钉（第 222 轮）——D90" {
+    const tg = testing.allocator;
+    // A1：四枚码值逐一等于 LSP DiagnosticSeverity 协议数值（协议常量钉死、改动即失联）。
+    try testing.expectEqual(@as(u8, 1), sv_error);
+    try testing.expectEqual(@as(u8, 2), sv_warning);
+    try testing.expectEqual(@as(u8, 3), sv_information);
+    try testing.expectEqual(@as(u8, 4), sv_hint);
+    // A2：semItem clamp 边界 round-trip——界内四支透传、界外（5／0）兜底 sv_error。
+    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(tg, &lang);
+    defer srv.deinit();
+    const cases = [_]struct { in: u8, want: i64 }{
+        .{ .in = sv_error, .want = sv_error },
+        .{ .in = sv_warning, .want = sv_warning },
+        .{ .in = sv_information, .want = sv_information },
+        .{ .in = sv_hint, .want = sv_hint },
+        .{ .in = 5, .want = sv_error },
+        .{ .in = 0, .want = sv_error },
+    };
+    var asserts: usize = 4;
+    for (cases) |c| {
+        const j = try srv.semItem(.{ .line = 0, .character = 1, .char_len = 2, .severity = c.in, .message = "甲" });
+        defer tg.free(j);
+        const wrapped = try std.fmt.allocPrint(tg, "[{s}]", .{j});
+        defer tg.free(wrapped);
+        var parsed = try std.json.parseFromSlice(std.json.Value, tg, wrapped, .{});
+        defer parsed.deinit();
+        const o = asObject(parsed.value.array.items[0]).?;
+        try testing.expectEqual(c.want, intField(o, k_severity).?);
+        try testing.expectEqualStrings("甲", strField(o, k_message).?);
+        asserts += 2;
+    }
+    // A3：快路恒码委派——diagItem 渲染 severity 必等于 sv_error（f_fast_item 由 {d} 槽
+    // 携 hub 真值、字面 `:1` 已剿，clamp 上界漂不再能静默钳升 Hint/界外码）。
+    const fast = try srv.diagItem("x", 0, 1, "乙");
+    defer tg.free(fast);
+    const wrapped2 = try std.fmt.allocPrint(tg, "[{s}]", .{fast});
+    defer tg.free(wrapped2);
+    var p2 = try std.json.parseFromSlice(std.json.Value, tg, wrapped2, .{});
+    defer p2.deinit();
+    try testing.expectEqual(@as(i64, sv_error), intField(asObject(p2.value.array.items[0]).?, k_severity).?);
+    asserts += 1;
+    // A4：客户端映射面清单——四枚成员数钉＋首三支 needle 数值全由 sv_* comptime 派生。
+    try testing.expectEqual(@as(usize, 4), sv_face.len);
+    try testing.expectEqualStrings("s === 1 ? vscode.DiagnosticSeverity.Error", sv_face[0].needle);
+    try testing.expectEqualStrings(": s === 2 ? vscode.DiagnosticSeverity.Warning", sv_face[1].needle);
+    try testing.expectEqualStrings(": s === 3 ? vscode.DiagnosticSeverity.Information", sv_face[2].needle);
+    try testing.expect(std.mem.indexOf(u8, sv_face[3].needle, "Hint") != null);
+    asserts += 4;
+    std.debug.print("222 T0 asserts={d}\n", .{asserts});
 }
