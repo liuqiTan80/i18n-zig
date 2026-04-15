@@ -19,6 +19,7 @@ pub const paths = @import("zzc_paths.zig");
 pub const machine = @import("machine_contract.zig");
 pub const lsp_legend = @import("lsp/server.zig"); // 第 214 轮 D82：语义 token 图例单一真值（守卫步据此对账 extension.js 对面）
 pub const lang_id = @import("editor/lang_identity.zig"); // 第 215 轮 D83：编辑器语言标识族单一真值（守卫步据此对账清单/客户端/示例三面）
+pub const lsp_cfg = @import("editor/lsp_config.zig"); // 第 216 轮 D84：LSP 客户端接线族单一真值（守卫步据此对账清单/客户端两面）
 
 pub const zh_pack_bytes = @embedFile("lang/packs/中文.txt");
 
@@ -42,4 +43,5 @@ test {
     _ = paths;
     _ = machine;
     _ = lang_id;
+    _ = lsp_cfg;
 }

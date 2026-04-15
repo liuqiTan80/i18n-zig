@@ -15,10 +15,13 @@ const mcon = @import("zzc_core").machine;
 const legend = @import("zzc_core").lsp_legend; // 第 214 轮 D82：语义 token 图例真值与 `extensionDeclaresLegend` 判据
 const paths = @import("zzc_core").paths; // 第 210 轮 D78：程序名单一真值与 `buildDeclaresExe` 判据
 const lid = @import("zzc_core").lang_id; // 第 215 轮 D83：编辑器语言标识族真值与三面对账 needle 清单
+const lcfg = @import("zzc_core").lsp_cfg; // 第 216 轮 D84：LSP 客户端接线族真值与清单/客户端两面 needle 清单
 
 /// 一面（needle 清单）逐字节对账：缺任一枚即分道退出。判据（needle 与后果描述）全在 hub，
 /// 本函数只做「在已读入的对面文本里找」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
-fn checkFace(face_name: []const u8, comptime face: []const lid.FaceCheck, text: []const u8) void {
+/// `face` 取 anytype：215/216 两 hub 各自声明同形制 FaceCheck（Zig struct 名义类型互不兼容），
+/// 而搜索判据 `lid.missing` 与 `lcfg.missing` 语义逐字节相同（皆 indexOf == null），不另立第三套。
+fn checkFace(face_name: []const u8, comptime face: anytype, text: []const u8) void {
     inline for (face) |c| {
         if (lid.missing(text, c.needle)) {
             fail(
@@ -178,8 +181,17 @@ pub fn main(init: std.process.Init) !void {
     checkFace(ext_path, &lid.client_face, ext);
     checkFace(tasks_path, &lid.tasks_face, tasks);
 
+    // —— 对面八／九：LSP 客户端接线族（第 216 轮 D84）。配置命名空间／取值键名／回落程序名／
+    //   spawn 子命令词／方言旗标在 `src/` 真值（prog_name／cli.sub_lsp／cli.flag_lang）与清单声明侧、
+    //   客户端消费侧三处互不引用——既有防线只在 `tools/check-demos.ps1` 的「lsp client guard」节，
+    //   而本机与 CI 的 `zig build test` 链皆 NO_PWSH：t2 探针 P1–P6／P8 七路 568/568 全绿静默实证
+    //   这条防线对本构建链等于零（假锚防线又一实例）。两面文件皆已读过（零新增 I/O），
+    //   按 hub needle 清单对账；src 侧改名而 js 不随动即此处红——把「改名须同步客户端」变硬闸。
+    checkFace(pkg_path, &lcfg.pkg_face, pkg);
+    checkFace(ext_path, &lcfg.client_face, ext);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
     );
 }

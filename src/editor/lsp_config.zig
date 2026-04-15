@@ -1,0 +1,106 @@
+//! LSP 客户端接线契约族单一真值（第 216 轮 · D84）：客户端 `editors/vscode/extension.js` 拉起
+//! 语言服务器时消费的**配置命名空间**（`getConfiguration('zzc')`）、**键名**（`lspPath`／`lang`）、
+//! **回落二进制程序名**（`'zzc'`）、**spawn 子命令词**（`['lsp']`）与**方言旗标**（`'--lang'`），
+//! 与清单 `package.json` 声明侧（`configuration.title`／`zzc.lspPath`／`zzc.lang` 属性名）和
+//! `src/` 侧族真值（`zzc_paths.prog_name`·210 轮、`cli.sub_lsp`·206 轮、`cli.flag_lang`·207 轮）
+//! 互为手抄、互不引用。改任一点的产品后果都是**语言服务器整体失联**：命名空间或键名分道 → 用户
+//! 设置静默不生效（改 `zzc.lspPath` 仍找不到二进制、改方言不重启）；`'lsp'` 或 `'--lang'` 分道 →
+//! spawn 即报「未知子命令/未知旗标」，编辑器只剩零诊断的空壳。
+//!
+//! 本族既有防线只存在于 `tools/check-demos.ps1` 的「lsp client guard」节（第 157 轮），而本机与
+//! CI 的 `zig build test` 链皆 NO_PWSH 不可跑——t2 探针 P1–P6／P8 七路 568/568 全绿实证这条防线
+//! 对本构建链等于零；对照 P7（改 `cli.sub_lsp` 真值）4 测红，坐实 src 侧已锈、唯 js 侧不接。
+//!
+//! 设计原则（承 200/203/208/210/214/215 轮形制）：
+//!   - 派生优先：命名空间＝程序名真值，键前缀／回落二进制名／清单属性全名皆自它再派生；
+//!     子命令词与旗标名直接取 `cli` 族真值，src 侧改名即令守卫报错——把「改名须同步 js」变成硬闸；
+//!   - 判据入 hub：对面逐字节 needle 与后果说明全在本模块，守卫步只做 I/O 与退出码；
+//!   - 不可越的边界：对面文件在 `src/` 包路径之外，`@embedFile` 拦死（202 轮硬约束），跨文件对账
+//!     只能由声明了 `addFileArg` 的守卫步承担（两文件 203/214/215 轮皆已声明，本轮零新增 I/O）。
+
+const std = @import("std");
+const paths = @import("../zzc_paths.zig");
+const cli = @import("../cli/args.zig");
+
+/// 配置命名空间：`getConfiguration('<本名>')` 与清单 `configuration.title`／属性键前缀共用，
+/// 由程序名单一真值派生（承 210 轮 D78——改名即全族同动）。
+pub const namespace: []const u8 = paths.prog_name;
+
+/// 键名·可执行文件路径（清单属性 = `namespace ++ "." ++ key_lsp_path`）。
+pub const key_lsp_path: []const u8 = "lspPath";
+/// 键名·方言包（清单属性 = `namespace ++ "." ++ key_lang`）。
+pub const key_lang: []const u8 = "lang";
+
+/// 清单里的完整属性名（`contributes.configuration.properties` 的键）。
+pub const pkg_key_lsp_path: []const u8 = namespace ++ "." ++ key_lsp_path;
+/// 同上，方言包键。
+pub const pkg_key_lang: []const u8 = namespace ++ "." ++ key_lang;
+
+/// 一次对面核对项：逐字节 needle 与「分道即何为」的说明（守卫据此报错，判据不另立）。
+pub const FaceCheck = struct {
+    needle: []const u8,
+    why: []const u8,
+};
+
+/// 对面·清单 `package.json`：设置面板抬头与两枚属性全名。
+pub const pkg_face = [_]FaceCheck{
+    .{ .needle = "\"title\": \"" ++ namespace ++ "\"", .why = "contributes.configuration.title 须等于配置命名空间真值（由程序名派生）" },
+    .{ .needle = "\"" ++ pkg_key_lsp_path ++ "\": {", .why = "configuration.properties 须以「<命名空间>.lspPath」声明二进制路径键，客户端据此取值" },
+    .{ .needle = "\"" ++ pkg_key_lang ++ "\": {", .why = "configuration.properties 须以「<命名空间>.lang」声明方言键，客户端据此重启换包" },
+};
+
+/// 对面·客户端 `extension.js`：命名空间／两枚取值键／回落程序名／spawn 子命令词／方言旗标。
+pub const client_face = [_]FaceCheck{
+    .{ .needle = "getConfiguration('" ++ namespace ++ "')", .why = "客户端 getConfiguration 的命名空间须等于程序名派生真值，分道即用户设置一律读空（lspPath/lang 静默失效）" },
+    .{ .needle = ".get('" ++ key_lsp_path ++ "')", .why = "客户端取值键须与清单属性尾段同名，分道即二进制路径设置永不生效" },
+    .{ .needle = ".get('" ++ key_lang ++ "')", .why = "客户端取值键须与清单属性尾段同名，分道即方言选择永不生效" },
+    .{ .needle = ": '" ++ namespace ++ "';", .why = "留空回落的二进制名须等于程序名真值，分道即 PATH 上的 zzc 寻不到、语言服务器起不来" },
+    .{ .needle = "['" ++ cli.sub_lsp ++ "']", .why = "spawn 参数首词须等于子命令真值 `cli.sub_lsp`，src 改名而 js 不随动即「未知子命令」——语言服务器整体失联" },
+    .{ .needle = "push('" ++ cli.flag_lang ++ "'", .why = "拉起参数追加的方言旗标须等于 `cli.flag_lang` 真值，分道即非默认方言静默永不生效（js 传旧名、服务端按新名解析）" },
+};
+
+/// `text`（运行时对面全文）是否缺 `needle`（命中即已同步；缺失即分道）。守卫据此循环报错、不自立判据。
+pub fn missing(text: []const u8, comptime needle: []const u8) bool {
+    return std.mem.indexOf(u8, text, needle) == null;
+}
+
+// ———————————————————————————— 测试（216 T0）————————————————————————————
+
+const testing = std.testing;
+
+test "第 216 轮 T0 LSP 客户端接线族派生与对面 needle 形钉：命名空间派生／属性全名拼装／needle 形制／判据小样" {
+    // A1 命名空间派生钉：本族根值由程序名真值派生（改 prog_name 即全族同动·非各写一份）。
+    try testing.expectEqualStrings(paths.prog_name, namespace);
+    try testing.expectEqualStrings("zzc", namespace);
+    // A2 键值钉：两枚键名与清单属性全名的拼装形（点分分隔是 VSCode 配置寻址的唯一形制）。
+    try testing.expectEqualStrings("lspPath", key_lsp_path);
+    try testing.expectEqualStrings("lang", key_lang);
+    try testing.expectEqualStrings("zzc.lspPath", pkg_key_lsp_path);
+    try testing.expectEqualStrings("zzc.lang", pkg_key_lang);
+    try testing.expectEqualStrings(namespace ++ "." ++ key_lang, pkg_key_lang);
+    // A3 CLI 真值同源钉：子命令词与旗标名直接取 `cli` 族（src↔js 方向自此有硬闸）。
+    try testing.expectEqualStrings(cli.sub_lsp, "lsp");
+    try testing.expectEqualStrings(cli.flag_lang, "--lang");
+    // A4 needle 形钉：六枚客户端面与三枚清单面的逐字节形（形改即守卫与对面两头猜）。
+    try testing.expectEqualStrings("getConfiguration('zzc')", client_face[0].needle);
+    try testing.expectEqualStrings(".get('lspPath')", client_face[1].needle);
+    try testing.expectEqualStrings(".get('lang')", client_face[2].needle);
+    try testing.expectEqualStrings(": 'zzc';", client_face[3].needle);
+    try testing.expectEqualStrings("['lsp']", client_face[4].needle);
+    try testing.expectEqualStrings("push('--lang'", client_face[5].needle);
+    try testing.expectEqualStrings("\"title\": \"zzc\"", pkg_face[0].needle);
+    try testing.expectEqualStrings("\"zzc.lspPath\": {", pkg_face[1].needle);
+    try testing.expectEqualStrings("\"zzc.lang\": {", pkg_face[2].needle);
+    // A5 判据正反小样：命中为不缺、改名/近名为缺（含 P1–P6 探针形，坐实本轮把静默面逐一转有锚）。
+    try testing.expect(!missing("const args = ['lsp'];", client_face[4].needle));
+    try testing.expect(missing("const args = ['lsq'];", client_face[4].needle));
+    try testing.expect(missing("args.push('--lng', l);", client_face[5].needle));
+    try testing.expect(missing("getConfiguration('zzc2')", client_face[0].needle));
+    try testing.expect(missing("cfg.get('lspPat2')", client_face[1].needle));
+    try testing.expect(missing("? p.trim() : 'zzq';", client_face[3].needle));
+    try testing.expect(missing("\"zzc.lspPathX\": {", pkg_face[1].needle));
+    try testing.expect(!missing("\"zzc.lang\": {", pkg_face[2].needle));
+    // A6 面清单覆盖钉：三／六 枚——新增配置键或接线点须在此随动（防只加常量不加对账面）。
+    try testing.expectEqual(@as(usize, 3), pkg_face.len);
+    try testing.expectEqual(@as(usize, 6), client_face.len);
+}
