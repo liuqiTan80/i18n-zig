@@ -157,6 +157,24 @@ pub const k_diagnostics = "diagnostics";
 pub const k_start = "start";
 pub const k_end = "end";
 
+/// —— D89 诊断项/悬停/错误对象字段族（第 221 轮）：写侧 `semItem`/`diagItem`/`hoverAt`/
+/// `errorResponse` 形串的字段词（range/severity/source/message/contents/kind/value/error/
+/// code ＋ `markdown` 值），同客户端 `editors/vscode/extension.js` 消费面属性读
+/// （`d.range`/`d.message`/`sev(d.severity)`/`d.code`/`res.contents.value`/`contentFormat`
+/// 之 `'markdown'`）互为跨侧手抄、互不引用——守卫 214–220 核过帧形/方法词/参数键而
+/// 从未核结果体字段；js 非 source dep（t2 探针 P1–P4 字段漂全绿静默），P6 写侧 kind 漂
+/// 连测面亦零锚——字段分道即诊断波浪线/悬停渲染/错误码映射静默熄灭。
+pub const k_range = "range";
+pub const k_severity = "severity";
+pub const k_source = "source";
+pub const k_message = "message";
+pub const k_contents = "contents";
+pub const k_kind = "kind";
+pub const k_value = "value";
+pub const k_error = "error";
+pub const k_code = "code";
+pub const v_markdown = "markdown";
+
 /// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
 const ek_jsonrpc = "\"" ++ k_jsonrpc ++ "\"";
 const ek_id = "\"" ++ k_id ++ "\"";
@@ -171,12 +189,26 @@ const ek_character = "\"" ++ k_character ++ "\"";
 const ek_textDocument = "\"" ++ k_textDocument ++ "\"";
 const ek_start = "\"" ++ k_start ++ "\"";
 const ek_end = "\"" ++ k_end ++ "\"";
+const ek_range = "\"" ++ k_range ++ "\"";
+const ek_severity = "\"" ++ k_severity ++ "\"";
+const ek_source = "\"" ++ k_source ++ "\"";
+const ek_message = "\"" ++ k_message ++ "\"";
+const ek_contents = "\"" ++ k_contents ++ "\"";
+const ek_kind = "\"" ++ k_kind ++ "\"";
+const ek_value = "\"" ++ k_value ++ "\"";
+const ek_error = "\"" ++ k_error ++ "\"";
+const ek_code = "\"" ++ k_code ++ "\"";
+const em_markdown = "\"" ++ v_markdown ++ "\"";
+const eq_prog_name = "\"" ++ paths.prog_name ++ "\"";
 const ek_v20 = "\"" ++ "2.0" ++ "\"";
 const ek_method = "\"" ++ k_method ++ "\"";
 const f_result_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_result ++ ":{s}}}";
-const f_error_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s},\"error\":{{\"code\":{d},\"message\":{s}}}}}";
+const f_error_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_error ++ ":{{" ++ ek_code ++ ":{d}," ++ ek_message ++ ":{s}}}}}";
 const f_range_json = "{{" ++ ek_start ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}," ++ ek_end ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}}}";
 const f_publish_diagnostics = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_method ++ ":\"" ++ m_publishDiagnostics ++ "\"," ++ ek_params ++ ":{{" ++ ek_uri ++ ":{s}," ++ ek_diagnostics ++ ":{s}}}}}";
+const f_sem_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
+const f_fast_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":1," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
+const f_hover_result = "{{" ++ ek_contents ++ ":{{" ++ ek_kind ++ ":" ++ em_markdown ++ "," ++ ek_value ++ ":{s}}}," ++ ek_range ++ ":{s}}}";
 
 /// 消息本体形串骨架（写侧拼接与测内 fixture 共用派生——同 214 `legend_json` 同骨形制：
 /// 键词漂则 fixture 随漂、解析臂随漂，两侧不可能分道）。
@@ -196,6 +228,20 @@ pub const params_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "      " ++ k_textDocument ++ ": { uri: doc.uri.toString(), version", .why = "didChange 写侧 textDocument 键——漂即变更失联，诊断冻结在打开一刻" },
     .{ .needle = "      " ++ k_contentChanges ++ ": [{ " ++ k_text ++ ":", .why = "didChange 全文同步数组键——服务端取末项全文的入口，漂即变更被拒（t2 P3 静默面）" },
     .{ .needle = "      " ++ k_position ++ ": { " ++ k_line ++ ": pos.line, " ++ k_character ++ ": pos.character }", .why = "hover 坐标子对象键族——漂即 intField 拒、悬停永空（t2 P4 同骨）" },
+};
+
+/// 对面·`extension.js` 结果体字段族 needle 清单（守卫对面十三——同 220 `params_face` 形制，
+/// 判据入 hub）。t2 探针 P1–P4 js 消费面字段漂全绿静默、P6 写侧 kind 漂连测面亦零锚——
+/// 逐字节钉住客户端属性读面，写/读/清单三面同源。
+pub const results_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = "const r = d." ++ k_range ++ ";", .why = "诊断项 range 读侧属性须等于写侧键——漂即 r undefined、构造 Range 抛错、整批诊断被吞（t2 P1 静默面）" },
+    .{ .needle = "r." ++ k_start ++ ".line, r." ++ k_start ++ ".character, r." ++ k_end ++ ".line, r." ++ k_end ++ ".character", .why = "range 子对象四读须等于 f_range_json 写侧键族——漂即波浪线坐标塌缩到文件头/整项作废" },
+    .{ .needle = "d." ++ k_message ++ ", sev(d." ++ k_severity ++ "));", .why = "消息与severity消费读须等于写侧键——severity 漂即恒落 Hint 灰字，错误降级不可见（t2 P2 静默面）" },
+    .{ .needle = "diag." ++ k_source ++ " = '" ++ paths.prog_name ++ "';", .why = "source 标注值与写侧同源词——漂即归属过滤/状态栏计数失配" },
+    .{ .needle = "if (d." ++ k_code ++ " !== undefined", .why = "code 为诊断项可选写侧键的防御读——漂即 code 永不移交" },
+    .{ .needle = "if (!res || !res." ++ k_contents ++ ")", .why = "hover 结果 contents 守门读——漂即悬停恒 null（t2 P3 静默面）" },
+    .{ .needle = "res." ++ k_contents ++ "." ++ k_value ++ " ||", .why = "contents.value 读须等于 f_hover_result 写侧键——漂即悬停正文坠空串" },
+    .{ .needle = "contentFormat: ['" ++ v_markdown ++ "'", .why = "hover 声明的 contentFormat 值须等于 f_hover_result 写侧 kind 值——漂即声明面与供给面格式分道（t2 P4 静默面）" },
 };
 
 pub const OutList = std.ArrayList([]const u8);
@@ -552,7 +598,7 @@ pub const Server = struct {
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, s.message);
         defer gpa.free(msg_js);
-        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":{d},\"source\":\"{s}\",\"message\":{s}}}", .{ range, sev, paths.prog_name, msg_js });
+        return std.fmt.allocPrint(gpa, f_sem_item, .{ range, sev, msg_js });
     }
 
     fn publishRaw(self: *Server, out: *OutList, uri: []const u8, diags_json: []const u8) !void {
@@ -610,7 +656,7 @@ pub const Server = struct {
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, msg);
         defer gpa.free(msg_js);
-        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":1,\"source\":\"{s}\",\"message\":{s}}}", .{ range, paths.prog_name, msg_js });
+        return std.fmt.allocPrint(gpa, f_fast_item, .{ range, msg_js });
     }
 
     /// 悬停：光标词（含点链）反查语言包；未命中/越界/文档不在表 → result null。
@@ -678,7 +724,7 @@ pub const Server = struct {
         defer gpa.free(md_js);
         const range = rangeJson(gpa, text, start, end) catch return null;
         defer gpa.free(range);
-        return std.fmt.allocPrint(gpa, "{{\"contents\":{{\"kind\":\"markdown\",\"value\":{s}}},\"range\":{s}}}", .{ md_js, range }) catch return null;
+        return std.fmt.allocPrint(gpa, f_hover_result, .{ md_js, range }) catch return null;
     }
 
     /// `textDocument/semanticTokens/full`（第 161 轮）：对文档全文产语义 token 稀疏流。
@@ -850,11 +896,11 @@ test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 
     };
     try testing.expect(arr.len >= 1);
     const d0 = asObject(arr[0]).?;
-    const rng = asObject(d0.get("range").?).?;
-    const st = asObject(rng.get("start").?).?;
+    const rng = asObject(d0.get(k_range).?).?;
+    const st = asObject(rng.get(k_start).?).?;
     try testing.expectEqual(@as(i64, 0), intField(st, k_line).?);
     try testing.expectEqual(@as(i64, 8), intField(st, k_character).?);
-    const msg = strField(d0, "message").?;
+    const msg = strField(d0, k_message).?;
     try testing.expect(std.mem.indexOf(u8, msg, "词法") != null);
     try testing.expect(std.mem.indexOf(u8, msg, "半角") != null);
 }
@@ -1031,9 +1077,9 @@ test "lsp.server：didSave 合并语义项、didOpen 不含语义（保存门控
     try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"file:///s159.zz\"}}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "假语义诊断XYZ") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"severity\":1") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"character\":3") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"source\":\"" ++ paths.prog_name ++ "\"") != null); // 210：source 标注程序名同源
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_severity ++ ":1") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_character ++ ":3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ek_source ++ ":" ++ eq_prog_name) != null); // 210：source 标注程序名同源（221：改引 hub ek_/eq_ 去手抄）
     freeOut(gpa, &out);
 
     // 未 open 的 uri：didSave 无文本可算，静默不发布。
@@ -1296,21 +1342,21 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
 
     // item 0: char_len=0 → w=1, severity=99 → clamp 1
     const d0 = asObject(diags[0]).?;
-    const r0 = asObject(d0.get("range").?).?;
-    const s0 = asObject(r0.get("start").?).?;
-    const e0 = asObject(r0.get("end").?).?;
+    const r0 = asObject(d0.get(k_range).?).?;
+    const s0 = asObject(r0.get(k_start).?).?;
+    const e0 = asObject(r0.get(k_end).?).?;
     try testing.expectEqual(@as(i64, 2), intField(s0, k_line).?);
     try testing.expectEqual(@as(i64, 5), intField(s0, k_character).?);
     try testing.expectEqual(@as(i64, 1), intField(e0, k_character).? - intField(s0, k_character).?); // w=1
-    try testing.expectEqual(@as(i64, 1), intField(d0, "severity").?); // 99→1
+    try testing.expectEqual(@as(i64, 1), intField(d0, k_severity).?); // 99→1
 
     // item 1: char_len=3, severity=0 → clamp 1
     const d1 = asObject(diags[1]).?;
-    const r1 = asObject(d1.get("range").?).?;
-    const s1 = asObject(r1.get("start").?).?;
-    const e1 = asObject(r1.get("end").?).?;
+    const r1 = asObject(d1.get(k_range).?).?;
+    const s1 = asObject(r1.get(k_start).?).?;
+    const e1 = asObject(r1.get(k_end).?).?;
     try testing.expectEqual(@as(i64, 3), intField(e1, k_character).? - intField(s1, k_character).?); // w=3
-    try testing.expectEqual(@as(i64, 1), intField(d1, "severity").?); // 0→1
+    try testing.expectEqual(@as(i64, 1), intField(d1, k_severity).?); // 0→1
 
     // 断言数： 10
 }
@@ -1438,10 +1484,10 @@ test "lsp.server：strField 三分支 + result/errorResponse 骨架与 message �
     defer gpa.free(er);
     var pe = try std.json.parseFromSlice(std.json.Value, gpa, er, .{});
     defer pe.deinit();
-    const eerr = asObject(asObject(pe.value).?.get("error").?).?;
-    try testing.expectEqualStrings(emsg, strField(eerr, "message").?);
+    const eerr = asObject(asObject(pe.value).?.get(k_error).?).?;
+    try testing.expectEqualStrings(emsg, strField(eerr, k_message).?);
     asserts += 1;
-    try testing.expectEqual(@as(i64, -32601), intField(eerr, "code").?);
+    try testing.expectEqual(@as(i64, -32601), intField(eerr, k_code).?);
     asserts += 1;
 
     std.debug.print("T1 asserts={d}\n", .{asserts});
@@ -1625,7 +1671,7 @@ test "lsp.server：asObject/objIn/intField 取值器分支真形与帧根非对�
             try srv.handle(body, &out);
             try testing.expectEqual(@as(usize, 1), out.items.len);
             asserts += 1;
-            try testing.expect(std.mem.indexOf(u8, out.items[0], "\"code\":-32600") != null);
+            try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":-32600") != null);
             asserts += 1;
             try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":null") != null);
             asserts += 1;
@@ -2018,7 +2064,7 @@ test "220 T0：消息本体键族 hub 单源＋骨架渲染＋round-trip＋漂�
     // A3 round-trip 真跑（全角坏源）：f 骨架拼 didOpen 帧 → publish 帧以 k_* 键回读非空诊断数组。
     const uri_js = try jsonrpc.jsonString(tg, "file:///r220.zz");
     defer tg.free(uri_js);
-    const body_js = try jsonrpc.jsonString(tg, "标准库.调试.打印（\" + Q + \"甲\" + Q + \"）;\n");
+    const body_js = try jsonrpc.jsonString(tg, "标准库.调试.打印（\"甲\"）;\n");
     defer tg.free(body_js);
     const open = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ uri_js, body_js });
     defer tg.free(open);
@@ -2058,4 +2104,110 @@ test "220 T0：消息本体键族 hub 单源＋骨架渲染＋round-trip＋漂�
     try testing.expectEqual(@as(usize, 0), out.items.len);
     // A5 对面十二清单成员数钉：九枚 needle 全由 hub k_* 派生（对账在守卫对面十二）。
     try testing.expectEqual(@as(usize, 9), params_face.len);
+}
+// 221 T0（第 221 轮 D89）：诊断项/悬停/错误对象字段族 hub——十枚值钉 / 四模板渲染 reparse 回读
+// round-trip / didOpen→publish 诊断项字段活体回读 / hover 结果 contents 活体回读 / 对面十三数形钉。
+test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果体活体回读（第 221 轮）——D89" {
+    const tg = testing.allocator;
+    // A1 十枚值钉：hub 字段词逐一等于 LSP 协议词汇字面——改真值须声明意图。
+    try testing.expectEqualStrings("range", k_range);
+    try testing.expectEqualStrings("severity", k_severity);
+    try testing.expectEqualStrings("source", k_source);
+    try testing.expectEqualStrings("message", k_message);
+    try testing.expectEqualStrings("contents", k_contents);
+    try testing.expectEqualStrings("kind", k_kind);
+    try testing.expectEqualStrings("value", k_value);
+    try testing.expectEqualStrings("error", k_error);
+    try testing.expectEqualStrings("code", k_code);
+    try testing.expectEqualStrings("markdown", v_markdown);
+    // A2 模板渲染 round-trip：f_sem_item/f_fast_item/f_hover_result/f_error_response 渲染后 reparse，
+    // 以 k_* 回读——写形与解析形同骨；source 值由 eq_prog_name comptime 内联、与客户端 needle 同源。
+    {
+        const rg = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 0), @as(usize, 1), @as(usize, 0), @as(usize, 2) });
+        defer tg.free(rg);
+        const mj = try jsonrpc.jsonString(tg, "甲");
+        defer tg.free(mj);
+        const one = try std.fmt.allocPrint(tg, f_sem_item, .{ rg, @as(u8, 2), mj });
+        defer tg.free(one);
+        var p1 = try std.json.parseFromSlice(std.json.Value, tg, one, .{});
+        defer p1.deinit();
+        const o1 = asObject(p1.value).?;
+        try testing.expect(objIn(o1.get(k_range)) != null);
+        try testing.expectEqual(@as(i64, 2), intField(o1, k_severity).?);
+        try testing.expectEqualStrings(paths.prog_name, strField(o1, k_source).?);
+        try testing.expectEqualStrings("甲", strField(o1, k_message).?);
+        const two = try std.fmt.allocPrint(tg, f_fast_item, .{ rg, mj });
+        defer tg.free(two);
+        var p2 = try std.json.parseFromSlice(std.json.Value, tg, two, .{});
+        defer p2.deinit();
+        try testing.expectEqual(@as(i64, 1), intField(asObject(p2.value).?, k_severity).?); // 快路 severity 恒 1 值形钉
+        const three = try std.fmt.allocPrint(tg, f_hover_result, .{ mj, rg });
+        defer tg.free(three);
+        var p3 = try std.json.parseFromSlice(std.json.Value, tg, three, .{});
+        defer p3.deinit();
+        const c3 = objIn(asObject(p3.value).?.get(k_contents)).?;
+        try testing.expectEqualStrings(v_markdown, strField(c3, k_kind).?);
+        try testing.expectEqualStrings("甲", strField(c3, k_value).?);
+        const four = try std.fmt.allocPrint(tg, f_error_response, .{ "5", @as(i64, -32601), mj });
+        defer tg.free(four);
+        var p4 = try std.json.parseFromSlice(std.json.Value, tg, four, .{});
+        defer p4.deinit();
+        const e4 = objIn(asObject(p4.value).?.get(k_error)).?;
+        try testing.expectEqual(@as(i64, -32601), intField(e4, k_code).?);
+        try testing.expectEqualStrings("甲", strField(e4, k_message).?);
+    }
+    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(tg, &lang);
+    defer srv.deinit();
+    var out: OutList = .empty;
+    defer freeOut(tg, &out);
+    // A3 活体 round-trip（全角坏源）：publish 帧诊断项以 k_range/k_start/k_line/k_severity/k_source/k_message 回读。
+    const uri221 = try jsonrpc.jsonString(tg, "file:///r221.zz");
+    defer tg.free(uri221);
+    const body221 = try jsonrpc.jsonString(tg, "标准库.调试.打印（\"甲\");\n");
+    defer tg.free(body221);
+    const open = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ uri221, body221 });
+    defer tg.free(open);
+    try srv.handle(open, &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    var pp = try std.json.parseFromSlice(std.json.Value, tg, out.items[0], .{});
+    defer pp.deinit();
+    const pm = objIn(asObject(pp.value).?.get(k_params)).?;
+    const arr = switch (pm.get(k_diagnostics).?) {
+        .array => |a| a.items,
+        else => return error.UnexpectedDiagsShape,
+    };
+    try testing.expect(arr.len >= 1);
+    const d0 = asObject(arr[0]).?;
+    const rng = objIn(d0.get(k_range)).?;
+    const st = objIn(rng.get(k_start)).?;
+    try testing.expect(intField(st, k_line) != null);
+    try testing.expect(intField(st, k_character) != null);
+    try testing.expectEqual(@as(i64, 1), intField(d0, k_severity).?); // 快路诊断项 severity=1
+    try testing.expectEqualStrings(paths.prog_name, strField(d0, k_source).?);
+    try testing.expect(strField(d0, k_message).?.len > 0);
+    // A4 hover 活体 round-trip（半角合法源·220 A3b 同骨）：result 对象回读 contents/kind/value ＋ range。
+    freeOut(tg, &out);
+    const huri = try jsonrpc.jsonString(tg, "file:///r221h.zz");
+    defer tg.free(huri);
+    const hbody = try jsonrpc.jsonString(tg, "标准库.调试.打印(\"甲\");\n");
+    defer tg.free(hbody);
+    const hopen = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ huri, hbody });
+    defer tg.free(hopen);
+    try srv.handle(hopen, &out);
+    freeOut(tg, &out);
+    const hover = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_id ++ "\":7,\"" ++ k_method ++ "\":\"" ++ m_hover ++ "\",\"" ++ k_params ++ "\":" ++ f_hover_params ++ "}}", .{ huri, @as(usize, 0), @as(usize, 4) });
+    defer tg.free(hover);
+    try srv.handle(hover, &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    var hv = try std.json.parseFromSlice(std.json.Value, tg, out.items[0], .{});
+    defer hv.deinit();
+    const ro = objIn(asObject(hv.value).?.get(k_result)).?;
+    const hc = objIn(ro.get(k_contents)).?;
+    try testing.expectEqualStrings(v_markdown, strField(hc, k_kind).?);
+    try testing.expect(strField(hc, k_value).?.len > 0);
+    try testing.expect(objIn(ro.get(k_range)) != null);
+    // A5 对面十三清单成员数钉：八枚 needle 全由 hub k_*/v_markdown/paths.prog_name 派生（对账在守卫对面十三）。
+    try testing.expectEqual(@as(usize, 8), results_face.len);
 }

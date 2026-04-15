@@ -217,8 +217,16 @@ pub fn main(init: std.process.Init) !void {
     //   本片同样复用对面四已读的 ext（零新增 I/O）。
     checkFace(ext_path, &lsp_srv.params_face, ext);
 
+    // —— 对面十三：`extension.js` 的 LSP 结果体字段族（第 221 轮 D89）。写侧诊断项/
+    //   悬停/错误对象字段词（range/severity/source/message/contents/kind/value/code ＋
+    //   markdown 值）同客户端八处属性读此前互不引用，守卫 214–220 核过帧形/方法词/
+    //   参数键而从未核结果体字段——t2 探针 P1–P4 四路 js 侧改字段全绿静默、P6 写侧
+    //   kind 漂连测面亦零锚：诊断波浪线/悬停渲染静默熄灭而构建链恒绿。本片同样复用
+    //   对面四已读的 ext（零新增 I/O）。
+    checkFace(ext_path, &lsp_srv.results_face, ext);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
     );
 }
