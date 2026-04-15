@@ -549,7 +549,7 @@ fn cmdLangAdd(args: []const []const u8) void {
         werr.flush() catch {};
         bail(error.Failed); // noreturn：退 1、不外泄 error 名与栈帧
     };
-    const key = cli.findFlag(args, "--as") orelse pk.code; // 缺省取包内 $code（与内置注册名同源）
+    const key = cli.findFlag(args, cli.flag_as) orelse pk.code; // 缺省取包内 $code（与内置注册名同源）
     if (!userpack.keyIsSafe(key)) {
         printErr("zzc: 注册名「{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
         werr.flush() catch {};

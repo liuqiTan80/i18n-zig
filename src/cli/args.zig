@@ -169,12 +169,12 @@ pub fn stripFlag(gpa: std.mem.Allocator, args: []const []const u8, name: []const
 /// R9：从 zzc 层参数里取 `--lang <name>` 或 `--lang=<name>` 的语言名（纯查询、不改入参；无则 null）。
 /// 语言名缺值（`--lang` 处于末尾且无后继）视为 null（由调用方按未选包处理）。
 pub fn findLangFlag(args: []const []const u8) ?[]const u8 {
-    return findFlag(args, "--lang");
+    return findFlag(args, flag_lang);
 }
 
 /// R9g（第 103 轮）：取 `--lang-file <路径>` 外部语言包文件旗标（第三方发行包运行时加载、免重编译）。
 pub fn findLangFileFlag(args: []const []const u8) ?[]const u8 {
-    return findFlag(args, "--lang-file");
+    return findFlag(args, flag_lang_file);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,12 +207,12 @@ pub fn stripBoolFlag(gpa: std.mem.Allocator, args: []const []const u8, name: []c
 /// 从参数列表剔离 `--lang <name>`（两参形）/`--lang=<name>`（一参形），返回新 ArrayList（元素借用自 args、仅本体分配）。
 /// 目的：`--lang` 是 zzc 层旗标，不能透传给 zig。缺值的裸 `--lang`（末尾）一并剔离。无旗标时返回逐元素等长的原样副本。
 pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
-    return stripFlag(gpa, args, "--lang");
+    return stripFlag(gpa, args, flag_lang);
 }
 
 /// R9g：剔离 `--lang-file`（两参/等号形）——同不透传 zig 契约。
 pub fn stripLangFileFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
-    return stripFlag(gpa, args, "--lang-file");
+    return stripFlag(gpa, args, flag_lang_file);
 }
 
 test "findLangFlag / stripLangFlag：两参与等号形都识别，剔离后不透传 zig" {
@@ -536,6 +536,71 @@ pub fn isKnownSubcommand(cmd: []const u8) bool {
         if (std.mem.eql(u8, cmd, sub)) return true;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// CLI 旗标名单一真值（第 207 轮 · D75）：zzc 层消费的旗标此前散成多副本——`--machine`
+// 独归 mcon.flag_machine，`--lang`/`--lang-file` 在 args 的 find 站与 strip 站各存裸字面量
+// （两副本），`--as` 是 main.zig 的一枚孤裸字面量且全仓零测覆盖（P1 探针：改 `--as` 臂字面量，
+// 运行期 `zzc lang add f --as mykey` 静默按 $code 注册成 tst-ja.txt 而 530/530 恒绿、退 0）。
+// 自此一旗一名一定义：find/strip/help 三方读同表，改名须动本表、各转红。
+// ---------------------------------------------------------------------------
+
+/// `--lang <名>`：选择语言包（zzc 层旗标、不透传 zig，须与 strip 站同源）。
+pub const flag_lang: []const u8 = "--lang";
+/// `--lang-file <路径>`：从外部文件加载语言包（R9g 第二档、免重编译）。
+pub const flag_lang_file: []const u8 = "--lang-file";
+/// `--machine`：把母语报错压成单行机读形制（与机读契约 hub 同源）。
+pub const flag_machine: []const u8 = mcon.flag_machine;
+/// `--as <注册名>`：`zzc lang add` 指定装入工程的注册名（此前全仓零测覆盖的孤点，D75 主靶）。
+pub const flag_as: []const u8 = "--as";
+
+/// zzc 层真实消费的旗标穷举表：find/strip 站与帮助行正向对账的单一真值。
+pub const zzc_flags = [_][]const u8{ flag_lang, flag_lang_file, flag_machine, flag_as };
+
+/// name 是否为 zzc 层旗标（帮助行正向对账与判据的共同真值）。
+pub fn isZzcFlag(name: []const u8) bool {
+    for (zzc_flags) |f| {
+        if (std.mem.eql(u8, name, f)) return true;
+    }
+    return false;
+}
+
+test "第 207 轮 T0 旗标单一真值自守：名两两不同 + machine 与 hub 同源 + isZzcFlag 正反 + --as 在册" {
+    // 真值表自守：任一旗标名与另一枚相等（手抄/复制漏改）即红。
+    for (zzc_flags, 0..) |a, i| {
+        for (zzc_flags[i + 1 ..]) |b| {
+            try std.testing.expect(!std.mem.eql(u8, a, b));
+        }
+    }
+    // --machine 与机读契约 hub 同源（防两处各写一份漂移）。
+    try std.testing.expectEqualStrings(mcon.flag_machine, flag_machine);
+    // 在册判据正反：真旗标命中、漂移名与近名不误入。
+    try std.testing.expect(isZzcFlag(flag_as));
+    try std.testing.expect(isZzcFlag(flag_lang));
+    try std.testing.expect(isZzcFlag(flag_lang_file));
+    try std.testing.expect(!isZzcFlag("--aat")); // P1 探针漂移名不得算真旗标
+    try std.testing.expect(!isZzcFlag("--lng")); // P2/P3 探针漂移名
+    try std.testing.expect(!isZzcFlag("--machine-x")); // 近名不误入（宽度未放宽）
+}
+
+test "第 207 轮 T1 --as 往返：findFlag 按常量取注册名（此前 --as 零测覆盖的回归钉）" {
+    // D75 主锚：`--as <名>` 此前全仓无任何测覆盖其解析，P1 探针坐实改名静默失效。
+    // 自此以常量组 argv 验 findFlag 取到值、缺省取 null（回落 $code 的判据）。
+    const argv = [_][]const u8{ "add", "包/外.txt", flag_as, "mykey" };
+    const got = findFlag(&argv, flag_as) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("mykey", got);
+    const none = [_][]const u8{ "add", "包/外.txt" };
+    try std.testing.expectEqual(@as(?[]const u8, null), findFlag(&none, flag_as));
+}
+
+test "第 207 轮 T2 帮助行正向对账：zzc 消费的每枚旗标都须在 usage 文档化（漏文档即红）" {
+    // 正向：代码真实消费的旗标必在帮助文本出现——新加旗标忘写帮助 / 改名漏改帮助 即红。
+    // 反向（帮助里的幽灵旗标）因 usage 含说明性近名（--machine-x 等）与示例（--summary/--system）
+    //   无法逐 token 干净枚举，形等价面登为在册续项、本测不覆盖。
+    for (zzc_flags) |f| {
+        try std.testing.expect(std.mem.indexOf(u8, usage_text, f) != null);
+    }
 }
 
 /// CLI 帮助文本（无参/未知子命令时回显）。属 CLI 表面数据，放在测试图内的 cli 模块以便
