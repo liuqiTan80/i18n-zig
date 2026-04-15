@@ -187,6 +187,22 @@ pub fn buildDeclaresExe(text: []const u8) bool {
     return std.mem.indexOf(u8, text, needle) != null;
 }
 
+/// 产品版本真值（第 211 轮 D79）：`build.zig.zon` 的 `.version`、`zzc version` 输出、usage 抬头
+/// 「方言编译器 v…」与 eject 模板写给毕业工程的 `.version` 行共用的唯一真值。旧形制四处各抄
+/// 同值字面量互不引用（t2 探针 P1 改 `version_str`、P3 改本仓 zon、P4 改 usage 抬头皆恒绿静默，
+/// 唯 P2 改 eject 模板被测试 want 形 literals 自照），升代时三枚出口与毕业工程继承件分道。
+pub const zzc_version: []const u8 = "0.1.0";
+
+/// usage 抬头的版本记号 `v0.1.0`（由 `zzc_version` 派生，第 211 轮 D79）：抬头「方言编译器 v…」形的唯一来源。
+pub const zzc_version_token: []const u8 = "v" ++ zzc_version;
+
+/// 本仓 `build.zig.zon` 文本是否声明了 `.version` 逐字节等于产品版本族真值（第 211 轮 D79 的守卫判据，
+/// 纯函数）。首点锚定（`.version`）令其不假命中 `.minimum_zig_version` 的子串；尾引号严格全等。
+pub fn zonDeclaresVersion(text: []const u8) bool {
+    const needle = ".version = \"" ++ zzc_version ++ "\"";
+    return std.mem.indexOf(u8, text, needle) != null;
+}
+
 /// 从文本中抽 `.minimum_zig_version = "…"` 引号之间的值段（第 205 轮 D73 的守卫判据，纯函数）。
 /// 字段名缺、值非字符串形（无成对引号）皆 null；本仓只用单层引号形，故不实现转义与多行串。
 pub fn minimumZigVersionIn(text: []const u8) ?[]const u8 {
@@ -419,4 +435,19 @@ test "第 210 轮 T0 程序名族：值钉／prog_prefix 派生钉／buildDeclar
     try std.testing.expect(!buildDeclaresExe(".name = \"zzq\"")); // 改名后（P1 探针形）CLI exe 声明消失
     try std.testing.expect(!buildDeclaresExe(".name = \"" ++ prog_name ++ "_core\"")); // 模块依赖名不误算作 CLI exe
     try std.testing.expect(!buildDeclaresExe(""));
+}
+
+test "第 211 轮 T0 产品版本族：值钉／zzc_version_token 派生钉／zonDeclaresVersion 正反小样（防 zon↔src 四源手抄静默升代）" {
+    // A1 值钉：产品版本是对外出口（`zzc version`、zon、usage 抬头、毕业工程继承件共此一枚），
+    // 不复用常量、直接写死（196/197 通则）。
+    try std.testing.expectEqualStrings("0.1.0", zzc_version);
+    // A2 派生一致：抬头记号恰为 "v" + 版本（升代随动，杜绝「改了版本而抬头仍写旧版」）。
+    try std.testing.expectEqualStrings("v0.1.0", zzc_version_token);
+    try std.testing.expectEqualStrings("v" ++ zzc_version, zzc_version_token);
+    // A3 zonDeclaresVersion：本仓形制命中为真；异值／只有同值的 minimum_zig_version／缺尾引号／空文本 皆假。
+    try std.testing.expect(zonDeclaresVersion(".{\n    .version = \"" ++ zzc_version ++ "\",\n}"));
+    try std.testing.expect(!zonDeclaresVersion(".version = \"9.9.9\",")); // 异值（P3 探针形）
+    try std.testing.expect(!zonDeclaresVersion(".minimum_zig_version = \"0.1.0\",")); // 首点锚防子串假命中
+    try std.testing.expect(!zonDeclaresVersion(".version = \"0.1.0")); // 缺尾引号不算声明
+    try std.testing.expect(!zonDeclaresVersion("")); // 空文本
 }

@@ -679,6 +679,13 @@ test "第 210 轮 T1 帮助命令词与程序名单一真值耦合：每枚子�
     try std.testing.expect(std.mem.indexOf(u8, usage_text, zzc.prog_name ++ " ——") != null);
 }
 
+test "第 211 轮 T1 帮助抬头版本记号与产品版本族耦合：抬头含「方言编译器 v<zzc_version>」（防升代而抬头仍写旧版）" {
+    // usage 抬头里 `v0.1.0` 系产品版本的手抄点之一（t2 探针 P4 实锤改它而 549/549 恒绿），与 210 T1
+    // 同形制不重构大串、以族真值拼出完整记号段要求命中：升代（改 hub）而抬头不跟 → 红。
+    const want = "（方言编译器 " ++ zzc.zzc_version_token ++ "）";
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, want) != null);
+}
+
 test "子命令单一真值表自守：名无重复、check 与机读 hub 同源、判据正反（第 206 轮 D74）" {
     // 真值表内部一致性：九名两两不同（防手滑重复）。
     for (subcommands, 0..) |a, i| {

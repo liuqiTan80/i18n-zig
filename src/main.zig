@@ -38,7 +38,7 @@ const userpack = @import("lang/userpack.zig");
 const lsp = @import("lsp/server.zig");
 const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
 
-const version_str = "0.1.0";
+const version_str = zzc.zzc_version; // 第 211 轮 D79：`zzc version` 出口委派产品版本族真值（旧手抄与 zon/usage/模板四处互不引用）
 const zh_pack = @embedFile("lang/packs/中文.txt");
 
 const Exit = error{ Usage, Failed };
@@ -863,7 +863,7 @@ fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
     var z: std.ArrayList(u8) = .empty;
     try z.appendSlice(gpa_, "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n");
     try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .name = .{s},\n", .{app_name}));
-    try z.appendSlice(gpa_, "    .version = \"0.1.0\",\n");
+    try z.appendSlice(gpa_, "    .version = \"" ++ zzc.zzc_version ++ "\",\n"); // 第 211 轮 D79：毕业工程继承的版本行委派族真值（与 L867 minimum_zig_version 委派 zig_version 同族同形）
     if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .fingerprint = {s},\n", .{t}));
     try z.appendSlice(gpa_, "    .minimum_zig_version = \"" ++ zzc.zig_version ++ "\",\n");
     try z.appendSlice(gpa_, "    .dependencies = .{},\n");

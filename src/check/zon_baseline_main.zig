@@ -34,6 +34,17 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
+    // 第 211 轮 D79：同一片 zon 文本再核产品版本——`.version` 与 `zzc version` 输出、usage 抬头、
+    // eject 模板共用族真值 `zzc_version`；旧形制四源互不引用（t2 探针 P3 改 zon 而 549/549 恒绿静默）。
+    if (!paths.zonDeclaresVersion(zon)) {
+        std.debug.print(
+            "FAIL: {s} 声明的 .version 与产品版本族真值 {s}（zzc_paths.zig）不符——" ++
+                "包版本与 `zzc version` 出口／usage 抬头／毕业工程继承件分道，升代须两处同改。\n",
+            .{ zon_path, paths.zzc_version },
+        );
+        std.process.exit(1);
+    }
+
     const ci = std.Io.Dir.cwd().readFileAlloc(io, ci_path, gpa, .unlimited) catch |e| {
         std.debug.print("FAIL: 无法读取 {s}（{s}）\n", .{ ci_path, @errorName(e) });
         std.process.exit(1);
@@ -48,5 +59,5 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    std.debug.print("OK: {s} 与 {s} 均与工具链族真值 {s} 同源\n", .{ zon_path, ci_path, paths.zig_version });
+    std.debug.print("OK: {s} 与 {s} 均与工具链族真值 {s} 同源，且 {s} 的 .version =「{s}」与产品版本族真值同源\n", .{ zon_path, ci_path, paths.zig_version, zon_path, paths.zzc_version });
 }
