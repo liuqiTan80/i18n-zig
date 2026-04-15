@@ -22,6 +22,22 @@ fn isLanguageConstant(value: []const u8) bool {
     return false;
 }
 
+/// 词类标签族（第 219 轮 D87 单一真值）：`classify` 返回五值与 aliases 条目 `.group`，同
+/// 消费侧 `lsp/server.zig` 的 `classToTokenType` 四比较词与 hover 别名标签共此一份——此前跨
+/// 模块 11 处手抄互不引用（t2 探针 P1/P2 实锤前缀扩展改名穿透宽松 `indexOf` 伪钉而 573/573
+/// 恒绿静默、P5 实锤 classify 新增类词被消费侧 fallback 静默吞；双出口真跑坐实补全产物
+/// description 组词与 hover md 组字同词分道）。值钉/全域 round-trip 钉/双出口同词钉见
+/// `lsp/server.zig` 219 T0；新增类标签须同步入 `groups_all` 并在消费侧立映射。
+pub const g_builtin = "内建函数";
+pub const g_constant = "字面常量";
+pub const g_type = "类型";
+pub const g_keyword = "关键字";
+pub const g_dialect = "方言词";
+pub const g_alias = "标准库";
+
+/// 标签族成员枚举（219 T0 覆盖钉与消费侧接线对账依此表）。
+pub const groups_all = [_][]const u8{ g_builtin, g_constant, g_type, g_keyword, g_dialect, g_alias };
+
 /// 按映射值归类方言词的分组标签（判据全取自注册表，语言无关）。
 /// 公开供 LSP hover 复用（第 156 轮）：同一词在补全描述与悬停详情里分组口径一致。
 ///
@@ -31,11 +47,11 @@ fn isLanguageConstant(value: []const u8) bool {
 /// 补全描述与悬停被错标为「类型」、语义 token 错着类型色，而 classToTokenType 的字面常量支成死分支）。
 /// 四字面量名与任何类型名互斥，故本序调整不影响 bool/void/u8/i32 等真类型名（仍走 isPrimitive→「类型」）。
 pub fn classify(value: []const u8) []const u8 {
-    if (value.len > 0 and value[0] == '@') return "内建函数";
-    if (isLanguageConstant(value)) return "字面常量";
-    if (std.zig.isPrimitive(value)) return "类型";
-    if (std.zig.Token.keywords.has(value)) return "关键字";
-    return "方言词";
+    if (value.len > 0 and value[0] == '@') return g_builtin;
+    if (isLanguageConstant(value)) return g_constant;
+    if (std.zig.isPrimitive(value)) return g_type;
+    if (std.zig.Token.keywords.has(value)) return g_keyword;
+    return g_dialect;
 }
 
 /// 一条补全片段。
@@ -123,7 +139,7 @@ pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
         try list.append(gpa, .{
             .name = name,
             .word = key,
-            .group = "标准库",
+            .group = g_alias, // 第 219 轮 D87：与 hover 别名标签同源一字面量（原手抄已被委派）
             .value = value,
         });
     }
@@ -186,10 +202,11 @@ test "snippets.generate：合法 JSON、含方言词补全、附标准映射描�
     try testing.expect(std.mem.indexOf(u8, json_bytes, "→ const") != null);
     try testing.expect(std.mem.indexOf(u8, json_bytes, "→ var") != null);
     try testing.expect(std.mem.indexOf(u8, json_bytes, "→ fn") != null);
-    // 标准库别名在补全集中。
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "标准库") != null);
-    // 内建函数分组标签存在（@-前缀值）。
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "内建函数 →") != null);
+    // 标准库别名在补全集中（第 219 轮 D87 伪钉改严：锚 description 组词形 `{group} → `，
+    // 宽松子串「标准库」可被前缀扩展形「标准库X」穿透——t2 P2 实锤）。
+    try testing.expect(std.mem.indexOf(u8, json_bytes, g_alias ++ " → ") != null);
+    // 内建函数分组标签存在（@-前缀值）——同形改严。
+    try testing.expect(std.mem.indexOf(u8, json_bytes, g_builtin ++ " → ") != null);
 }
 
 test "snippets.generate：确定性——两次生成逐字节一致（第 155 轮）" {
@@ -318,43 +335,43 @@ test "snippets.snippetBodyStr：双层转义（snippet 语法 ∘ JSON）字节�
     std.debug.print("T1 asserts={d}\n", .{asserts});
 }
 
-test "snippets.classify：五分支优先级 + 空值守卫（第 168 轮）" {
+test "snippets.classify：五分支优先级 + 空值守卫（第 168 轮·第 219 轮 D87 标签改引 hub 真值去自照手抄）" {
     var asserts: usize = 0;
-    try testing.expectEqualStrings("内建函数", classify("@sqrt"));
+    try testing.expectEqualStrings(g_builtin, classify("@sqrt"));
     asserts += 1;
     // 单字符 @ 亦归内建函数（@ 前缀先于其余判据）。
-    try testing.expectEqualStrings("内建函数", classify("@"));
+    try testing.expectEqualStrings(g_builtin, classify("@"));
     asserts += 1;
-    try testing.expectEqualStrings("类型", classify("u8"));
+    try testing.expectEqualStrings(g_type, classify("u8"));
     asserts += 1;
-    try testing.expectEqualStrings("类型", classify("i32"));
+    try testing.expectEqualStrings(g_type, classify("i32"));
     asserts += 1;
     // D56 修复行为钉（第 169 轮）：classify 判序改为 isLanguageConstant 先于 isPrimitive 后，
     // true/false/null/undefined 四值归「字面常量」（而非旧被 isPrimitive 遮蔽时的「类型」）。
     // 中文包真关键词 真/假/空值/未定义 即映射至此四值，故其补全描述/hover/语义 token 现正确归字面常量。
-    try testing.expectEqualStrings("字面常量", classify("true"));
+    try testing.expectEqualStrings(g_constant, classify("true"));
     asserts += 1;
-    try testing.expectEqualStrings("字面常量", classify("false"));
+    try testing.expectEqualStrings(g_constant, classify("false"));
     asserts += 1;
-    try testing.expectEqualStrings("字面常量", classify("null"));
+    try testing.expectEqualStrings(g_constant, classify("null"));
     asserts += 1;
-    try testing.expectEqualStrings("字面常量", classify("undefined"));
+    try testing.expectEqualStrings(g_constant, classify("undefined"));
     asserts += 1;
     // 判序调整不得过度捕获：bool/void 非 isLanguageConstant 成员、仍走 isPrimitive 归「类型」。
-    try testing.expectEqualStrings("类型", classify("bool"));
+    try testing.expectEqualStrings(g_type, classify("bool"));
     asserts += 1;
-    try testing.expectEqualStrings("类型", classify("void"));
+    try testing.expectEqualStrings(g_type, classify("void"));
     asserts += 1;
-    try testing.expectEqualStrings("关键字", classify("const"));
+    try testing.expectEqualStrings(g_keyword, classify("const"));
     asserts += 1;
-    try testing.expectEqualStrings("关键字", classify("fn"));
+    try testing.expectEqualStrings(g_keyword, classify("fn"));
     asserts += 1;
-    try testing.expectEqualStrings("关键字", classify("struct"));
+    try testing.expectEqualStrings(g_keyword, classify("struct"));
     asserts += 1;
-    try testing.expectEqualStrings("方言词", classify("常数"));
+    try testing.expectEqualStrings(g_dialect, classify("常数"));
     asserts += 1;
     // 空串：value.len>0 守卫短路 @ 判据，不越界读 value[0]，落 else 方言词。
-    try testing.expectEqualStrings("方言词", classify(""));
+    try testing.expectEqualStrings(g_dialect, classify(""));
     asserts += 1;
     std.debug.print("T2 asserts={d}\n", .{asserts});
 }

@@ -619,7 +619,7 @@ pub const Server = struct {
         // 别名（点链）优先整链命中，再退 keywords；分组口径与 155 轮补全一致。
         const alias_val = self.lang.aliases.get(chain);
         const word_val = alias_val orelse self.lang.keywords.get(chain) orelse return null;
-        const group = if (alias_val != null) "标准库" else snippets.classify(word_val);
+        const group = if (alias_val != null) snippets.g_alias else snippets.classify(word_val); // 第 219 轮 D87：与补全产物 .group 同源（原手抄第 2 份）
 
         const md = std.fmt.allocPrint(gpa, "**{s}** `{s}`\n\n- 标准 Zig 形：`{s}`", .{ group, chain, word_val }) catch return null;
         defer gpa.free(md);
@@ -727,12 +727,13 @@ fn isChainWordByte(c: u8) bool {
 }
 
 /// `snippets.classify` 词类标签 → LSP tokenTypes 图例索引（第 214 轮 D82：词元名与索引皆取
-/// 图例 hub 派生常量，与 initialize 图例强制同序；新增词类须先在 legend_types 立名）。
+/// 图例 hub 派生常量，与 initialize 图例强制同序；新增词类须先在 legend_types 立名。
+/// 第 219 轮 D87：比较词改引 `snippets.g_*` 单一真值——此前与生成侧各拄一份、改名静默）。
 fn classToTokenType(group: []const u8) u8 {
-    if (std.mem.eql(u8, group, "关键字")) return ty_keyword;
-    if (std.mem.eql(u8, group, "字面常量")) return ty_keyword;
-    if (std.mem.eql(u8, group, "类型")) return ty_type;
-    if (std.mem.eql(u8, group, "内建函数")) return ty_function;
+    if (std.mem.eql(u8, group, snippets.g_keyword)) return ty_keyword;
+    if (std.mem.eql(u8, group, snippets.g_constant)) return ty_keyword;
+    if (std.mem.eql(u8, group, snippets.g_type)) return ty_type;
+    if (std.mem.eql(u8, group, snippets.g_builtin)) return ty_function;
     return ty_variable; // 方言词 → variable
 }
 
@@ -827,7 +828,7 @@ test "lsp.server：hover 方言词命中 keywords、与补全描述同口径；�
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":3") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "const") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "关键字") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "**" ++ snippets.g_keyword ++ "**") != null); // 第 219 轮 D87 伪钉改严：锚 md 组词形，前缀扩展不可穿透
 
     freeOut(gpa, &out);
     // 悬停行尾越界列：无结果不崩（越界拒、不 clamp）
@@ -920,7 +921,7 @@ test "lsp.server：hover 点链别名整体取词（标准库.调试.打印 形�
 
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.zz\"},\"position\":{\"line\":0,\"character\":0}}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "标准库") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "**" ++ snippets.g_alias ++ "**") != null); // 第 219 轮 D87 伪钉改严：宽松子串曾被前缀扩展形穿透（t2 P1 主靶）
     try testing.expect(std.mem.indexOf(u8, out.items[0], "std.debug.print") != null);
 
     // 点链中段悬停（`调试` 上）亦整体取词到叶链
@@ -1146,12 +1147,12 @@ test "lsp.server：点链段助手空段/首点/尾点/isChainWordByte 边界（
 // T4：classToTokenType 图例索引全分支钉。承第 162 轮「客户端↔服务端图例同序、错序即静默
 // 错色」共享真相源的服务端一侧——既有语义 token 测仅触发 keyword(0)/comment(5)/number(6)，
 // type(1)/function(2)/variable(3) 三索引此前全库零防线。
-test "lsp.server：classToTokenType 图例索引全分支钉（承 162 共享真相源·第 165 轮）" {
-    try testing.expectEqual(@as(u8, 0), classToTokenType("关键字")); // 关键字 → keyword
-    try testing.expectEqual(@as(u8, 0), classToTokenType("字面常量")); // 字面常量 → keyword
-    try testing.expectEqual(@as(u8, 1), classToTokenType("类型")); // 类型 → type
-    try testing.expectEqual(@as(u8, 2), classToTokenType("内建函数")); // 内建函数 → function
-    try testing.expectEqual(@as(u8, 3), classToTokenType("方言词")); // 方言词 → variable
+test "lsp.server：classToTokenType 图例索引全分支钉（承 162 共享真相源·第 165 轮·第 219 轮 D87 标签改引 hub 真值）" {
+    try testing.expectEqual(@as(u8, 0), classToTokenType(snippets.g_keyword)); // 关键字 → keyword
+    try testing.expectEqual(@as(u8, 0), classToTokenType(snippets.g_constant)); // 字面常量 → keyword
+    try testing.expectEqual(@as(u8, 1), classToTokenType(snippets.g_type)); // 类型 → type
+    try testing.expectEqual(@as(u8, 2), classToTokenType(snippets.g_builtin)); // 内建函数 → function
+    try testing.expectEqual(@as(u8, 3), classToTokenType(snippets.g_dialect)); // 方言词 → variable
     try testing.expectEqual(@as(u8, 3), classToTokenType("未知标签")); // 兜底 → variable
 }
 
@@ -1161,13 +1162,13 @@ test "lsp.server：classToTokenType 图例索引全分支钉（承 162 共享真
 test "lsp.server：classify→classToTokenType 字面量四值经图例归 keyword(0)（承 162/165 共享真相源·第 169 轮 D56）" {
     var asserts: usize = 0;
     for ([_][]const u8{ "true", "false", "null", "undefined" }) |v| {
-        try testing.expectEqualStrings("字面常量", snippets.classify(v));
+        try testing.expectEqualStrings(snippets.g_constant, snippets.classify(v));
         asserts += 1;
         try testing.expectEqual(@as(u8, 0), classToTokenType(snippets.classify(v))); // 字面常量 → keyword
         asserts += 1;
     }
     // 对照：真类型名仍走 isPrimitive→「类型」→token 1（坐实判序调整未过度捕获）。
-    try testing.expectEqualStrings("类型", snippets.classify("bool"));
+    try testing.expectEqualStrings(snippets.g_type, snippets.classify("bool"));
     asserts += 1;
     try testing.expectEqual(@as(u8, 1), classToTokenType(snippets.classify("bool")));
     asserts += 1;
@@ -1866,4 +1867,58 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     try testing.expect(std.mem.indexOf(u8, out.items[2], "-32601") != null); // 漂形落不支持面（通知形则静默丢弃，请求形必报错）
     // A5 覆盖钉：十一枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
     try testing.expectEqual(@as(usize, 11), methods_face.len);
+}
+
+// 219 T0（第 219 轮 D87）：词类标签族六员单一真值——值钉 + classify→classToTokenType 全域
+// round-trip 钉 + 双出口同词钉。t2 探针实锤的静默面：P1 hover 别名标签/P2 补全产物 .group
+// 前缀扩展改名（标准库→标准库X）穿透宽松 indexOf 伪钉而 573/573 恒绿静默；P3 classify
+// 「方言词」支漂移唯 snippets 自照红、server 旧测不采样该支（round-trip 缺口）；P5 新增类词
+// 被 classToTokenType fallback 静默吞。双出口真跑坐实补全 description 组词与 hover md 组字
+// 同词分道互不随动。
+test "219 T0 词类标签族：六员值钉 + 全域 round-trip + 双出口同词（防跨模块手抄与 fallback 吞词静默）" {
+    // A1 值钉：六员标签——改真值名须生成/消费两侧与这些钉同批随动。
+    try testing.expectEqualStrings("内建函数", snippets.g_builtin);
+    try testing.expectEqualStrings("字面常量", snippets.g_constant);
+    try testing.expectEqualStrings("类型", snippets.g_type);
+    try testing.expectEqualStrings("关键字", snippets.g_keyword);
+    try testing.expectEqualStrings("方言词", snippets.g_dialect);
+    try testing.expectEqualStrings("标准库", snippets.g_alias);
+    // A2 覆盖钉：六员枚举——新增类标签先入 groups_all 并在消费侧立映射（P5 吞词的对照防线）。
+    try testing.expectEqual(@as(usize, 6), snippets.groups_all.len);
+    // A3 全域 round-trip 钉：classify 各族样本 → 返回值必等于 hub 真值成员 → classToTokenType
+    //    必映射期望索引（旧形制缺「方言词」支采样——P3 实锤消费侧对该支漂移不可见）。
+    const rt = [_]struct { word: []const u8, g: []const u8, ty: u8 }{
+        .{ .word = "@sqrt", .g = snippets.g_builtin, .ty = ty_function },
+        .{ .word = "true", .g = snippets.g_constant, .ty = ty_keyword },
+        .{ .word = "u8", .g = snippets.g_type, .ty = ty_type },
+        .{ .word = "const", .g = snippets.g_keyword, .ty = ty_keyword },
+        .{ .word = "常数", .g = snippets.g_dialect, .ty = ty_variable },
+    };
+    var asserts: usize = 0;
+    for (rt) |c| {
+        try testing.expectEqualStrings(c.g, snippets.classify(c.word)); // 生成侧返回值即 hub 真值
+        try testing.expectEqual(c.ty, classToTokenType(snippets.classify(c.word))); // 消费侧按 hub 真值词映射
+        asserts += 2;
+    }
+    // A4 双出口同词钉：hover 别名 md 组词（server `hoverAt` 臂）与补全产物 description 组词
+    //    （snippets `generate` 臂）皆锚 g_alias——t2 真跑的 P1/P2 各漂一侧即成对失联，今同出一源。
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"" ++ m_didOpen ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///g219.zz\",\"text\":\"标准库.调试.打印(\\\"甲\\\");\\n\"}}}", &out);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" ++ m_hover ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///g219.zz\"},\"position\":{\"line\":0,\"character\":1}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "**" ++ snippets.g_alias ++ "**") != null); // hover 出口组词
+    const json_bytes = try snippets.generate(gpa, lang);
+    defer gpa.free(json_bytes);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, snippets.g_alias ++ " → ") != null); // 补全出口同词
+    asserts += 2;
+    std.debug.print("219 T0 asserts={d}\n", .{asserts});
 }
