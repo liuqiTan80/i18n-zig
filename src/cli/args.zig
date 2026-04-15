@@ -414,7 +414,7 @@ pub fn buildInitTemplate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     const A = appendTemplateSegs;
-    try A(gpa, &out, &.{"// zzc 方言工程模板 —— 进入目录后运行 `zzc run` 即可\n\n"});
+    try A(gpa, &out, &.{"// " ++ zzc.prog_name ++ " 方言工程模板 —— 进入目录后运行 `" ++ zzc.prog_name ++ " " ++ sub_run ++ "` 即可\n\n"});
     try A(gpa, &out, &.{ w_const, " ", w_std, " = ", w_import, "(\"std\");\n\n" });
     try A(gpa, &out, &.{ w_pub, " ", w_fn, " ", w_main, "() !", w_void, " {\n" });
     try A(gpa, &out, &.{ "    ", w_var, " ", count_name, ": ", w_i64, " = 10;\n" });
@@ -684,6 +684,20 @@ test "第 211 轮 T1 帮助抬头版本记号与产品版本族耦合：抬头�
     // 同形制不重构大串、以族真值拼出完整记号段要求命中：升代（改 hub）而抬头不跟 → 红。
     const want = "（方言编译器 " ++ zzc.zzc_version_token ++ "）";
     try std.testing.expect(std.mem.indexOf(u8, usage_text, want) != null);
+}
+
+test "第 212 轮 T0 init 模板头注释与程序名×子命令名单源耦合：直调 buildInitTemplate 产物头含派生段（防落盘文案手抄漂移误导用户）" {
+    // 模板头写进用户工程 src/main.zz（第 212 轮 D80：t2 探针 P2 实锤旧手抄形改它而 553/553 恒绿、
+    // 真跑 init 落盘 `zzq run` 误导行而全链无感）：委派后产物必随族真值同动，此处钉两份派生段。
+    const registry = @import("../lang/registry.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, registry.defaultEntry().bytes);
+    defer lang.deinit();
+    const text = try buildInitTemplate(gpa, lang);
+    try std.testing.expect(std.mem.indexOf(u8, text, "// " ++ zzc.prog_name ++ " 方言工程模板") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text, "运行 `" ++ zzc.prog_name ++ " " ++ sub_run ++ "` 即可") != null);
 }
 
 test "子命令单一真值表自守：名无重复、check 与机读 hub 同源、判据正反（第 206 轮 D74）" {

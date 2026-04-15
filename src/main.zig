@@ -516,7 +516,7 @@ fn loadExternalPack(path: []const u8) !Pack {
     };
     return Pack.parse(gpa_, bytes) catch |e| switch (e) {
         error.PackFormatTooNew => {
-            printErr(zzc.prog_prefix ++ "外部语言包「{s}」声明的 $format 过新（当前 zzc 仅支持格式 {d}）。请升级 zzc。", .{ path, Pack.supported_format });
+            printErr(zzc.prog_prefix ++ "外部语言包「{s}」声明的 $format 过新（当前 " ++ zzc.prog_name ++ " 仅支持格式 {d}）。请升级 " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
             return error.Failed;
         },
         error.InvalidLangPack => {
@@ -721,7 +721,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     const main_zz = try zzc.initEntryPathFor(gpa_, name); // 第 201 轮 D69：入口构造取族 hub（旧形制本处自持一枚 "{s}/src/main.zz"）
     // 防覆盖：入口文件已存在则不写盘，避免清空用户已有工程的劳动成果（幂等、非破坏）。
     if (pathExists(main_zz)) {
-        printOut(zzc.prog_prefix ++ "工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：zzc run", .{ name, main_zz });
+        printOut(zzc.prog_prefix ++ "工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：" ++ zzc.prog_name ++ " " ++ cli.sub_run, .{ name, main_zz });
         return;
     }
     try std.Io.Dir.cwd().createDirPath(io_, name);
@@ -730,7 +730,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     // 选外语包时出生即碎码（探针 T2 实锤）——现在全部词形取自所选包、缺则安全降级。
     const tmpl_src = try cli.buildInitTemplate(gpa_, lang);
     try writeWhole(main_zz, tmpl_src);
-    printOut("已创建工程 {s}（{s}）。进入目录后运行：zzc run", .{ name, zzc.default_entry });
+    printOut("已创建工程 {s}（{s}）。进入目录后运行：" ++ zzc.prog_name ++ " " ++ cli.sub_run, .{ name, zzc.default_entry });
 }
 
 /// 判断 eject 目标是否会与源码树重叠的纯谓词已移到 cli.ejectDestHitsSourceTree（属
@@ -746,7 +746,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const dest = if (args.len > 0) args[0] else "standard";
     // 防毁源：在做任何工作（采集/翻译/写盘/清空）前先拒绝与源码树重叠的目标。
     if (cli.ejectDestHitsSourceTree(dest)) {
-        printErr(zzc.prog_prefix ++ "eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
+        printErr(zzc.prog_prefix ++ "eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录" ++ "（如 `" ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " standard`）。", .{dest});
         return error.Failed;
     }
     const proj = try collectAndTranslate(zzc.default_entry, lang, table); // 第 201 轮 D69：入口真值取族 hub
@@ -781,7 +781,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
 
     for (proj.units.items) |u| {
         var content: std.ArrayList(u8) = .empty;
-        try content.appendSlice(gpa_, "// 由 zzc eject 导出的标准 Zig。母语符号对照表：\n");
+        try content.appendSlice(gpa_, "// 由 " ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " 导出的标准 Zig。母语符号对照表：\n");
         for (table.symbols.items) |s| {
             try content.appendSlice(gpa_, "//   ");
             try content.appendSlice(gpa_, s.native);
@@ -861,7 +861,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
 /// 生成 eject 的 build.zig.zon 文本；fp 为工具链建议的 `0x....` 十六进制串（可为 null）。
 fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
     var z: std.ArrayList(u8) = .empty;
-    try z.appendSlice(gpa_, "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n");
+    try z.appendSlice(gpa_, "// 由 " ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " 生成；可独立 `zig build` 构建。\n.{\n");
     try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .name = .{s},\n", .{app_name}));
     try z.appendSlice(gpa_, "    .version = \"" ++ zzc.zzc_version ++ "\",\n"); // 第 211 轮 D79：毕业工程继承的版本行委派族真值（与 L867 minimum_zig_version 委派 zig_version 同族同形）
     if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .fingerprint = {s},\n", .{t}));
@@ -930,11 +930,11 @@ fn verifyBuild(dest: []const u8) BuildVerify {
 /// 避免把 zzc 自身的 Zig 错误返回跟踪（stderr 栈帧）暴露给方言用户。
 fn bail(e: anyerror) noreturn {
     switch (e) {
-        error.Usage => printErr(zzc.prog_prefix ++ "未知或不完整的子命令；运行不带参数的 zzc 查看用法。", .{}),
+        error.Usage => printErr(zzc.prog_prefix ++ "未知或不完整的子命令；运行不带参数的 " ++ zzc.prog_name ++ " 查看用法。", .{}),
         error.Failed => {}, // 母语报错已在编译阶段打印，无需重复
         // D36（第 84 轮）：符号表被手工编辑出同一 z_N 归两个不同母语名——若不容忍静默合并，
         // 必须源头拒并点名文件与修法（两标识符转码后共享同名会静默改变程序语义）。
-        error.DuplicateSymbol => printErr(zzc.prog_prefix ++ "符号表 {s} 撞号：同一编号被分给两个不同母语名。请删除该文件让 zzc 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{symbols_path}), // 198 D66：路径经 seam 可覆写，文案插值以保证点名与实际文件始终一致
+        error.DuplicateSymbol => printErr(zzc.prog_prefix ++ "符号表 {s} 撞号：同一编号被分给两个不同母语名。" ++ "请删除该文件让 " ++ zzc.prog_name ++ " 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{symbols_path}), // 198 D66：路径经 seam 可覆写，文案插值以保证点名与实际文件始终一致
         // 常见文件系统/内存错误给纯母语可操作提示（避免把 `NotDir`/`AccessDenied` 等
         // Zig 内部英文标识符直接泄给方言用户）；未收录错误保留中文句式、仅附一个诊断码。
         else => {
@@ -1300,7 +1300,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (std.mem.eql(u8, cmd, cli.sub_version)) {
-        printOut("zzc {s}（语言包：{s}）", .{ version_str, lang.name });
+        printOut(zzc.prog_name ++ " {s}（语言包：{s}）", .{ version_str, lang.name });
         return;
     }
     if (std.mem.eql(u8, cmd, cli.sub_lang)) {
