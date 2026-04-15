@@ -509,8 +509,37 @@ test "localizeFsErr：常见错误给母语提示、未收录返回 null 走兜�
     try std.testing.expect(localizeFsErr(error.OutOfMemory) != null); // 反向确认已收录
 }
 
+// ── 用户可见子命令名的单一真值（第 206 轮 D74）───────────────────────────────
+// main.zig dispatch 的路由字面量、下方 usage_text 帮助行、完备性单测三面的共同出处。
+// 旧态三处脱钩：roster 手抄 8 名已静默漏 version；usage 检查走 indexOf 宽松子串、被
+// build-exe 之类附带出现蒙混（P3 探针：改名帮助命令词仍全绿）；dispatch 与名表无对账
+// （P2 探针：改 dispatch 的 eject 臂名，运行期 `zzc eject` 落未知兜底而 527/527 恒绿）。
+// 自此一名一处定义：改名须动本表，usage 与 dispatch 各自转红。
+pub const sub_init: []const u8 = "init";
+pub const sub_check: []const u8 = mcon.sub_check; // 与机读契约 hub 同源（LSP 自调用 argv）
+pub const sub_build: []const u8 = "build";
+pub const sub_run: []const u8 = "run";
+pub const sub_test: []const u8 = "test";
+pub const sub_eject: []const u8 = "eject";
+pub const sub_lsp: []const u8 = "lsp";
+pub const sub_lang: []const u8 = "lang";
+pub const sub_version: []const u8 = "version";
+
+/// 受支持子命令名的穷举表：dispatch 各臂、帮助行命令词、完备测三者对账的单一真值。
+pub const subcommands = [_][]const u8{
+    sub_init, sub_check, sub_build, sub_run, sub_test, sub_eject, sub_lsp, sub_lang, sub_version,
+};
+
+/// cmd 是否为受支持的用户子命令（未知子命令兜底与完备测的共同判据）。
+pub fn isKnownSubcommand(cmd: []const u8) bool {
+    for (subcommands) |sub| {
+        if (std.mem.eql(u8, cmd, sub)) return true;
+    }
+    return false;
+}
+
 /// CLI 帮助文本（无参/未知子命令时回显）。属 CLI 表面数据，放在测试图内的 cli 模块以便
-/// “子命令列表完整性”回归单测能真正执行（main.zig 的 test 块不被 build.zig 汇总、从不执行）。
+/// "子命令列表完整性"回归单测能真正执行（第 181 轮起 main.zig 亦入 main 测试图，见 build.zig）。
 pub const usage_text =
     \\zzc —— 用母语编写真正的 Zig（方言编译器 v0.1.0）
     \\
@@ -532,11 +561,48 @@ pub const usage_text =
     \\方言文件默认取 src/main.zz；错误标签与 std 错误名保持 ASCII 原样。
 ;
 
-test "usage 文本列出全部子命令" {
-    // 每个子命令名都必须出现在帮助文本里，避免新增命令忘更帮助、或改名后文本漏改。
-    for ([_][]const u8{ "init", "check", "build", "run", "test", "eject", "lsp", "lang" }) |sub| {
-        try std.testing.expect(std.mem.indexOf(u8, usage_text, sub) != null);
+test "usage 帮助命令词与子命令单一真值表双向对账（第 206 轮 D74）" {
+    // 旧测用 indexOf(usage_text, sub) 宽松子串：命令名可在 build-exe、路径等处附带
+    // 出现而假绿。此处逐行解析形如 `  zzc <词>` 的命令词行做集合双向对账——正向钉「每个
+    // 真值表名必有帮助命令词行」（P1 删 version 行→红），反向钉「帮助命令词不含表外名」
+    // （P4 加幽灵 frob 行→红）；行首锚定使改名（P3 build→buil 留 build-exe 子串）→红。
+    var hit: [subcommands.len]bool = std.mem.zeroes([subcommands.len]bool);
+    var unknown_words: usize = 0;
+    var it = std.mem.splitScalar(u8, usage_text, '\n');
+    while (it.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "  zzc ")) continue;
+        const word = std.mem.sliceTo(line["  zzc ".len..], ' ');
+        var found = false;
+        for (subcommands, 0..) |sub, i| {
+            if (std.mem.eql(u8, sub, word)) {
+                hit[i] = true;
+                found = true;
+            }
+        }
+        if (!found) unknown_words += 1;
     }
+    for (hit, subcommands) |h, sub| {
+        if (!h) std.debug.print("子命令 {s} 在 usage_text 缺帮助命令词行\n", .{sub});
+        try std.testing.expect(h);
+    }
+    try std.testing.expectEqual(@as(usize, 0), unknown_words);
+}
+
+test "子命令单一真值表自守：名无重复、check 与机读 hub 同源、判据正反（第 206 轮 D74）" {
+    // 真值表内部一致性：九名两两不同（防手滑重复）。
+    for (subcommands, 0..) |a, i| {
+        for (subcommands[i + 1 ..]) |b| {
+            try std.testing.expect(!std.mem.eql(u8, a, b));
+        }
+    }
+    // check 臂与机读契约 hub 同源：改任一必转红。
+    try std.testing.expectEqualStrings(mcon.sub_check, sub_check);
+    // isKnownSubcommand 正/反：表内皆真、表外（幽灵名与空串）皆假。
+    for (subcommands) |sub| try std.testing.expect(isKnownSubcommand(sub));
+    try std.testing.expect(!isKnownSubcommand("frobnicate"));
+    try std.testing.expect(!isKnownSubcommand(""));
+    // version 曾被旧 roster 静默漏掉——此处显式钉住其在真值表内。
+    try std.testing.expect(isKnownSubcommand(sub_version));
 }
 
 test "布尔旗标 hasBoolFlag/stripBoolFlag：单元素形识别与剔离、等号形与长名不误匹、usage 同步（第 154 轮）" {

@@ -1299,11 +1299,11 @@ pub fn main(init: std.process.Init) !void {
         bail(error.Failed); // 静默退 1：不外泄 error 名与栈帧（探针实锤形，第 103 轮）
     };
 
-    if (std.mem.eql(u8, cmd, "version")) {
+    if (std.mem.eql(u8, cmd, cli.sub_version)) {
         printOut("zzc {s}（语言包：{s}）", .{ version_str, lang.name });
         return;
     }
-    if (std.mem.eql(u8, cmd, "lang")) {
+    if (std.mem.eql(u8, cmd, cli.sub_lang)) {
         // R9g 第二档（第 140 轮）：`lang` 由“只读详情”升为带动词，但**无参形制逐字不动**（第 136 轮
         // 守卫钉的详情行 + 可注册段）。本轮探针实捕旧行为：多余 argv 被整体忽略——`zzc lang add x.txt`
         // 也只打印一次详情退 0，用户以为装好了（“该拒绝未拒绝”形），故未知动词必递退 2。
@@ -1325,12 +1325,12 @@ pub fn main(init: std.process.Init) !void {
         werr.flush() catch {};
         std.process.exit(2); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }
-    if (std.mem.eql(u8, cmd, "init")) {
+    if (std.mem.eql(u8, cmd, cli.sub_init)) {
         if (argv.len < 1) bail(error.Usage);
         cmdInit(argv[0], lang) catch |e| bail(e);
         return;
     }
-    if (std.mem.eql(u8, cmd, "lsp")) {
+    if (std.mem.eql(u8, cmd, cli.sub_lsp)) {
         // LSP（第 156 轮）：分发核在 lsp/server.zig（测试图内全量单测），此处只接 stdio 帧环流。
         // 不走 symbols/Mangle 链：快路诊断纯函数化、不 intern 不写盘，无 saveSymbols 义务（D46 形安全）。
         cmdLsp(lang);
@@ -1344,21 +1344,21 @@ pub fn main(init: std.process.Init) !void {
 
     // R11（第 164 轮）：版本漂移早警只挂编译类四入口（check/build/run/test）——这些路径消费
     // [diagnostics] 措辞表；init/lang/version/lsp/eject 不产 zig 编译回译、无需提醒。
-    if (std.mem.eql(u8, cmd, mcon.sub_check) or std.mem.eql(u8, cmd, "build") or
-        std.mem.eql(u8, cmd, "run") or std.mem.eql(u8, cmd, "test"))
+    if (std.mem.eql(u8, cmd, cli.sub_check) or std.mem.eql(u8, cmd, cli.sub_build) or
+        std.mem.eql(u8, cmd, cli.sub_run) or std.mem.eql(u8, cmd, cli.sub_test))
     {
         maybeWarnZigDrift();
     }
 
-    if (std.mem.eql(u8, cmd, mcon.sub_check)) {
+    if (std.mem.eql(u8, cmd, cli.sub_check)) {
         cmdCheck(lang, &table, argv) catch |e| bail(e);
-    } else if (std.mem.eql(u8, cmd, "build")) {
+    } else if (std.mem.eql(u8, cmd, cli.sub_build)) {
         cmdBuild(lang, &table, .build, argv) catch |e| bail(e);
-    } else if (std.mem.eql(u8, cmd, "run")) {
+    } else if (std.mem.eql(u8, cmd, cli.sub_run)) {
         cmdBuild(lang, &table, .run, argv) catch |e| bail(e);
-    } else if (std.mem.eql(u8, cmd, "test")) {
+    } else if (std.mem.eql(u8, cmd, cli.sub_test)) {
         cmdBuild(lang, &table, .test_, argv) catch |e| bail(e);
-    } else if (std.mem.eql(u8, cmd, "eject")) {
+    } else if (std.mem.eql(u8, cmd, cli.sub_eject)) {
         cmdEject(lang, &table, argv) catch |e| bail(e);
     } else {
         // 显式给出未知/拼错的子命令（如 `zzc runn`）必须以非零码失败：旧行为只把用法打到
@@ -2700,4 +2700,28 @@ test "第 205 轮 T2 eject zon 模板与启动提示吃族真值：hub 判据现
     try std.testing.expect(std.mem.indexOf(u8, zig_missing_msg, zzc.zig_series) != null);
     try std.testing.expect(std.mem.indexOf(u8, zig_missing_msg, zzc.zig_version) == null);
     try std.testing.expect(std.mem.indexOf(u8, zig_missing_msg, "Zig " ++ zzc.zig_series ++ "+") != null);
+}
+
+test "main dispatch 路由名与 cli 子命令单一真值表同源（第 206 轮 D74）" {
+    // dispatch 各臂改读 cli.sub_* 后，路由名与真值表在编译期即同一常量——一名一处定义。
+    // 本测把这份编译期同源显式钉住：九枚路由名皆在表内且判据为真；旧态改臂名（P2 探针把
+    // eject→export）曾使运行期 `zzc eject` 落未知兜底而 527/527 恒绿，如今一名一处即转红。
+    const routed = [_][]const u8{
+        cli.sub_init,    cli.sub_check, cli.sub_build, cli.sub_run,
+        cli.sub_test,    cli.sub_eject, cli.sub_lsp,   cli.sub_lang,
+        cli.sub_version,
+    };
+    try std.testing.expectEqual(cli.subcommands.len, routed.len);
+    for (routed) |name| {
+        try std.testing.expect(cli.isKnownSubcommand(name));
+        var in_table = false;
+        for (cli.subcommands) |sub| {
+            if (std.mem.eql(u8, sub, name)) in_table = true;
+        }
+        try std.testing.expect(in_table); // 路由名必现于真值表（防臂与表脱钩）
+    }
+    // P2 形负例：表外改名不再受支持（旧态此类改名全程无测转红）。
+    try std.testing.expect(!cli.isKnownSubcommand("export"));
+    // check 臂与机读契约 hub 逐字节同源（跨模块第三面对账）。
+    try std.testing.expectEqualStrings(mcon.sub_check, cli.sub_check);
 }
