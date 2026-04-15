@@ -16,20 +16,33 @@
 const std = @import("std");
 
 /// 一条 kind 的三元真值：zig 英文种类名、母语机器 kind 段词、LSP DiagnosticSeverity(1..4)。
+/// `bare_prefix` 标记该种类是否会以裸诊断行前缀 `<en>: <msg>` 形式出现于无 `file:line:col` 的
+/// CLI 级 stderr（zig 只对 error/warning/note 三者这么打）——供 `translate.localizeRunner` 的前缀
+/// 短语表据本表派生母语词，杜绝同概念词在 hub 与短语表两处各抄一份（第 209 轮 D77）。
 pub const Entry = struct {
     en: []const u8,
     zh: []const u8,
     severity: u8,
+    bare_prefix: bool = false,
 };
 
 /// 唯一真值表。新增/改词/调 severity 只动此处，生成与消费两侧自动同源。
 pub const entries = [_]Entry{
-    .{ .en = "error", .zh = "错误", .severity = 1 },
-    .{ .en = "warning", .zh = "警告", .severity = 2 },
-    .{ .en = "note", .zh = "说明", .severity = 3 },
+    .{ .en = "error", .zh = "错误", .severity = 1, .bare_prefix = true },
+    .{ .en = "warning", .zh = "警告", .severity = 2, .bare_prefix = true },
+    .{ .en = "note", .zh = "说明", .severity = 3, .bare_prefix = true },
     .{ .en = "referenced by", .zh = "被引用于", .severity = 4 },
     .{ .en = "unknown", .zh = "内部错误", .severity = 1 },
 };
+
+/// 英文 zig 种类名 → 母语 kind 词（comptime 版·专供短语表等在编译期拼 `.{ en ++ ": ", zhOf(en) ++ ": " }` 派生前缀对）。
+/// 与 `lookupZh` 同源读 `entries`，但键须编译期已知、未收录即 `@compileError`（拼错种类键在结构上不可达运行期）。
+pub fn zhOf(comptime en: []const u8) []const u8 {
+    inline for (entries) |e| {
+        if (comptime std.mem.eql(u8, e.en, en)) return e.zh;
+    }
+    @compileError("kind.zhOf：未收录的种类键 " ++ en);
+}
 
 /// 英文 zig 种类名 → 母语 kind 词（由 `entries` 派生，非另立手抄）。
 /// 未收录返回 null，原样透传由调用方 `orelse` 决定（如 zzc 原生 kind 不经本表）。
@@ -72,4 +85,21 @@ test "第 208 轮 T1 三元真值自洽：lookupZh(en)==zh 且 severityOf(zh)==s
         try std.testing.expectEqualStrings(e.zh, lookupZh(e.en).?);
         try std.testing.expectEqual(e.severity, severityOf(e.zh));
     }
+}
+
+test "第 209 轮 T0 zhOf 与 lookupZh 同源 + bare_prefix 恰为 error/warning/note 三裸诊断前缀种类" {
+    // zhOf（comptime）与 lookupZh（运行期）对每个已收录键必回同值。
+    inline for (entries) |e| {
+        try std.testing.expectEqualStrings(e.zh, zhOf(e.en));
+    }
+    // bare_prefix 恰圈定 zig 会以 `<kind>: ` 裸前缀打出的三种；其余（被引用于/内部错误）不应入前缀表。
+    var n_prefix: usize = 0;
+    for (entries) |e| {
+        const want = std.mem.eql(u8, e.en, "error") or
+            std.mem.eql(u8, e.en, "warning") or
+            std.mem.eql(u8, e.en, "note");
+        try std.testing.expectEqual(want, e.bare_prefix);
+        if (e.bare_prefix) n_prefix += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), n_prefix);
 }

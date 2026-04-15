@@ -375,9 +375,14 @@ const runner_pairs = [_][2][]const u8{
     // 括号内的错误集名（如 TestExpectedEqual）按项目惯例作类型/错误操作数原样保留。
     .{ "FAIL ", "失败 " },
     // 无位置的 CLI 级裸诊断：只翻前缀/关键短语，保留尾部（如非法参数名）。
-    .{ "error: ", "错误: " },
-    .{ "warning: ", "警告: " },
-    .{ "note: ", "说明: " },
+    // 第 209 轮 D77：三枚母语前缀词的「值面」委派 kind 词汇 hub `kdiag.zhOf`（编译期派生）——
+    // 旧形制下 错误/警告/说明 在 kind.zig(entries) 与本表两处各抄一份，改 hub 则 machineHead/renderDiag
+    // kind 段随 hub 动、本消息体前缀却留旧词，两条渲染路径对同一 warning 概念渲出「警告 vs 告警」不一致
+    // 而全库无锚（P3 探针：本行「警告: 」改「告警: 」→ zig build test 12/12 全绿）。委派后值恒同源、
+    // 结构上不可能再各自漂移；209 T1 round-trip 测把本表输出逐字节钉回 hub，防有人重新回硬编/改英文匹配键。
+    .{ "error: ", kdiag.zhOf("error") ++ ": " },
+    .{ "warning: ", kdiag.zhOf("warning") ++ ": " },
+    .{ "note: ", kdiag.zhOf("note") ++ ": " },
     .{ "unrecognized parameter", "无法识别的参数" },
     // 需保留具体数值/字段名/类型名的诊断：按短语本地化、不丢弃 zig 给出的具体信息（走命中失败后的兜底路）。
     .{ "argument(s)", "参数" },
@@ -1116,6 +1121,23 @@ test "localizeRunner 短语表不变量：表序靠前条目不得是靠后条�
                 return error.PrefixHijackInTable;
             }
         }
+    }
+}
+
+test "第 209 轮 T1 裸诊断 kind 前缀经 localizeRunner 输出逐字节 == kind 词汇 hub（防 runner_pairs 重立手抄/改匹配键）" {
+    // 承 D76：kind 段的母语词以 `diag/kind.zig` 为唯一真值。本测把「消息体裸前缀」这条
+    // 与 renderDiag kind 段并列的渲染路径也钉回同一 hub：对每个 bare_prefix 种类，喂
+    // `<en>: <尾部>`、要求 localizeRunner 产出 `<hub zh>: <尾部>`。若有人把 runner_pairs 的
+    // 母语值回硬编成与 hub 相异的词（P3 静默面）、或改动左侧英文匹配键偏离 hub.en，本测即红。
+    for (kdiag.entries) |e| {
+        if (!e.bare_prefix) continue;
+        const input = try std.fmt.allocPrint(std.testing.allocator, "{s}: probe尾部", .{e.en});
+        defer std.testing.allocator.free(input);
+        const got = try localizeRunner(std.testing.allocator, input);
+        defer std.testing.allocator.free(got);
+        const want = try std.fmt.allocPrint(std.testing.allocator, "{s}: probe尾部", .{e.zh});
+        defer std.testing.allocator.free(want);
+        try std.testing.expectEqualStrings(want, got);
     }
 }
 
