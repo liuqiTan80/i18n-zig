@@ -154,6 +154,8 @@ pub fn build(b: *std.Build) void {
     // 第 214 轮 D82：再声明 `extension.js` 为文件依赖——客户端语义图例须与 `lsp/server.zig` 的
     // legend hub 真值逐字节同源（t2 探针 P3 实锤改客户端图例序而 563/563 恒绿的静默错色面）。
     check_matcher_run.addFileArg(b.path("editors/vscode/extension.js"));
+    // 对面十（第 217 轮 D85）：LSP 基座协议帧客户端实现——帧头名/分隔符/上限与服务端同骨面。
+    check_matcher_run.addFileArg(b.path("editors/vscode/client_frames.js"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 

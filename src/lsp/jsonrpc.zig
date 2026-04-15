@@ -13,7 +13,17 @@ const std = @import("std");
 pub const ParseError = error{ InvalidFrame, FrameTooLarge };
 
 /// 单帧上限（对抗恶意/失同步流）：与 file_io 的 10MB 输入上限同源量级。
+/// 第 217 轮 D85：值面自此有字面钉（217 T0 A1）——旧超长测试只以 `max_frame_len + 1`
+/// 派生对账，改本值即测试随动全绿（t2 探针 P6 实锤的静默面）。
 pub const max_frame_len: usize = 10 * 1024 * 1024;
+
+/// 必需头名单一真值（第 217 轮 D85）：解析（大小写不敏感比较）、编码形串与客户端
+/// `client_frames.js` 对面 needle 皆自此派生——旧形为两端各自手抄同名字面量，js 侧任何
+/// 漂移对本构建链零信号（唯一旧防线 `check-demos.ps1`「shared handshake guard」节 NO_PWSH＋NO_NODE 双盲）。
+pub const header_name: []const u8 = "Content-Length";
+
+/// 头部块结束分隔符单一真值：解析搜索、编码尾串、`start` 偏移与 js 面 needle 皆自它派生。
+pub const header_sep: []const u8 = "\r\n\r\n";
 
 pub const Frame = struct {
     /// 帧体字节（JSON-RPC 报文原文，不 NUL 结尾）
@@ -25,7 +35,7 @@ pub const Frame = struct {
 /// 从缓冲头部解析一帧。返回 null = 数据还不完整（调用方续读后重试）；
 /// 错误 = 帧头坏了（非数字长度/超长/缺失），流已不可信。
 pub fn parseFrame(buf: []const u8) ParseError!?Frame {
-    const sep = std.mem.indexOf(u8, buf, "\r\n\r\n") orelse return null;
+    const sep = std.mem.indexOf(u8, buf, header_sep) orelse return null;
     const headers = buf[0..sep];
     var content_len: ?usize = null;
     var it = std.mem.splitScalar(u8, headers, '\n');
@@ -36,13 +46,13 @@ pub fn parseFrame(buf: []const u8) ParseError!?Frame {
         const colon = std.mem.indexOfScalar(u8, line, ':') orelse return error.InvalidFrame;
         const name = line[0..colon];
         const value = std.mem.trim(u8, line[colon + 1 ..], " \t");
-        if (std.ascii.eqlIgnoreCase(name, "Content-Length")) {
+        if (std.ascii.eqlIgnoreCase(name, header_name)) {
             content_len = std.fmt.parseInt(usize, value, 10) catch return error.InvalidFrame;
         }
     }
     const n = content_len orelse return error.InvalidFrame;
     if (n > max_frame_len) return error.FrameTooLarge;
-    const start = sep + 4;
+    const start = sep + header_sep.len;
     const end = start + n;
     if (end > buf.len) return null; // 体未收全
     return .{ .body = buf[start..end], .consumed = end };
@@ -50,7 +60,7 @@ pub fn parseFrame(buf: []const u8) ParseError!?Frame {
 
 /// 编码一帧：`Content-Length: N\r\n\r\n` + 体（调用方 free）。
 pub fn encodeFrame(gpa: std.mem.Allocator, body: []const u8) ![]const u8 {
-    const hdr = try std.fmt.allocPrint(gpa, "Content-Length: {d}\r\n\r\n", .{body.len});
+    const hdr = try std.fmt.allocPrint(gpa, header_name ++ ": {d}" ++ header_sep, .{body.len});
     defer gpa.free(hdr);
     return std.mem.concat(gpa, u8, &.{ hdr, body });
 }
@@ -81,6 +91,75 @@ pub fn jsonString(gpa: std.mem.Allocator, s: []const u8) ![]const u8 {
     }
     try out.append(gpa, '"');
     return out.toOwnedSlice(gpa);
+}
+
+// ---------------------------------------------------------------------------
+// 对面·客户端 `editors/vscode/client_frames.js`（第 217 轮 D85）
+// ---------------------------------------------------------------------------
+//
+// 该文件是 LSP 基座协议帧的客户端实现（零 npm 依赖、vscode-free），注释自称
+// 「mirrors src/lsp/jsonrpc.zig … kept in sync by the shared handshake guard」，而那个
+// guard 在 `tools/check-demos.ps1`（需 pwsh+node）——本机与 CI 的 `zig build test` 链
+// NO_PWSH＋NO_NODE 双盲，t2 探针 P1–P5 五路 js 漂移 569/569 全绿静默实证假锚防线。
+// 本节把帧头名/分隔符/上限的逐字节对面 needle 清单入 hub（皆自上面族真值派生），
+// 由守卫步 `check-machine-matcher` 对面十对账——判据入 hub、守卫只做 I/O（承 203/215/216）。
+
+/// 帧上限的 MB 计（js 面 needle 以 `N * 1024 * 1024` 字面形声明）：非整 MB 即编译拒自守。
+pub const max_frame_mb: usize = if (max_frame_len % (1024 * 1024) != 0) @compileError("max_frame_len 须为整 MB——js 面 needle 以 MB 字面形拼装") else max_frame_len / (1024 * 1024);
+
+/// 把字节串转为 JS 源码转义形（本族只需 CR/LF；其余字符即 `@compileError` 自守）。
+/// 输出长度恒为 `2 * s.len`（每字符皆落两字节转义对），故按值返回定长数组、无局部指针逃逸。
+/// `comptime` 块强制全体在编译期求值（按值 `break :blk out`）：若裸露于运行期路径，
+/// 运行期函数体内调用时 `c` 非 comptime 已知，`@compileError` 分支会被当作可达而拦截（217 判例）。
+pub fn jsEsc(comptime s: []const u8) [s.len * 2]u8 {
+    return comptime blk: {
+        var out: [s.len * 2]u8 = undefined;
+        var n: usize = 0;
+        for (s) |c| {
+            switch (c) {
+                '\r' => {
+                    out[n] = '\\';
+                    out[n + 1] = 'r';
+                    n += 2;
+                },
+                '\n' => {
+                    out[n] = '\\';
+                    out[n + 1] = 'n';
+                    n += 2;
+                },
+                else => @compileError("jsEsc：仅支持 CR/LF 转义形"),
+            }
+        }
+        break :blk out;
+    };
+}
+
+/// 全小写形（js 解码端先 `toLowerCase()` 再比字面）：自 `header_name` 派生，非手抄。
+pub fn asciiLower(comptime s: []const u8) [s.len]u8 {
+    var out: [s.len]u8 = undefined;
+    for (s, 0..) |c, i| out[i] = std.ascii.toLower(c);
+    return out;
+}
+
+/// 一次对面核对项：逐字节 needle 与「分道即何为」说明（与 215/216 轮同形制）。
+pub const FaceCheck = struct {
+    needle: []const u8,
+    why: []const u8,
+};
+
+/// 对面·`client_frames.js`：上限／写侧头名／写侧分隔符／读侧头名／读侧分隔符。
+/// 后端（服务端）帧形与前端这五枚同骨即双向可解；分道即 initialize 握手都解不了——LSP 全废。
+pub const frames_face = [_]FaceCheck{
+    .{ .needle = "const MAX_FRAME_BYTES = " ++ std.fmt.comptimePrint("{d}", .{max_frame_mb}) ++ " * 1024 * 1024;", .why = "客户端帧上限须等于服务端 max_frame_len 的 MB 字面形，分道即两端对超限帧取舍口径不一（流失同步或超大合法帧被客户端拒收）" },
+    .{ .needle = "'" ++ header_name ++ ": ' + payload.length", .why = "写侧帧头名与冒号空格形须逐字节等于服务端编码形，分道即服务端认不出必需头——initialize 即死" },
+    .{ .needle = "payload.length + '" ++ jsEsc(header_sep) ++ "', 'ascii'", .why = "写侧头部块结束分隔符须等于服务端搜索形，分道即服务端永凑不齐一帧（全量静默无应答）" },
+    .{ .needle = "name === '" ++ asciiLower(header_name) ++ "'", .why = "读侧 lowercase 后比较的头名须由服务端真值派生，分道即客户端解不了服务端应答帧（取 throw 形失联）" },
+    .{ .needle = "this.buf.indexOf('" ++ jsEsc(header_sep) ++ "')", .why = "读侧分隔符搜索形须等于真值转义，分道即客户端永认为帧未收全——应答满屏而不显" },
+};
+
+/// `text`（运行时对面全文）是否缺 `needle`（命中即已同步；缺失即分道）。守卫据此循环报错、不自立判据。
+pub fn missing(text: []const u8, comptime needle: []const u8) bool {
+    return std.mem.indexOf(u8, text, needle) == null;
 }
 
 // ---------------------------------------------------------------------------
@@ -218,4 +297,36 @@ test "lsp.jsonrpc：jsonString 控制字符转义臂 + parseFrame 头值 trim/�
     }
 
     std.debug.print("T asserts={d}\n", .{asserts});
+}
+
+test "第 217 轮 T0 LSP 基座协议帧族：值字面钉／派生形钉／js 面五枚 needle 形钉／判据正反小样含 P1–P5 探针形" {
+    // A1 值字面钉：族三根真值的字面形（P6 静默面关闸——旧形只存 max_frame_len+1 派生对账，改值即全绿随动）。
+    try testing.expectEqualStrings("Content-Length", header_name);
+    try testing.expectEqualStrings("\r\n\r\n", header_sep);
+    try testing.expectEqual(@as(usize, 10 * 1024 * 1024), max_frame_len);
+    // A2 派生形钉：MB 计、JS 转义形与 lowercase 形皆由真值派生（改真值即 needle 全族同动）。
+    try testing.expectEqual(@as(usize, 10), max_frame_mb);
+    const esc_sep = jsEsc(header_sep); // JS 源码字面形：反斜杠+字母，非控制字节
+    try testing.expectEqualStrings("\\r\\n\\r\\n", &esc_sep);
+    const lower_name = asciiLower(header_name);
+    try testing.expectEqualStrings("content-length", &lower_name);
+    // A3 五枚 needle 形钉：逐字节当前活路形（形改即守卫与对面两头猜）。
+    try testing.expectEqualStrings("const MAX_FRAME_BYTES = 10 * 1024 * 1024;", frames_face[0].needle);
+    try testing.expectEqualStrings("'Content-Length: ' + payload.length", frames_face[1].needle);
+    try testing.expectEqualStrings("payload.length + '\\r\\n\\r\\n', 'ascii'", frames_face[2].needle);
+    try testing.expectEqualStrings("name === 'content-length'", frames_face[3].needle);
+    try testing.expectEqualStrings("this.buf.indexOf('\\r\\n\\r\\n')", frames_face[4].needle);
+    // A4 判据正反小样：命中为不缺；P1–P5 探针形（本轮把五路静默面逐一预先钉为有锚）皆为缺。
+    try testing.expect(!missing("const MAX_FRAME_BYTES = 10 * 1024 * 1024;", frames_face[0].needle));
+    try testing.expect(missing("const MAX_FRAME_BYTES = 5 * 1024 * 1024;", frames_face[0].needle)); // P1 形
+    try testing.expect(missing("Buffer.from('X-Content-Length: ' + payload.length", frames_face[1].needle)); // P2 形
+    try testing.expect(missing("payload.length + '\\n\\n', 'ascii'", frames_face[2].needle)); // P3 形
+    try testing.expect(missing("if (name === 'contentlength') {", frames_face[3].needle)); // P4 形
+    try testing.expect(missing("const sep = this.buf.indexOf('\\r\\r');", frames_face[4].needle)); // P5 形
+    // A5 编解码同骨 round-trip：我方编码出口逐字节含写侧 needle 所钉的同源段（服务端真值与对面声明同骨）。
+    const enc = try encodeFrame(testing.allocator, "{}");
+    defer testing.allocator.free(enc);
+    try testing.expectEqualStrings("Content-Length: 2\r\n\r\n{}", enc);
+    // A6 面清单覆盖钉：五枚——新增接线点须在此随动（防只加常量不加对账面）。
+    try testing.expectEqual(@as(usize, 5), frames_face.len);
 }

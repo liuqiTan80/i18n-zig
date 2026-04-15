@@ -16,6 +16,7 @@ const legend = @import("zzc_core").lsp_legend; // 第 214 轮 D82：语义 token
 const paths = @import("zzc_core").paths; // 第 210 轮 D78：程序名单一真值与 `buildDeclaresExe` 判据
 const lid = @import("zzc_core").lang_id; // 第 215 轮 D83：编辑器语言标识族真值与三面对账 needle 清单
 const lcfg = @import("zzc_core").lsp_cfg; // 第 216 轮 D84：LSP 客户端接线族真值与清单/客户端两面 needle 清单
+const jrpc = @import("zzc_core").lsp_jsonrpc; // 第 217 轮 D85：LSP 基座协议帧族真值与 client_frames.js 对面 needle 清单
 
 /// 一面（needle 清单）逐字节对账：缺任一枚即分道退出。判据（needle 与后果描述）全在 hub，
 /// 本函数只做「在已读入的对面文本里找」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
@@ -190,8 +191,18 @@ pub fn main(init: std.process.Init) !void {
     checkFace(pkg_path, &lcfg.pkg_face, pkg);
     checkFace(ext_path, &lcfg.client_face, ext);
 
+    // —— 对面十：`editors/vscode/client_frames.js` 的 LSP 基座协议帧族（第 217 轮 D85）。该文件
+    //   注释自称与 `jsonrpc.zig` 「kept in sync by the shared handshake guard」，而该 guard 在
+    //   ps1（需 pwsh+node）——本机与 CI 双盲：t2 探针 P1–P5 五路帧形漂移 569/569 全绿静默，
+    //   后果是 initialize 握手都解不了（LSP 全废）。针面对账由本步新声明的第十片承担。
+    const frames_path = if (args.len >= 6) args[5] else "editors/vscode/client_frames.js";
+    const frames = std.Io.Dir.cwd().readFileAlloc(io, frames_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ frames_path, @errorName(e) });
+    defer gpa.free(frames);
+    checkFace(frames_path, &jrpc.frames_face, frames);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
     );
 }
