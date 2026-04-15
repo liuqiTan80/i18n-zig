@@ -7,6 +7,7 @@ const std = @import("std");
 const Io = std.Io;
 const zzc = @import("zzc_core");
 const tmlang = zzc.tmlang;
+const lang_id = zzc.lang_id; // 第 215 轮 D83：资产落点由语言标识族真值派生
 const Pack = zzc.Pack;
 
 pub fn main(init: std.process.Init) !void {
@@ -21,7 +22,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     const mode = args[1];
-    const default_out = "editors/vscode/syntaxes/zz.tmLanguage.json";
+    const default_out = lang_id.grammar_emit_path; // 第 215 轮 D83：与清单 `grammars[].path` 同源派生（分道即装完插件寻不到 grammar）
     const out_path = if (args.len >= 3) args[2] else default_out;
 
     // 读取语言包。

@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack;
+const lang_id = @import("lang_identity.zig"); // 第 215 轮 D83：scopeName／fileTypes 取语言标识族真值
 
 /// 词形条目：方言词 + 长度（排序用）。
 const Word = struct { text: []const u8, len: usize };
@@ -147,13 +148,17 @@ pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
     out.appendSlice(gpa,
         \\{
         \\  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-        \\  "scopeName": "source.zz",
-        \\  "name": 
     ) catch @panic("OOM");
+    // scopeName 由语言标识族真值派生（第 215 轮 D83：与清单 `grammars[].scopeName` 同源——
+    //   两边各写一份时任一枚漂移即编辑器寻不到 grammar、高亮静默全废，t2 探针 P1/P2 实锤）。
+    out.appendSlice(gpa, "\n  \"scopeName\": \"" ++ lang_id.scope_name ++ "\",\n  \"name\": ") catch @panic("OOM");
     jsonStr(&out, gpa, lang.name);
     out.appendSlice(gpa,
         \\,
-        \\  "fileTypes": ["zz"],
+    ) catch @panic("OOM");
+    // fileTypes 同源派生（清单 `extensions` 与 `zzc_paths.dialect_ext` 同族）。
+    out.appendSlice(gpa, "\n  \"fileTypes\": [\"" ++ lang_id.file_type_stem ++ "\"],\n") catch @panic("OOM");
+    out.appendSlice(gpa,
         \\  "patterns": [
         \\    { "include": "#comments" },
         \\    { "include": "#strings" },
@@ -247,10 +252,10 @@ test "tmlang.generate：合法 JSON、包含方言词、分类正确（第 154 �
     const json_bytes = try generate(gpa, lang);
     defer gpa.free(json_bytes);
 
-    // 基本结构检查。
+    // 基本结构检查（第 215 轮 D83：scopeName／fileTypes 由语言标识族真值派生，不再测内手抄自照）。
     try testing.expectEqualStrings("{", json_bytes[0..1]);
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "\"scopeName\": \"source.zz\"") != null);
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "\"fileTypes\": [\"zz\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, "\"scopeName\": \"" ++ lang_id.scope_name ++ "\"") != null);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, "\"fileTypes\": [\"" ++ lang_id.file_type_stem ++ "\"]") != null);
     // 方言词出现在正确 scope 中。
     try testing.expect(std.mem.indexOf(u8, json_bytes, "常数") != null);
     try testing.expect(std.mem.indexOf(u8, json_bytes, "变量") != null);
