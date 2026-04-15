@@ -27,6 +27,79 @@ const fullwidth = @import("../diag/fullwidth.zig");
 const snippets = @import("../editor/snippets.zig");
 const paths = @import("../zzc_paths.zig"); // 第 210 轮 D78：诊断 source 标注的程序名取单一真值（与 CLI/编辑器同源）
 
+/// 语义 token 图例（第 214 轮 D82 单一真值）：initialize 应答 `tokenTypes`、`tokenTypeOf`/
+/// `classToTokenType` 的索引值、客户端 `editors/vscode/extension.js` 的 `SEMANTIC_TOKEN_TYPES`
+/// 共此一份——四点位此前各抄 magic number/同名数组且互不引用（t2 探针 P1 改图例序仅 156 测的
+/// 手抄副本自照红、P2 改名与 P3 改客户端序恒绿静默），图例改序/改名而索引随动失配即客户端
+/// 静默错色。值钉见本文件 214 T0；客户端对面由守卫步 check-machine-matcher 读文件对账（非
+/// source dependency，202/203 轮判例）＋ 214 T1 的 @embedFile 字节耦合双保险。
+pub const legend_types = [_][]const u8{ "keyword", "type", "function", "variable", "string", "comment", "number" };
+
+/// 词元类型名 → 图例索引（找不到即编译期失败：新增类型名忘配索引无处遁形）。
+fn legendIndexOf(comptime name: []const u8) u8 {
+    for (legend_types, 0..) |t, i| {
+        if (std.mem.eql(u8, t, name)) return @intCast(i);
+    }
+    @compileError("词元类型「" ++ name ++ "」不在语义图例 legend_types 中");
+}
+
+pub const ty_keyword: u8 = legendIndexOf("keyword");
+pub const ty_type: u8 = legendIndexOf("type");
+pub const ty_function: u8 = legendIndexOf("function");
+pub const ty_variable: u8 = legendIndexOf("variable");
+pub const ty_string: u8 = legendIndexOf("string");
+pub const ty_comment: u8 = legendIndexOf("comment");
+pub const ty_number: u8 = legendIndexOf("number");
+
+/// initialize 应答 JSON 中图例段的逐字节形（与 `respond` 拼接形同骨，测钉用同一派生）。
+pub const legend_json: []const u8 = "\"tokenTypes\":[" ++ blk: {
+    var s: []const u8 = "";
+    for (legend_types, 0..) |t, i| {
+        if (i > 0) s = s ++ ",";
+        s = s ++ "\"" ++ t ++ "\"";
+    }
+    break :blk s;
+} ++ "]";
+
+/// 客户端 `extension.js` 必须逐字节声明的字面量形（守卫步判据的构造也在 hub，
+/// 守卫视仅只读 I/O——同 210 轮 `buildDeclaresExe` 形制）。
+pub const client_legend_needle: []const u8 = "const SEMANTIC_TOKEN_TYPES = [" ++ blk: {
+    var s: []const u8 = "";
+    for (legend_types, 0..) |t, i| {
+        if (i > 0) s = s ++ ", ";
+        s = s ++ "'" ++ t ++ "'";
+    }
+    break :blk s;
+} ++ "]";
+
+/// 从 `extension.js` 文本判「客户端图例逐字节等于服务端真值」（第 214 轮 D82 守卫判据，纯函数）。
+pub fn extensionDeclaresLegend(text: []const u8) bool {
+    return std.mem.indexOf(u8, text, client_legend_needle) != null;
+}
+
+/// 抽 JS 单引号数组字面量 `'a', 'b', …` 的词元序列（第 214 轮 D82 的 214 T1 判据，comptime 纯函数）。
+/// 形不合规（引号不配对、数组未闭合）返 null，调用侧据此判失败。现形注：本仓 extension.js 在 `src/`
+/// 包路径之外，`@embedFile` 不可越（202/214 轮双重判例），跨文件对账留守卫步唯一通道；本抽取器
+/// 供测内小样与守卫侧将来收紧书写形（现守卫用 `extensionDeclaresLegend` 逐字节 needle 形）两用。
+pub fn parseClientLegendArray(comptime body: []const u8) ?[legend_types.len][]const u8 {
+    var out: [legend_types.len][]const u8 = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < body.len) {
+        if (body[i] != '\'') return null; // 只认单引号词元形（本仓 extension.js 的既成书写形制）
+        var j = i + 1;
+        while (j < body.len and body[j] != '\'') j += 1;
+        if (j >= body.len) return null;
+        if (n >= out.len) return null; // 词元多于图例成员数
+        out[n] = body[i + 1 .. j];
+        n += 1;
+        i = j + 1;
+        while (i < body.len and (body[i] == ',' or std.ascii.isWhitespace(body[i]))) i += 1;
+    }
+    if (n != out.len) return null;
+    return out;
+}
+
 pub const OutList = std.ArrayList([]const u8);
 
 /// 语义诊断项（第 159 轮 · on-save 语义接入）：坐标已是文档 text 的 0 基行 + 0 基
@@ -246,9 +319,7 @@ pub const Server = struct {
             // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
             // semanticTokensProvider（第 161 轮）：声明语义 token 图例（token 类型索引即下表顺序）+ full 供给，
             // 把方言母语词汇的语义高亮据 LSP 标准面供任意客户端（编辑端渲染留 162）。
-            const res =
-                \\{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"hoverProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","type","function","variable","string","comment","number"],"tokenModifiers":[]},"full":true}},"serverInfo":{"name":"zzc-lsp"}}
-            ;
+            const res = "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"semanticTokensProvider\":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"zzc-lsp\"}}";
             try self.respond(out, idv, res);
             return;
         }
@@ -583,8 +654,8 @@ pub const Server = struct {
     /// 保 tmLanguage 既有着色不被降级、且不越俾符号分析区分标识符作用域（超 MVP）。
     fn tokenTypeOf(self: *Server, t: lexer.Token, text: []const u8) ?u8 {
         return switch (t.kind) {
-            .comment => 5, // comment
-            .string, .char, .multiline, .symbol => 4, // string
+            .comment => ty_comment,
+            .string, .char, .multiline, .symbol => ty_string,
             .nonascii_word => blk: {
                 const word = text[t.off..][0..t.len];
                 const v = self.lang.keywords.get(word) orelse break :blk null;
@@ -592,7 +663,7 @@ pub const Server = struct {
             },
             .ascii_word => blk: {
                 const word = text[t.off..][0..t.len];
-                break :blk if (word.len > 0 and std.ascii.isDigit(word[0])) @as(u8, 6) else null; // number
+                break :blk if (word.len > 0 and std.ascii.isDigit(word[0])) ty_number else null;
             },
             .punct => null,
         };
@@ -620,13 +691,14 @@ fn isChainWordByte(c: u8) bool {
     return c >= 0x80 or std.ascii.isAlphanumeric(c) or c == '_';
 }
 
-/// `snippets.classify` 词类标签 → LSP tokenTypes 图例索引（与 initialize 图例顺序同绑）。
+/// `snippets.classify` 词类标签 → LSP tokenTypes 图例索引（第 214 轮 D82：词元名与索引皆取
+/// 图例 hub 派生常量，与 initialize 图例强制同序；新增词类须先在 legend_types 立名）。
 fn classToTokenType(group: []const u8) u8 {
-    if (std.mem.eql(u8, group, "关键字")) return 0;
-    if (std.mem.eql(u8, group, "字面常量")) return 0;
-    if (std.mem.eql(u8, group, "类型")) return 1;
-    if (std.mem.eql(u8, group, "内建函数")) return 2;
-    return 3; // 方言词 → variable
+    if (std.mem.eql(u8, group, "关键字")) return ty_keyword;
+    if (std.mem.eql(u8, group, "字面常量")) return ty_keyword;
+    if (std.mem.eql(u8, group, "类型")) return ty_type;
+    if (std.mem.eql(u8, group, "内建函数")) return ty_function;
+    return ty_variable; // 方言词 → variable
 }
 
 // ---------------------------------------------------------------------------
@@ -658,7 +730,9 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"hoverProvider\":true") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}}") != null);
     // 第 161 轮：新增语义 token 供给能力（图例七类 + full），供任意 LSP 客户端语义高亮。
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"variable\",\"string\",\"comment\",\"number\"],\"tokenModifiers\":[]},\"full\":true}") != null);
+    // 第 214 轮 D82 手抄清剿：图例段断言改以 hub 派生的 legend_json 构造（改图例则断言随动，
+    // 杜绝「应答与测各抄一份、一改两红」的自照形制）。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"semanticTokensProvider\":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}") != null);
 }
 
 test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 UTF-16（第 156 轮）" {
@@ -912,17 +986,17 @@ test "lsp.server：semanticTokens/full 基本映射 + delta 编码（第 161 轮
     // token1 常数：[0,0,2,0,0]
     try testing.expectEqual(@as(i64, 0), data[0].integer);
     try testing.expectEqual(@as(i64, 0), data[1].integer);
-    try testing.expectEqual(@as(i64, 2), data[2].integer); // length：两个 BMP 码元
-    try testing.expectEqual(@as(i64, 0), data[3].integer); // type=keyword
+    try testing.expectEqual(@as(i64, 2), data[2].integer); // length：两个 BMP  码元
+    try testing.expectEqual(@as(i64, ty_keyword), data[3].integer); // type=keyword
     // token2 数字 1：同行、delta_start=7（常(0)数(1)空(2)甲(3)空(4)=(5)空(6)1(7)）、type=number(6)
     try testing.expectEqual(@as(i64, 0), data[5].integer); // delta_line
     try testing.expectEqual(@as(i64, 7), data[6].integer); // delta_start
     try testing.expectEqual(@as(i64, 1), data[7].integer); // length
-    try testing.expectEqual(@as(i64, 6), data[8].integer); // type=number
+    try testing.expectEqual(@as(i64, ty_number), data[8].integer); // type=number
     // token3 注释 // 注：同行、delta_start=2（自 1 后）、length=4、type=comment(5)
     try testing.expectEqual(@as(i64, 2), data[11].integer); // delta_start
     try testing.expectEqual(@as(i64, 4), data[12].integer); // length
-    try testing.expectEqual(@as(i64, 5), data[13].integer); // type=comment
+    try testing.expectEqual(@as(i64, ty_comment), data[13].integer); // type=comment
 }
 
 test "lsp.server：semanticTokens 跳过未知母语词、空文档→空流（第 161 轮）" {
@@ -1090,14 +1164,14 @@ test "lsp.server：semanticTokensData 跨行 delta_line/delta_start 复位（第
     // token1 常数：[0,1,2,0,0]（首 token、同行、delta_start=1-0）
     try testing.expectEqual(@as(i64, 0), data[0].integer); // delta_line
     try testing.expectEqual(@as(i64, 1), data[1].integer); // delta_start
-    try testing.expectEqual(@as(i64, 2), data[2].integer); // length（两个 BMP 码元）
-    try testing.expectEqual(@as(i64, 0), data[3].integer); // type=keyword
+    try testing.expectEqual(@as(i64, 2), data[2].integer); // length（两个 BMP  码元）
+    try testing.expectEqual(@as(i64, ty_keyword), data[3].integer); // type=keyword
     // token2 数字 5（第二行）：[1,1,1,6,0]——delta_line=1、delta_start 取本行绝对列 1
     // （非「1 - prev_char(1) = 0」；若跨行漏复位即坠 0、本断言精确抓红）
     try testing.expectEqual(@as(i64, 1), data[5].integer); // delta_line=1（跨行）
     try testing.expectEqual(@as(i64, 1), data[6].integer); // delta_start=本行绝对列
     try testing.expectEqual(@as(i64, 1), data[7].integer); // length
-    try testing.expectEqual(@as(i64, 6), data[8].integer); // type=number
+    try testing.expectEqual(@as(i64, ty_number), data[8].integer); // type=number
 }
 
 test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
@@ -1605,4 +1679,86 @@ test "第 195 轮 T1 upsertDoc 文档表所有权：首插/替换/双 uri/入参
         srv.deinit();
         try testing.expectEqual(fa.deallocations, fa.allocations); // 含表首块在内全部齐平
     }
+}
+
+// ---------------------------------------------------------------------------
+// 第 214 轮 D82：语义 token 图例单一真值钉
+// ---------------------------------------------------------------------------
+
+test "第 214 轮 T0 语义图例 round-trip：initialize 应答图例反查 tokenTypeOf/classToTokenType 索引（防写侧图例与索引族分道静默错色）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    // A1 initialize 应答的图例逐字节即 hub 派生形（应答写侧委派 legend_json 的出口钉）。
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], legend_json) != null);
+
+    // A2 真数据 round-trip：同一应答解析出图例数组，发 token 的 type 索引反查图例须得承诺词元名。
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+    defer parsed.deinit();
+    const init_result = objIn(asObject(parsed.value).?.get("result")).?;
+    const caps = objIn(init_result.get("capabilities")).?; // 图例嵌在 capabilities 下（应答形实跑坐实）
+    const legend = switch (objIn(objIn(caps.get("semanticTokensProvider")).?.get("legend")).?.get("tokenTypes").?) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(legend_types.len, legend.len);
+    for (legend_types, 0..) |want, i| {
+        try testing.expectEqualStrings(want, legend[i].string); // 应答图例逐员等于真值（改序即红）
+    }
+
+    freeOut(gpa, &out);
+    // 「常数」→keyword、「整数」→type（M2 残口补腿：类索引漂移 round-trip 可抓）、「甲」未入 keywords 不发、
+    // 1→number、// 注→comment；字符串与点链走既有跳过/映射支。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///rt214.zz\",\"text\":\"常数 整数 甲 = 1 // 注\"}}}", &out);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/semanticTokens/full\",\"params\":{\"textDocument\":{\"uri\":\"file:///rt214.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    var parsed2 = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+    defer parsed2.deinit();
+    const data = switch (objIn(asObject(parsed2.value).?.get("result")).?.get("data").?) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 20), data.len); // 4 token × 5 元组
+    const expect_names = [_][]const u8{ "keyword", "type", "number", "comment" };
+    for (expect_names, 0..) |name, k| {
+        const idx: usize = @intCast(data[k * 5 + 3].integer);
+        try testing.expect(idx < legend.len); // 索引越界即客户端静默错色的最劣形
+        try testing.expectEqualStrings(name, legend[idx].string); // 由应答图例反查、非由我方常量反查
+    }
+}
+
+test "第 214 轮 T1 图例派生面与客户端声明判据：needle/legend_json 形钉 + 抽取器正反小样 + extensionDeclaresLegend 小样（防守卫判据自身失真）" {
+    // A1 客户端 needle 形钉：逐字节等于真值展开形（守卫 FAIL 消息与判据共此构造，改形即红）。
+    try testing.expectEqualStrings(
+        "const SEMANTIC_TOKEN_TYPES = ['keyword', 'type', 'function', 'variable', 'string', 'comment', 'number']",
+        client_legend_needle,
+    );
+    // A2 应答图例段形钉：与 initialize 写侧拼接同一派生（拼形改样此处即红，免得守卫/断言两头猜）。
+    try testing.expectEqualStrings(
+        "\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"variable\",\"string\",\"comment\",\"number\"]",
+        legend_json,
+    );
+    // A3 extensionDeclaresLegend 正反小样：命中 needle 为真；错序/改名/空文本皆假（守卫据此判分道）。
+    try testing.expect(extensionDeclaresLegend("const X = 1;\n" ++ client_legend_needle ++ "\nconst Y = 2;"));
+    try testing.expect(!extensionDeclaresLegend("const SEMANTIC_TOKEN_TYPES = ['keyword', 'type', 'function', 'variable', 'string', 'number', 'comment']")); // P3 探针对序形
+    try testing.expect(!extensionDeclaresLegend("const SEMANTIC_TOKEN_TYPES = ['kw', 'type', 'function', 'variable', 'string', 'comment', 'number']")); // P2 探针改名形
+    try testing.expect(!extensionDeclaresLegend(""));
+    // A4 抽取器正样：给定真值序的单引号词元串须逐员抽回。
+    const got = parseClientLegendArray("'keyword', 'type', 'function', 'variable', 'string', 'comment', 'number'") orelse return error.TestUnexpectedResult;
+    for (got, 0..) |t, i| try testing.expectEqualStrings(legend_types[i], t);
+    // A5 抽取器反样：词元数不符 / 引号不闭合 皆 null。
+    try testing.expect(parseClientLegendArray("'a', 'b'") == null);
+    try testing.expect(parseClientLegendArray("'keyword', 'type', 'function', 'variable', 'string', 'comment', 'number', 'extra'") == null);
+    try testing.expect(parseClientLegendArray("'unclosed, 'x'") == null);
 }

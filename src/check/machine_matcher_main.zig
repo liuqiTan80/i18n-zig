@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const mcon = @import("zzc_core").machine;
+const legend = @import("zzc_core").lsp_legend; // 第 214 轮 D82：语义 token 图例真值与 `extensionDeclaresLegend` 判据
 const paths = @import("zzc_core").paths; // 第 210 轮 D78：程序名单一真值与 `buildDeclaresExe` 判据
 
 /// 取 `text` 中 `from` 之后首个 `"key"` 对应的 JSON 字符串值；返回引号之间的**原始**片段
@@ -136,8 +137,24 @@ pub fn main(init: std.process.Init) !void {
         );
     }
 
+    // —— 对面四：`editors/vscode/extension.js` 的客户端语义 token 图例（第 214 轮 D82）。该文件内注释
+    //   自称 guard-pinned 而既有三对面皆不含它——t2 探针 P3 实锤改客户端图例序全绿静默：索引由服务端
+    //   数据 5 元组携带、客户端拿自家图例反查，错序/改名即静默错色。判据在 hub（extensionDeclaresLegend），
+    //   本步只读文件与退出码；同时本步 addFileArg 已声明其入 source dependency 清单。
+    const ext_path = if (args.len >= 5) args[4] else "editors/vscode/extension.js";
+    const ext = std.Io.Dir.cwd().readFileAlloc(io, ext_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ ext_path, @errorName(e) });
+    defer gpa.free(ext);
+    if (!legend.extensionDeclaresLegend(ext)) {
+        fail(
+            "FAIL: {s} 的客户端图例与 LSP 语义图例真值分道——须逐字节声明 `{s}`。" ++
+                "客户端拿自家图例反查服务端索引，错序/改名即静默错色（或越界）。\n",
+            .{ ext_path, legend.client_legend_needle },
+        );
+    }
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，且 {s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」）\n",
-        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command },
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源\n",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
     );
 }

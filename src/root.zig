@@ -17,6 +17,7 @@ pub const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
 pub const lsp_server = @import("lsp/server.zig");
 pub const paths = @import("zzc_paths.zig");
 pub const machine = @import("machine_contract.zig");
+pub const lsp_legend = @import("lsp/server.zig"); // 第 214 轮 D82：语义 token 图例单一真值（守卫步据此对账 extension.js 对面）
 
 pub const zh_pack_bytes = @embedFile("lang/packs/中文.txt");
 

@@ -151,6 +151,9 @@ pub fn build(b: *std.Build) void {
     // 第 210 轮 D78：再声明 `build.zig` 自身为文件依赖——守卫核对「编辑器示例命令行的程序名」与
     // 本 build 脚本 `addExecutable(.name)` 实际产出的 exe 名同源（t2 探针 P1 实锤改 exe 名而恒绿的静默面）。
     check_matcher_run.addFileArg(b.path("build.zig"));
+    // 第 214 轮 D82：再声明 `extension.js` 为文件依赖——客户端语义图例须与 `lsp/server.zig` 的
+    // legend hub 真值逐字节同源（t2 探针 P3 实锤改客户端图例序而 563/563 恒绿的静默错色面）。
+    check_matcher_run.addFileArg(b.path("editors/vscode/extension.js"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 
