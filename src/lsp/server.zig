@@ -135,6 +135,69 @@ pub const methods_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "msg.method === '" ++ m_publishDiagnostics ++ "'", .why = "服务端发布诊断通知的消费订阅词须等于 publishRaw 写侧真值——分道即服务端照发、客户端全瞎，诊断面板恒空（t2 P2 静默面）" },
 };
 
+/// LSP 消息本体键族（第 220 轮 D88 单一真值）：`method`/`id`/`params`/`result` 等 JSON 键
+/// 系服务端 dispatch 解析臂、应答/通知写侧形串与客户端 `extension.js` 发起/消费面**三份手抄**
+/// 共用词——此前互不引用（t2 探针 P1–P3 实锤 js 侧漂键对构建链零信号、真跑 P4 坐实漂形 `td:`
+/// 文档不入表、诊断/悬停全空而 575/575 恒绿），键词分道即整条消息静默坠空，功能级断裂。
+/// `ek_*` 为写侧形串的转义形（`std.fmt` 模板内 `\"key\"`），与解析臂同字一源——改任一处即两侧
+/// 同漂，漂形由 220 T0 的 fixture 同骨钉与 js 面 needle 形钉双向捕获。
+pub const k_jsonrpc = "jsonrpc";
+pub const k_method = "method";
+pub const k_id = "id";
+pub const k_params = "params";
+pub const k_result = "result";
+pub const k_textDocument = "textDocument";
+pub const k_uri = "uri";
+pub const k_text = "text";
+pub const k_contentChanges = "contentChanges";
+pub const k_position = "position";
+pub const k_line = "line";
+pub const k_character = "character";
+pub const k_diagnostics = "diagnostics";
+pub const k_start = "start";
+pub const k_end = "end";
+
+/// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
+const ek_jsonrpc = "\"" ++ k_jsonrpc ++ "\"";
+const ek_id = "\"" ++ k_id ++ "\"";
+const ek_params = "\"" ++ k_params ++ "\"";
+const ek_result = "\"" ++ k_result ++ "\"";
+const ek_uri = "\"" ++ k_uri ++ "\"";
+const ek_text = "\"" ++ k_text ++ "\"";
+const ek_diagnostics = "\"" ++ k_diagnostics ++ "\"";
+const ek_position = "\"" ++ k_position ++ "\"";
+const ek_line = "\"" ++ k_line ++ "\"";
+const ek_character = "\"" ++ k_character ++ "\"";
+const ek_textDocument = "\"" ++ k_textDocument ++ "\"";
+const ek_start = "\"" ++ k_start ++ "\"";
+const ek_end = "\"" ++ k_end ++ "\"";
+const ek_v20 = "\"" ++ "2.0" ++ "\"";
+const ek_method = "\"" ++ k_method ++ "\"";
+const f_result_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_result ++ ":{s}}}";
+const f_error_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s},\"error\":{{\"code\":{d},\"message\":{s}}}}}";
+const f_range_json = "{{" ++ ek_start ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}," ++ ek_end ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}}}";
+const f_publish_diagnostics = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_method ++ ":\"" ++ m_publishDiagnostics ++ "\"," ++ ek_params ++ ":{{" ++ ek_uri ++ ":{s}," ++ ek_diagnostics ++ ":{s}}}}}";
+
+/// 消息本体形串骨架（写侧拼接与测内 fixture 共用派生——同 214 `legend_json` 同骨形制：
+/// 键词漂则 fixture 随漂、解析臂随漂，两侧不可能分道）。
+pub const f_didOpen_params = "{{" ++ ek_textDocument ++ ":{{" ++ ek_uri ++ ":{s}," ++ ek_text ++ ":{s}}}}}";
+pub const f_hover_params = "{{" ++ ek_textDocument ++ ":{{" ++ ek_uri ++ ":{s}}}," ++ ek_position ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}}}";
+
+/// 对面·`extension.js` 消息本体键族 needle 清单（守卫对面十二——同 218 `methods_face` 形制，
+/// 判据入 hub、守卫视只读 I/O）。js 非 source dependency（203/214 轮判例：改 js 不触发测图重跑），
+/// 而 t2 探针 P1–P3 实锤漂键对构建链零信号、真跑 P4 坐实功能级断裂——逐字节钉住客户端书写形。
+pub const params_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = "send({ " ++ k_jsonrpc ++ ": '2.0', " ++ k_id ++ ", " ++ k_method ++ ", " ++ k_params ++ " });", .why = "请求封装的消息骨四键 shorthand 须与服务端解析臂同名——漂则应答无 id/方法失踪，整条请求静默坠空（t2 P2 形）" },
+    .{ .needle = "msg." ++ k_params, .why = "诊断通知参数体的读侧属性须等于服务端写侧键——漂则客户端取到 undefined，applyDiagnostics 首行短路、诊断面板恒空（t2 P2 静默面）" },
+    .{ .needle = "msg." ++ k_result ++ " === undefined", .why = "应答体读侧属性须等于 respond 写侧键——漂则所有请求 resolve(null)，悬停/语义 token/握手全瞎（218 P2 同骨）" },
+    .{ .needle = "!params." ++ k_uri, .why = "通知体 uri 守门读须等于 publishRaw 写侧键——漂即丢弃合法发布" },
+    .{ .needle = "params." ++ k_diagnostics, .why = "诊断数组读须等于写侧键——漂即恒空数组，波浪线全灭" },
+    .{ .needle = "params: { " ++ k_textDocument ++ ": { uri: doc.uri.toString(), languageId", .why = "didOpen 写侧嵌套形须逐字节等于解析臂——t2 P1 静默 + 真跑 P4 坐实漂形文档不入表、诊断/悬停全空" },
+    .{ .needle = "      " ++ k_textDocument ++ ": { uri: doc.uri.toString(), version", .why = "didChange 写侧 textDocument 键——漂即变更失联，诊断冻结在打开一刻" },
+    .{ .needle = "      " ++ k_contentChanges ++ ": [{ " ++ k_text ++ ":", .why = "didChange 全文同步数组键——服务端取末项全文的入口，漂即变更被拒（t2 P3 静默面）" },
+    .{ .needle = "      " ++ k_position ++ ": { " ++ k_line ++ ": pos.line, " ++ k_character ++ ": pos.character }", .why = "hover 坐标子对象键族——漂即 intField 拒、悬停永空（t2 P4 同骨）" },
+};
+
 pub const OutList = std.ArrayList([]const u8);
 
 /// 语义诊断项（第 159 轮 · on-save 语义接入）：坐标已是文档 text 的 0 基行 + 0 基
@@ -217,11 +280,7 @@ fn byteOfPosition(text: []const u8, line: usize, character: usize) ?usize {
 fn rangeJson(gpa: std.mem.Allocator, text: []const u8, start: usize, end: usize) ![]const u8 {
     const a = positionOfOffset(text, start);
     const b = positionOfOffset(text, end);
-    return std.fmt.allocPrint(
-        gpa,
-        "{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}",
-        .{ a.line, a.character, b.line, b.character },
-    );
+    return std.fmt.allocPrint(gpa, f_range_json, .{ a.line, a.character, b.line, b.character });
 }
 
 // ---------------------------------------------------------------------------
@@ -269,13 +328,13 @@ fn idJson(gpa: std.mem.Allocator, idv: ?std.json.Value) ![]const u8 {
 }
 
 fn resultResponse(gpa: std.mem.Allocator, id_json: []const u8, result_json: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(gpa, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"result\":{s}}}", .{ id_json, result_json });
+    return std.fmt.allocPrint(gpa, f_result_response, .{ id_json, result_json });
 }
 
 fn errorResponse(gpa: std.mem.Allocator, id_json: []const u8, code: i64, message: []const u8) ![]const u8 {
     const msg_js = try jsonrpc.jsonString(gpa, message);
     defer gpa.free(msg_js);
-    return std.fmt.allocPrint(gpa, "{{\"jsonrpc\":\"2.0\",\"id\":{s},\"error\":{{\"code\":{d},\"message\":{s}}}}}", .{ id_json, code, msg_js });
+    return std.fmt.allocPrint(gpa, f_error_response, .{ id_json, code, msg_js });
 }
 
 /// 字符串数组拼成 JSON 数组文本并接管各元素（join 后元素即释；调用方 free 返回值）。
@@ -345,9 +404,9 @@ pub const Server = struct {
             try out.append(gpa, try errorResponse(gpa, id_null, -32600, "解析失败：报文根不是对象"));
             return;
         };
-        const method = strField(root, "method") orelse return; // 应答形（无 method）：本服务器不发请求，忽略
-        const idv = root.get("id");
-        const params_obj = objIn(root.get("params"));
+        const method = strField(root, k_method) orelse return; // 应答形（无 method）：本服务器不发请求，忽略
+        const idv = root.get(k_id);
+        const params_obj = objIn(root.get(k_params));
 
         if (std.mem.eql(u8, method, m_initialize)) {
             // textDocumentSync 升级为对象形（第 159 轮）：声明 openClose + 全量 change + save（includeText:false，
@@ -369,34 +428,34 @@ pub const Server = struct {
         }
         if (std.mem.eql(u8, method, m_didOpen)) {
             const p = params_obj orelse return;
-            const td = objIn(p.get("textDocument")) orelse return;
-            const uri = strField(td, "uri") orelse return;
-            const text = strField(td, "text") orelse return;
+            const td = objIn(p.get(k_textDocument)) orelse return;
+            const uri = strField(td, k_uri) orelse return;
+            const text = strField(td, k_text) orelse return;
             try self.upsertDoc(uri, text);
             try self.publish(out, uri, text);
             return;
         }
         if (std.mem.eql(u8, method, m_didChange)) {
             const p = params_obj orelse return;
-            const td = objIn(p.get("textDocument")) orelse return;
-            const uri = strField(td, "uri") orelse return;
+            const td = objIn(p.get(k_textDocument)) orelse return;
+            const uri = strField(td, k_uri) orelse return;
             if (!self.docs.contains(uri)) return; // 未 open 的文档不接变更
             // 全量同步（textDocumentSync=1）：contentChanges 末项必带全文 text
-            const changes = switch (p.get("contentChanges") orelse .null) {
+            const changes = switch (p.get(k_contentChanges) orelse .null) {
                 .array => |a| a.items,
                 else => return,
             };
             if (changes.len == 0) return;
             const last = objIn(changes[changes.len - 1]) orelse return;
-            const text = strField(last, "text") orelse return;
+            const text = strField(last, k_text) orelse return;
             try self.upsertDoc(uri, text);
             try self.publish(out, uri, text);
             return;
         }
         if (std.mem.eql(u8, method, m_didClose)) {
             const p = params_obj orelse return;
-            const td = objIn(p.get("textDocument")) orelse return;
-            const uri = strField(td, "uri") orelse return;
+            const td = objIn(p.get(k_textDocument)) orelse return;
+            const uri = strField(td, k_uri) orelse return;
             // D60（第 195 轮）：`fetchRemove` 取回的键同为自持堆串，须与值一并回收（原码只 free 值）。
             if (self.docs.fetchRemove(uri)) |kv| {
                 gpa.free(kv.key);
@@ -408,8 +467,8 @@ pub const Server = struct {
         }
         if (std.mem.eql(u8, method, m_didSave)) {
             const p = params_obj orelse return;
-            const td = objIn(p.get("textDocument")) orelse return;
-            const uri = strField(td, "uri") orelse return;
+            const td = objIn(p.get(k_textDocument)) orelse return;
+            const uri = strField(td, k_uri) orelse return;
             // includeText:false → 取服务端自持文档表文本（已由 didChange 同步至最新）；未 open 则不处理。
             const text = self.docs.get(uri) orelse return;
             try self.publishSave(out, uri, text);
@@ -489,11 +548,7 @@ pub const Server = struct {
         const gpa = self.gpa;
         const w = if (s.char_len == 0) 1 else s.char_len;
         const sev = if (s.severity >= 1 and s.severity <= 4) s.severity else 1;
-        const range = try std.fmt.allocPrint(
-            gpa,
-            "{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}",
-            .{ s.line, s.character, s.line, s.character + w },
-        );
+        const range = try std.fmt.allocPrint(gpa, f_range_json, .{ s.line, s.character, s.line, s.character + w });
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, s.message);
         defer gpa.free(msg_js);
@@ -504,11 +559,7 @@ pub const Server = struct {
         const gpa = self.gpa;
         const uri_js = try jsonrpc.jsonString(gpa, uri);
         defer gpa.free(uri_js);
-        try out.append(gpa, try std.fmt.allocPrint(
-            gpa,
-            "{{\"jsonrpc\":\"2.0\",\"method\":\"" ++ m_publishDiagnostics ++ "\",\"params\":{{\"uri\":{s},\"diagnostics\":{s}}}}}",
-            .{ uri_js, diags_json },
-        ));
+        try out.append(gpa, try std.fmt.allocPrint(gpa, f_publish_diagnostics, .{ uri_js, diags_json }));
     }
 
     /// 快路诊断：全角/词法 + 纯母语强制，消息与 `zzc check` 逐字同形（去路径前缀）。
@@ -569,12 +620,12 @@ pub const Server = struct {
         defer if (result_json) |r| gpa.free(r);
 
         if (params_obj) |p| {
-            if (objIn(p.get("textDocument"))) |td| {
-                if (strField(td, "uri")) |uri| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
                     if (self.docs.get(uri)) |text| {
-                        if (objIn(p.get("position"))) |pos| {
-                            const line = intField(pos, "line") orelse -1;
-                            const character = intField(pos, "character") orelse -1;
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
                             if (line >= 0 and character >= 0) {
                                 if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
                                     result_json = self.hoverAt(text, off);
@@ -636,8 +687,8 @@ pub const Server = struct {
         const gpa = self.gpa;
         var data_json: ?[]const u8 = null;
         if (params_obj) |p| {
-            if (objIn(p.get("textDocument"))) |td| {
-                if (strField(td, "uri")) |uri| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
                     if (self.docs.get(uri)) |text| {
                         data_json = self.semanticTokensData(text) catch null;
                     }
@@ -790,10 +841,10 @@ test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
     defer parsed.deinit();
     const root = asObject(parsed.value).?;
-    const mth = strField(root, "method").?;
+    const mth = strField(root, k_method).?;
     try testing.expectEqualStrings("textDocument/publishDiagnostics", mth);
-    const po = objIn(root.get("params")).?;
-    const arr = switch (po.get("diagnostics").?) {
+    const po = objIn(root.get(k_params)).?;
+    const arr = switch (po.get(k_diagnostics).?) {
         .array => |a| a.items,
         else => return error.TestUnexpectedResult,
     };
@@ -801,8 +852,8 @@ test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 
     const d0 = asObject(arr[0]).?;
     const rng = asObject(d0.get("range").?).?;
     const st = asObject(rng.get("start").?).?;
-    try testing.expectEqual(@as(i64, 0), intField(st, "line").?);
-    try testing.expectEqual(@as(i64, 8), intField(st, "character").?);
+    try testing.expectEqual(@as(i64, 0), intField(st, k_line).?);
+    try testing.expectEqual(@as(i64, 8), intField(st, k_character).?);
     const msg = strField(d0, "message").?;
     try testing.expect(std.mem.indexOf(u8, msg, "词法") != null);
     try testing.expect(std.mem.indexOf(u8, msg, "半角") != null);
@@ -1011,8 +1062,8 @@ test "lsp.server：semanticTokens/full 基本映射 + delta 编码（第 161 轮
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
     defer parsed.deinit();
     const root = asObject(parsed.value).?;
-    try testing.expectEqual(@as(i64, 5), intField(root, "id").?);
-    const result = objIn(root.get("result")).?;
+    try testing.expectEqual(@as(i64, 5), intField(root, k_id).?);
+    const result = objIn(root.get(k_result)).?;
     const data = switch (result.get("data").?) {
         .array => |a| a.items,
         else => return error.TestUnexpectedResult,
@@ -1236,8 +1287,8 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
     defer parsed.deinit();
     const root = asObject(parsed.value).?;
-    const prm = objIn(root.get("params")).?;
-    const diags = switch (prm.get("diagnostics").?) {
+    const prm = objIn(root.get(k_params)).?;
+    const diags = switch (prm.get(k_diagnostics).?) {
         .array => |a| a.items,
         else => return error.TestUnexpectedResult,
     };
@@ -1248,9 +1299,9 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
     const r0 = asObject(d0.get("range").?).?;
     const s0 = asObject(r0.get("start").?).?;
     const e0 = asObject(r0.get("end").?).?;
-    try testing.expectEqual(@as(i64, 2), intField(s0, "line").?);
-    try testing.expectEqual(@as(i64, 5), intField(s0, "character").?);
-    try testing.expectEqual(@as(i64, 1), intField(e0, "character").? - intField(s0, "character").?); // w=1
+    try testing.expectEqual(@as(i64, 2), intField(s0, k_line).?);
+    try testing.expectEqual(@as(i64, 5), intField(s0, k_character).?);
+    try testing.expectEqual(@as(i64, 1), intField(e0, k_character).? - intField(s0, k_character).?); // w=1
     try testing.expectEqual(@as(i64, 1), intField(d0, "severity").?); // 99→1
 
     // item 1: char_len=3, severity=0 → clamp 1
@@ -1258,7 +1309,7 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
     const r1 = asObject(d1.get("range").?).?;
     const s1 = asObject(r1.get("start").?).?;
     const e1 = asObject(r1.get("end").?).?;
-    try testing.expectEqual(@as(i64, 3), intField(e1, "character").? - intField(s1, "character").?); // w=3
+    try testing.expectEqual(@as(i64, 3), intField(e1, k_character).? - intField(s1, k_character).?); // w=3
     try testing.expectEqual(@as(i64, 1), intField(d1, "severity").?); // 0→1
 
     // 断言数： 10
@@ -1323,7 +1374,7 @@ test "lsp.server：idJson 对字符串 id 特殊字符做 JSON 转义（第 166 
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
     defer parsed.deinit();
     const root = asObject(parsed.value).?;
-    const id_val = root.get("id").?;
+    const id_val = root.get(k_id).?;
     try testing.expectEqualStrings("a\"b", switch (id_val) {
         .string => |s| s,
         else => return error.TestUnexpectedResult,
@@ -1378,7 +1429,7 @@ test "lsp.server：strField 三分支 + result/errorResponse 骨架与 message �
     asserts += 1;
     var pr = try std.json.parseFromSlice(std.json.Value, gpa, rs, .{});
     defer pr.deinit();
-    try testing.expect(asObject(pr.value).?.get("result") != null);
+    try testing.expect(asObject(pr.value).?.get(k_result) != null);
     asserts += 1;
 
     // errorResponse：message 含引号+反斜杠（模拟客户端 method 串）须被转义——缺转义则 parseFromSlice 即失败。
@@ -1741,7 +1792,7 @@ test "第 214 轮 T0 语义图例 round-trip：initialize 应答图例反查 tok
     // A2 真数据 round-trip：同一应答解析出图例数组，发 token 的 type 索引反查图例须得承诺词元名。
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
     defer parsed.deinit();
-    const init_result = objIn(asObject(parsed.value).?.get("result")).?;
+    const init_result = objIn(asObject(parsed.value).?.get(k_result)).?;
     const caps = objIn(init_result.get("capabilities")).?; // 图例嵌在 capabilities 下（应答形实跑坐实）
     const legend = switch (objIn(objIn(caps.get("semanticTokensProvider")).?.get("legend")).?.get("tokenTypes").?) {
         .array => |a| a.items,
@@ -1761,7 +1812,7 @@ test "第 214 轮 T0 语义图例 round-trip：initialize 应答图例反查 tok
     try testing.expectEqual(@as(usize, 1), out.items.len);
     var parsed2 = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
     defer parsed2.deinit();
-    const data = switch (objIn(asObject(parsed2.value).?.get("result")).?.get("data").?) {
+    const data = switch (objIn(asObject(parsed2.value).?.get(k_result)).?.get("data").?) {
         .array => |a| a.items,
         else => return error.TestUnexpectedResult,
     };
@@ -1921,4 +1972,90 @@ test "219 T0 词类标签族：六员值钉 + 全域 round-trip + 双出口同�
     try testing.expect(std.mem.indexOf(u8, json_bytes, snippets.g_alias ++ " → ") != null); // 补全出口同词
     asserts += 2;
     std.debug.print("219 T0 asserts={d}\n", .{asserts});
+}
+
+// 220 T0（第 220 轮 D88）：消息本体键族 hub——十三枚值钉 / 骨架渲染不变量钉 / didOpen→publish
+// 键 round-trip 真跑 / hover round-trip（半角合法源·语义命中臂）/ 漂 textDocument 键静默坠空行为
+// 钉 / 对面清单成员数形钉。
+test "220 T0：消息本体键族 hub 单源＋骨架渲染＋round-trip＋漂键静默坠空（第 220 轮）——D88" {
+    const tg = testing.allocator;
+    // A1 十三枚值钉：hub 键词字面逐一等于协议词汇。
+    try testing.expectEqualStrings("jsonrpc", k_jsonrpc);
+    try testing.expectEqualStrings("method", k_method);
+    try testing.expectEqualStrings("id", k_id);
+    try testing.expectEqualStrings("params", k_params);
+    try testing.expectEqualStrings("result", k_result);
+    try testing.expectEqualStrings("textDocument", k_textDocument);
+    try testing.expectEqualStrings("uri", k_uri);
+    try testing.expectEqualStrings("text", k_text);
+    try testing.expectEqualStrings("contentChanges", k_contentChanges);
+    try testing.expectEqualStrings("position", k_position);
+    try testing.expectEqualStrings("line", k_line);
+    try testing.expectEqualStrings("character", k_character);
+    try testing.expectEqualStrings("diagnostics", k_diagnostics);
+    // A2 骨架渲染不变量：f_* 模板渲染逐字节等于解析臂实际接受的报文形。
+    {
+        const u_js = try jsonrpc.jsonString(tg, "file:///x.zz");
+        defer tg.free(u_js);
+        const b_js = try jsonrpc.jsonString(tg, "甲");
+        defer tg.free(b_js);
+        const r1 = try std.fmt.allocPrint(tg, f_didOpen_params, .{ u_js, b_js });
+        defer tg.free(r1);
+        try testing.expectEqualStrings("{\"textDocument\":{\"uri\":\"file:///x.zz\",\"text\":\"甲\"}}", r1);
+        const r2 = try std.fmt.allocPrint(tg, f_hover_params, .{ u_js, @as(usize, 0), @as(usize, 3) });
+        defer tg.free(r2);
+        try testing.expectEqualStrings("{\"textDocument\":{\"uri\":\"file:///x.zz\"},\"position\":{\"line\":0,\"character\":3}}", r2);
+        const r3 = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 1), @as(usize, 2), @as(usize, 3), @as(usize, 4) });
+        defer tg.free(r3);
+        try testing.expectEqualStrings("{\"start\":{\"line\":1,\"character\":2},\"end\":{\"line\":3,\"character\":4}}", r3);
+    }
+    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(tg, &lang);
+    defer srv.deinit();
+    var out: OutList = .empty;
+    defer freeOut(tg, &out);
+    // A3 round-trip 真跑（全角坏源）：f 骨架拼 didOpen 帧 → publish 帧以 k_* 键回读非空诊断数组。
+    const uri_js = try jsonrpc.jsonString(tg, "file:///r220.zz");
+    defer tg.free(uri_js);
+    const body_js = try jsonrpc.jsonString(tg, "标准库.调试.打印（\" + Q + \"甲\" + Q + \"）;\n");
+    defer tg.free(body_js);
+    const open = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ uri_js, body_js });
+    defer tg.free(open);
+    try srv.handle(open, &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    var parsed = try std.json.parseFromSlice(std.json.Value, tg, out.items[0], .{});
+    defer parsed.deinit();
+    const root = asObject(parsed.value).?;
+    try testing.expectEqualStrings(m_publishDiagnostics, strField(root, k_method).?);
+    const pmap = objIn(root.get(k_params)).?;
+    try testing.expectEqualStrings("file:///r220.zz", strField(pmap, k_uri).?);
+    switch (pmap.get(k_diagnostics).?) {
+        .array => |arr| try testing.expect(arr.items.len >= 1), // 全角括号恰一枚词法诊断
+        else => return error.UnexpectedDiagsShape,
+    }
+    // A3b hover round-trip（半角合法源·156 轮同文）：f_hover_params 拼帧 → k_result 回读非空对象。
+    const h_uri = try jsonrpc.jsonString(tg, "file:///r220h.zz");
+    defer tg.free(h_uri);
+    const h_body = try jsonrpc.jsonString(tg, "标准库.调试.打印(\"甲\");\n");
+    defer tg.free(h_body);
+    const hopen = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ h_uri, h_body });
+    defer tg.free(hopen);
+    try srv.handle(hopen, &out);
+    freeOut(tg, &out);
+    const hover = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_id ++ "\":7,\"" ++ k_method ++ "\":\"" ++ m_hover ++ "\",\"" ++ k_params ++ "\":" ++ f_hover_params ++ "}}", .{ h_uri, @as(usize, 0), @as(usize, 4) });
+    defer tg.free(hover);
+    try srv.handle(hover, &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    var hp = try std.json.parseFromSlice(std.json.Value, tg, out.items[0], .{});
+    defer hp.deinit();
+    try testing.expect(objIn(asObject(hp.value).?.get(k_result)) != null);
+    // A4 漂键静默坠空行为钉：textDocument 键漂作 td → 文档不入表、零出站（t2 P4 真跑同骨）。
+    freeOut(tg, &out);
+    const drift = try std.fmt.allocPrint(tg, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":{{\"td\":{{\"" ++ k_uri ++ "\":{s},\"" ++ k_text ++ "\":{s}}}}}}}", .{ uri_js, body_js });
+    defer tg.free(drift);
+    try srv.handle(drift, &out);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
+    // A5 对面十二清单成员数钉：九枚 needle 全由 hub k_* 派生（对账在守卫对面十二）。
+    try testing.expectEqual(@as(usize, 9), params_face.len);
 }
