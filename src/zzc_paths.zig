@@ -170,6 +170,23 @@ pub const zig_version: []const u8 = std.fmt.comptimePrint("{d}.{d}.0", .{ zig_ma
 /// CI 安装段的定位标记 `download/0.17.0/`（对面判据的唯一形制来源，第 205 轮 D73）。
 pub const zig_download_marker: []const u8 = "download/" ++ zig_version ++ "/";
 
+/// 程序（CLI 可执行文件）名（第 210 轮 D78）：`build.zig` 的 `addExecutable(.name)`、编辑器 `tasks_command`
+/// 首词、LSP 诊断的 `source` 标注、以及全部 `zzc: ` 报错前缀共用的唯一真值。旧形制跨 build↔src 手抄多处、
+/// 互不引用（t2 探针 P1 实锤：改 `build.zig` 的 exe 名 → `zig build test` 恒绿，而产出的二进制随之更名，
+/// 编辑器照示例运行的 `zzc …` 与帮助/诊断里的程序名全部指向不存在的旧名——静默的功能级断裂）。
+pub const prog_name: []const u8 = "zzc";
+
+/// 报错/提示行的程序名前缀 `zzc: `（由 `prog_name` 派生，第 210 轮 D78）：全部 stderr/stdout 提示的固定
+/// 起手即此一枚，杜绝「改了程序名而某条提示仍写旧名」的散点漂移。
+pub const prog_prefix: []const u8 = prog_name ++ ": ";
+
+/// `build.zig` 文本是否声明了名字恰为 `prog_name` 的可执行文件（第 210 轮 D78 的守卫判据，纯函数）。
+/// 以 `.name = "<prog_name>"` 精确子串命中（尾随闭引号防 `"zzc_core"` 之类模块依赖名误算作 CLI exe）。
+pub fn buildDeclaresExe(text: []const u8) bool {
+    const needle = ".name = \"" ++ prog_name ++ "\"";
+    return std.mem.indexOf(u8, text, needle) != null;
+}
+
 /// 从文本中抽 `.minimum_zig_version = "…"` 引号之间的值段（第 205 轮 D73 的守卫判据，纯函数）。
 /// 字段名缺、值非字符串形（无成对引号）皆 null；本仓只用单层引号形，故不实现转义与多行串。
 pub fn minimumZigVersionIn(text: []const u8) ?[]const u8 {
@@ -389,4 +406,17 @@ test "第 205 轮 T0 工具链版本族：两枚数与两枚串的值钉／派�
     try std.testing.expect(!ciInstallsBaseline("安装 Zig " ++ zig_series ++ "（本机）"));
     try std.testing.expect(!ciInstallsBaseline("download/0.16.0/zig.tar.xz"));
     try std.testing.expect(!ciInstallsBaseline(""));
+}
+
+test "第 210 轮 T0 程序名族：值钉／prog_prefix 派生钉／buildDeclaresExe 正反小样（防跨 build↔src 手抄漂移）" {
+    // A1 值钉：程序名是对外的 CLI 契约（用户照此名敲命令），改名即断裂——不复用常量、直接写死（196/197 通则）。
+    try std.testing.expectEqualStrings("zzc", prog_name);
+    // A2 派生一致：报错前缀恰为程序名 + ": "（改 prog_name 则前缀随动，杜绝某条提示仍写旧名的散点漂移）。
+    try std.testing.expectEqualStrings("zzc: ", prog_prefix);
+    try std.testing.expectEqualStrings(prog_name ++ ": ", prog_prefix);
+    // A3 buildDeclaresExe：CLI exe 声明 `.name = "<prog_name>"` 命中为真；异名／缺引号／空文本 皆假。
+    try std.testing.expect(buildDeclaresExe("const exe = b.addExecutable(.{\n    .name = \"" ++ prog_name ++ "\",\n});"));
+    try std.testing.expect(!buildDeclaresExe(".name = \"zzq\"")); // 改名后（P1 探针形）CLI exe 声明消失
+    try std.testing.expect(!buildDeclaresExe(".name = \"" ++ prog_name ++ "_core\"")); // 模块依赖名不误算作 CLI exe
+    try std.testing.expect(!buildDeclaresExe(""));
 }

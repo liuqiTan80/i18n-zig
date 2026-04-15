@@ -653,6 +653,32 @@ test "usage 帮助命令词与子命令单一真值表双向对账（第 206 轮
     try std.testing.expectEqual(@as(usize, 0), unknown_words);
 }
 
+test "第 210 轮 T1 帮助命令词与程序名单一真值耦合：每枚子命令都有 `  <prog_name> <子命令>` 行（防 prog_name 改名而帮助仍写旧名）" {
+    // usage_text 大串里的程序名手抄点不便逐处重构，此处以 `prog_name` 拼出命令词行前缀、要求每枚子命令都有
+    // 一条命中行——若 prog_name 改名而 usage 字面量未跟（旧名残留），预期前缀无任何命中 → 红；反之若改
+    // 了程序名而忘改某行命令词，该子命令无命中 → 红。把「帮助里的程序名」从静默手抄转为受真值表耦合的锚。
+    const cmd_prefix = "  " ++ zzc.prog_name ++ " ";
+    var cmd_line_words: usize = 0;
+    var hit: [subcommands.len]bool = std.mem.zeroes([subcommands.len]bool);
+    var it = std.mem.splitScalar(u8, usage_text, '\n');
+    while (it.next()) |line| {
+        if (!std.mem.startsWith(u8, line, cmd_prefix)) continue;
+        cmd_line_words += 1;
+        const word = std.mem.sliceTo(line[cmd_prefix.len..], ' ');
+        for (subcommands, 0..) |sub, i| {
+            if (std.mem.eql(u8, sub, word)) hit[i] = true;
+        }
+    }
+    // prog_name 改名而 usage 字面量未跟 → cmd_prefix 无命中行（cmd_line_words==0、hit 全未置）→ 红。
+    try std.testing.expect(cmd_line_words > 0);
+    for (hit, subcommands) |h, sub| {
+        if (!h) std.debug.print("子命令 {s} 缺以程序名「{s}」起头的帮助命令词行\n", .{ sub, zzc.prog_name });
+        try std.testing.expect(h);
+    }
+    // 抬头行 `zzc —— …` 亦以程序名起头（改名而抬头不跟 → 红）。
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, zzc.prog_name ++ " ——") != null);
+}
+
 test "子命令单一真值表自守：名无重复、check 与机读 hub 同源、判据正反（第 206 轮 D74）" {
     // 真值表内部一致性：九名两两不同（防手滑重复）。
     for (subcommands, 0..) |a, i| {
@@ -773,7 +799,7 @@ pub fn parseZigVersion(text: []const u8) ?struct { major: u32, minor: u32 } {
 /// `buf` 不足以容纳时也返回 null（宁可不提醒也不 panic——告警属辅面、不得反噬主流程）。
 pub fn zigDriftNote(major: u32, minor: u32, buf: []u8) ?[]const u8 {
     if (major == diag_baseline_zig.major and minor == diag_baseline_zig.minor) return null;
-    return std.fmt.bufPrint(buf, "zzc: 注意：本机 zig 为 {d}.{d}.x，与报错回译标定基线 {d}.{d} 不同——回译词条可能不完整，欢迎反馈。", .{
+    return std.fmt.bufPrint(buf, zzc.prog_prefix ++ "注意：本机 zig 为 {d}.{d}.x，与报错回译标定基线 {d}.{d} 不同——回译词条可能不完整，欢迎反馈。", .{
         major, minor, diag_baseline_zig.major, diag_baseline_zig.minor,
     }) catch null;
 }

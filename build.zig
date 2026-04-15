@@ -148,6 +148,9 @@ pub fn build(b: *std.Build) void {
     const check_matcher_run = b.addRunArtifact(check_matcher_exe);
     check_matcher_run.addFileArg(b.path("editors/vscode/package.json"));
     check_matcher_run.addFileArg(b.path("editors/vscode/examples/tasks.json"));
+    // 第 210 轮 D78：再声明 `build.zig` 自身为文件依赖——守卫核对「编辑器示例命令行的程序名」与
+    // 本 build 脚本 `addExecutable(.name)` 实际产出的 exe 名同源（t2 探针 P1 实锤改 exe 名而恒绿的静默面）。
+    check_matcher_run.addFileArg(b.path("build.zig"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 

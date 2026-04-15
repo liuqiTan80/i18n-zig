@@ -100,12 +100,12 @@ fn flushUntranslated() void {
     if (untranslated_list.items.items.len == 0) return;
     const ts = @as(i64, @intCast(@divFloor(Io.Timestamp.now(io_, .real).nanoseconds, std.time.ns_per_s)));
     const json = renderUntranslatedJson(gpa_, untranslated_list.items.items, ts) catch |e| {
-        printErr("zzc: 未翻译清单序列化失败（{s}），已跳过落盘。", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "未翻译清单序列化失败（{s}），已跳过落盘。", .{@errorName(e)});
         return;
     };
     defer gpa_.free(json);
     writeWhole(untranslated_log_path, json) catch |e| {
-        printErr("zzc: 未翻译清单落盘失败（{s}），已跳过。", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "未翻译清单落盘失败（{s}），已跳过。", .{@errorName(e)});
     };
 }
 
@@ -116,7 +116,7 @@ fn readWhole(path: []const u8) ![]const u8 {
             // 超限是用户可直接行动的情形（同第 42 轮“错误源头母语化”原则），不走 bail 兜底泄错名。
             if (!size_limit_warned) {
                 size_limit_warned = true;
-                printErr("zzc: 文件 {s} 超过大小上限（{d} MB）；母语工程不应有此体量源文件，请确认未误指向二进制/日志类文件", .{ path, file_io.max_source_bytes / (1024 * 1024) });
+                printErr(zzc.prog_prefix ++ "文件 {s} 超过大小上限（{d} MB）；母语工程不应有此体量源文件，请确认未误指向二进制/日志类文件", .{ path, file_io.max_source_bytes / (1024 * 1024) });
             }
             return error.Failed;
         },
@@ -133,7 +133,7 @@ fn readWhole(path: []const u8) ![]const u8 {
             const first_time = if (set) |s| !s.contains(path) else true;
             if (first_time) {
                 if (set) |s| s.put(path, {}) catch {};
-                printErr("zzc: 文件 {s} 不是 UTF-8 编码（疑似 UTF-16/GBK 等错编码保存）；请在编辑器中另存为 UTF-8（有无 BOM 均可）后重试", .{path});
+                printErr(zzc.prog_prefix ++ "文件 {s} 不是 UTF-8 编码（疑似 UTF-16/GBK 等错编码保存）；请在编辑器中另存为 UTF-8（有无 BOM 均可）后重试", .{path});
             }
             return error.Failed;
         },
@@ -183,7 +183,7 @@ fn stageEmbedAssets(native_rel: []const u8, zig_str: []const u8, dest_zig: []con
         // staging 会把外部内容读进生成树/eject 产物。链接资产拒拷并母语提示；
         // zig 自身 @embedFile 有 canonical 越界检查（嵌入越界条目已本地化其拒绝）。
         if (pathIsSymlink(srcp)) {
-            printErr("zzc: 嵌入资源 `{s}` 是符号链接，不拷贝（防止把工程外内容读入生成树）；请改用工程内的真实文件。", .{srcp});
+            printErr(zzc.prog_prefix ++ "嵌入资源 `{s}` 是符号链接，不拷贝（防止把工程外内容读入生成树）；请改用工程内的真实文件。", .{srcp});
             continue;
         }
         const dstp = cli.joinRelNorm(gpa_, dst_dir, p) catch continue;
@@ -191,14 +191,14 @@ fn stageEmbedAssets(native_rel: []const u8, zig_str: []const u8, dest_zig: []con
         const bytes = readFileRaw(srcp) catch continue; // 源缺失→跳过，交给 zig 自己报 `failed opening`
         defer gpa_.free(bytes);
         writeWhole(dstp, bytes) catch |e| {
-            printErr("zzc: 拷贝嵌入资源文件失败：{s} -> {s}（{s}）", .{ srcp, dstp, @errorName(e) });
+            printErr(zzc.prog_prefix ++ "拷贝嵌入资源文件失败：{s} -> {s}（{s}）", .{ srcp, dstp, @errorName(e) });
         };
     }
 }
 
 fn printOut(comptime fmt: []const u8, args: anytype) void {
     out_w.print(fmt ++ "\n", args) catch |e| {
-        printErr("zzc: 标准输出失败（{s}）", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "标准输出失败（{s}）", .{@errorName(e)});
     };
 }
 
@@ -230,24 +230,24 @@ fn saveSymbols(table: Mangle) void {
     defer out.deinit(gpa_);
     for (table.symbols.items) |s| {
         out.appendSlice(gpa_, s.native) catch |e| {
-            printErr("zzc: 保存符号表失败（写入符号名）：{s}", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "保存符号表失败（写入符号名）：{s}", .{@errorName(e)});
             return;
         };
         out.appendSlice(gpa_, " = ") catch |e| {
-            printErr("zzc: 保存符号表失败（写入等号）：{s}", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "保存符号表失败（写入等号）：{s}", .{@errorName(e)});
             return;
         };
         out.appendSlice(gpa_, s.ascii) catch |e| {
-            printErr("zzc: 保存符号表失败（写入 ASCII 名）：{s}", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "保存符号表失败（写入 ASCII 名）：{s}", .{@errorName(e)});
             return;
         };
         out.append(gpa_, '\n') catch |e| {
-            printErr("zzc: 保存符号表失败（写入换行）：{s}", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "保存符号表失败（写入换行）：{s}", .{@errorName(e)});
             return;
         };
     }
     writeWhole(symbols_path, out.items) catch |e| {
-        printErr("zzc: 保存符号表失败（写入文件）：{s}", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "保存符号表失败（写入文件）：{s}", .{@errorName(e)});
     };
 }
 
@@ -284,7 +284,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
     // 目录不存在/不可读是常见用户情形（在错误目录运行），须给母语可操作提示，
     // 不能让原始 FileNotFound 经 bail 的兜底分支泄漏成英文“内部错误”。
     var dir = std.Io.Dir.cwd().openDir(io_, entry_dir, .{ .iterate = true }) catch {
-        printErr("zzc: 找不到可读取的工程目录 `{s}`；请在方言工程根目录（含 `src/*.zz`）运行，或先用 `zzc init <名字>` 新建工程。", .{entry_dir});
+        printErr(zzc.prog_prefix ++ "找不到可读取的工程目录 `{s}`；请在方言工程根目录（含 `src/*.zz`）运行，或先用 `zzc init <名字>` 新建工程。", .{entry_dir});
         return error.Failed;
     };
     defer dir.close(io_);
@@ -301,7 +301,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
     // 目录存在但无任何 .zz 源文件（空 src/ 或跑错目录）也要尽早母语报错，
     // 避免下游以“入口不在工程”之类的间接信息困惑用户。
     if (files.items.len == 0) {
-        printErr("zzc: 目录 `{s}` 下未找到任何方言源文件（.zz）；若要新建工程请用 `zzc init <名字>`。", .{entry_dir});
+        printErr(zzc.prog_prefix ++ "目录 `{s}` 下未找到任何方言源文件（.zz）；若要新建工程请用 `zzc init <名字>`。", .{entry_dir});
         return error.Failed;
     }
 
@@ -433,7 +433,7 @@ fn findUnit(proj: Project, entry: []const u8) ?Unit {
 
 /// 「无法启动 zig」的人读提示（第 205 轮 D73）：版本下限取族真值，标定升代时文案不滞后
 /// （t2 探针 P4 实锤旧形制改这枚文案零测可抓；失实文案按 197 轮 D65 判例属缺陷面）。
-const zig_missing_msg: []const u8 = "zzc: 无法启动 zig，请确认已安装 Zig " ++ zzc.zig_series ++ "+（PATH 中可找到 zig）";
+const zig_missing_msg: []const u8 = zzc.prog_prefix ++ "无法启动 zig，请确认已安装 Zig " ++ zzc.zig_series ++ "+（PATH 中可找到 zig）";
 
 /// 执行一次编译；失败时把 stderr 回译成母语打印，返回 error.Failed。
 /// `seen` 不为 null 时跨多次调用去重诊断（`zzc check` 传入）。
@@ -475,7 +475,7 @@ fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8
         out_txt = diag.machineLines(gpa_, native_errs) catch native_errs;
     }
     werr.writeAll(out_txt) catch |e| {
-        printErr("zzc: 写入错误信息失败：{s}", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "写入错误信息失败：{s}", .{@errorName(e)});
     };
     try werr.flush();
     return error.Failed;
@@ -509,18 +509,18 @@ fn describePackError(e: PackParseError) []const u8 {
 fn loadExternalPack(path: []const u8) !Pack {
     const bytes = readWhole(path) catch |e| switch (e) {
         error.FileNotFound => {
-            printErr("zzc: 外部语言包文件不存在：{s}", .{path});
+            printErr(zzc.prog_prefix ++ "外部语言包文件不存在：{s}", .{path});
             return error.Failed;
         },
         else => return e, // 超限/权限等：readWhole 母语前缀或 bail 的 localizeFsErr 双层拦截既有形
     };
     return Pack.parse(gpa_, bytes) catch |e| switch (e) {
         error.PackFormatTooNew => {
-            printErr("zzc: 外部语言包「{s}」声明的 $format 过新（当前 zzc 仅支持格式 {d}）。请升级 zzc。", .{ path, Pack.supported_format });
+            printErr(zzc.prog_prefix ++ "外部语言包「{s}」声明的 $format 过新（当前 zzc 仅支持格式 {d}）。请升级 zzc。", .{ path, Pack.supported_format });
             return error.Failed;
         },
         error.InvalidLangPack => {
-            printErr("zzc: 外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/$format 非数等），请按 docs/contributing-lang-pack.md 检查。", .{path});
+            printErr(zzc.prog_prefix ++ "外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/$format 非数等），请按 docs/contributing-lang-pack.md 检查。", .{path});
             return error.Failed;
         },
         else => return e, // OOM 等工具层错误传播致 bail
@@ -537,7 +537,7 @@ fn loadExternalPack(path: []const u8) !Pack {
 /// 副作用顺序：拆参 → 装载校验（零写盘）→ 注册名封口（零写盘）→ install。坏包/坏名一律不留半个文件。
 fn cmdLangAdd(args: []const []const u8) void {
     const file = if (args.len > 0) args[0] else {
-        printErr("zzc: lang add 需要语言包文件：`zzc lang add <文件> [--as 注册名]`。", .{});
+        printErr(zzc.prog_prefix ++ "lang add 需要语言包文件：`zzc lang add <文件> [--as 注册名]`。", .{});
         werr.flush() catch {};
         std.process.exit(2); // 用法错与未知包/未知动词同码（与 error.Usage 一致）
     };
@@ -546,13 +546,13 @@ fn cmdLangAdd(args: []const []const u8) void {
     // B6 契约硬门：不合格包装进来后只在 `--lang` 选中它时才在流程深处报缺——将“坏包”变成工程内的
     // 定时炸弹，故装前即拒（与第一档加载时 validate 同一判据、同一消息形制）。
     pk.validate() catch |e| {
-        printErr("zzc: 外部语言包「{s}」不完整：{s}", .{ file, describePackError(e) });
+        printErr(zzc.prog_prefix ++ "外部语言包「{s}」不完整：{s}", .{ file, describePackError(e) });
         werr.flush() catch {};
         bail(error.Failed); // noreturn：退 1、不外泄 error 名与栈帧
     };
     const key = cli.findFlag(args, cli.flag_as) orelse pk.code; // 缺省取包内 $code（与内置注册名同源）
     if (!userpack.keyIsSafe(key)) {
-        printErr("zzc: 注册名「{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
+        printErr(zzc.prog_prefix ++ "注册名「{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
         werr.flush() catch {};
         std.process.exit(2);
     }
@@ -561,7 +561,7 @@ fn cmdLangAdd(args: []const []const u8) void {
     userpack.install(io_, gpa_, userpack.default_dir, key, bytes) catch |e| switch (e) {
         error.BadKey => unreachable, // 上面已拦
         error.AlreadyInstalled => {
-            printErr("zzc: 本工程内已装有语言包「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
+            printErr(zzc.prog_prefix ++ "本工程内已装有语言包「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
             werr.flush() catch {};
             std.process.exit(2); // 与 init 防覆盖形制一致：退 2 且原文件逐字节不动
         },
@@ -577,7 +577,7 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     // 不一定等于用户点名的文件——若点名的是库模块（无 main），直接 `build-exe` 会被 zig 误报
     // `root source file struct 'X' has no member named 'main'`，回译成费解的“成员不存在/查拼写”。
     _ = findUnit(proj, entry) orelse {
-        printErr("zzc: {s} 不在工程目录中（收集自 {s}）", .{ entry, std.fs.path.dirname(entry) orelse "." });
+        printErr(zzc.prog_prefix ++ "{s} 不在工程目录中（收集自 {s}）", .{ entry, std.fs.path.dirname(entry) orelse "." });
         return error.Failed;
     };
     // 在收集到的模块里找语义编译根：按“生成 Zig 里**真正含顶层 `pub fn main(`**”判定
@@ -637,7 +637,7 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
     const entry = pick.entry;
     const proj = try collectAndTranslate(entry, lang, table);
     const unit = findUnit(proj, entry) orelse {
-        printErr("zzc: {s} 不在工程目录中（收集自 {s}）", .{ entry, std.fs.path.dirname(entry) orelse "." });
+        printErr(zzc.prog_prefix ++ "{s} 不在工程目录中（收集自 {s}）", .{ entry, std.fs.path.dirname(entry) orelse "." });
         return error.Failed;
     };
 
@@ -691,10 +691,10 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
                 // F3 未翻译清单在本路径必空（只由 zigCompile 失败分支注入），无需也补 flush。
                 saveSymbols(table.*);
                 out_w.flush() catch |e| {
-                    printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+                    printErr(zzc.prog_prefix ++ "刷新标准输出失败：{s}", .{@errorName(e)});
                 };
                 werr.flush() catch |e| {
-                    printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+                    printErr(zzc.prog_prefix ++ "刷新错误输出失败：{s}", .{@errorName(e)});
                 };
                 std.process.exit(c);
             } else if (code == null) {
@@ -709,19 +709,19 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     // 静默把工程建到父目录）。拒绝在任何 createDirPath/writeWhole 副作用之前。给出精确消息+exit 2
     // （与无名字 init 的 error.Usage 退出码一致）；std.process.exit 跳过 defer 刷写，故先显式 flush。
     if (cli.initNameIsUnsafe(name)) {
-        printErr("zzc: 工程名 `{s}` 不安全（不能为空、`.`/`..`、上溯路径或绝对路径）；请用相对当前目录的子目录名（如 `zzc init myapp`）。", .{name});
+        printErr(zzc.prog_prefix ++ "工程名 `{s}` 不安全（不能为空、`.`/`..`、上溯路径或绝对路径）；请用相对当前目录的子目录名（如 `zzc init myapp`）。", .{name});
         out_w.flush() catch |e| {
-            printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "刷新标准输出失败：{s}", .{@errorName(e)});
         };
         werr.flush() catch |e| {
-            printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "刷新错误输出失败：{s}", .{@errorName(e)});
         };
         std.process.exit(2);
     }
     const main_zz = try zzc.initEntryPathFor(gpa_, name); // 第 201 轮 D69：入口构造取族 hub（旧形制本处自持一枚 "{s}/src/main.zz"）
     // 防覆盖：入口文件已存在则不写盘，避免清空用户已有工程的劳动成果（幂等、非破坏）。
     if (pathExists(main_zz)) {
-        printOut("zzc: 工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：zzc run", .{ name, main_zz });
+        printOut(zzc.prog_prefix ++ "工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：zzc run", .{ name, main_zz });
         return;
     }
     try std.Io.Dir.cwd().createDirPath(io_, name);
@@ -746,7 +746,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const dest = if (args.len > 0) args[0] else "standard";
     // 防毁源：在做任何工作（采集/翻译/写盘/清空）前先拒绝与源码树重叠的目标。
     if (cli.ejectDestHitsSourceTree(dest)) {
-        printErr("zzc: eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
+        printErr(zzc.prog_prefix ++ "eject 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
         return error.Failed;
     }
     const proj = try collectAndTranslate(zzc.default_entry, lang, table); // 第 201 轮 D69：入口真值取族 hub
@@ -763,7 +763,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
         }
     }
     const mu = if (main_unit_idx) |i| proj.units.items[i] else {
-        printErr("zzc: 未找到 `main` 入口模块，无法 eject 为可执行程序；eject 需要一个含 `主函数`（main）的工程（纯库模块请用 `zzc check <文件>` 校验）。", .{});
+        printErr(zzc.prog_prefix ++ "未找到 `main` 入口模块，无法 eject 为可执行程序；eject 需要一个含 `主函数`（main）的工程（纯库模块请用 `zzc check <文件>` 校验）。", .{});
         return error.Failed;
     };
 
@@ -774,7 +774,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const dest_src = try zzc.ejectPathFor(gpa_, dest, zzc.src_dir);
     if (pathExists(dest_src)) {
         std.Io.Dir.cwd().deleteTree(io_, dest_src) catch |e| {
-            printErr("zzc: 清理旧导出目录 `{s}/{s}` 失败（{s}）；请手动删除后重试 eject。", .{ dest, zzc.src_dir, @errorName(e) });
+            printErr(zzc.prog_prefix ++ "清理旧导出目录 `{s}/{s}` 失败（{s}）；请手动删除后重试 eject。", .{ dest, zzc.src_dir, @errorName(e) });
             return error.Failed;
         };
     }
@@ -844,14 +844,14 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     if (fp) |t| {
         try writeWhole(zon_path, try ejectZoneText(app_name, t));
     } else {
-        printErr("zzc: 未能向 zig 查询包 fingerprint（zig 不可用？）；zon 暂缺该字段，首次 `zig build` 会提示合法值。", .{});
+        printErr(zzc.prog_prefix ++ "未能向 zig 查询包 fingerprint（zig 不可用？）；zon 暂缺该字段，首次 `zig build` 会提示合法值。", .{});
     }
 
     // 验证“毕业路径”：进入导出目录直接 `zig build`，确认可独立构建。
     switch (verifyBuild(dest)) {
         .ok => printOut(eject_ok_msg, .{ dest, dest, app_name }),
         .fail => {
-            printErr("zzc: 导出完成，但 `zig build` 验证未通过，请进入 {s}/ 手动排查。", .{dest});
+            printErr(zzc.prog_prefix ++ "导出完成，但 `zig build` 验证未通过，请进入 {s}/ 手动排查。", .{dest});
             return error.Failed;
         },
         .no_zig => printOut(eject_no_zig_msg, .{dest}),
@@ -930,18 +930,18 @@ fn verifyBuild(dest: []const u8) BuildVerify {
 /// 避免把 zzc 自身的 Zig 错误返回跟踪（stderr 栈帧）暴露给方言用户。
 fn bail(e: anyerror) noreturn {
     switch (e) {
-        error.Usage => printErr("zzc: 未知或不完整的子命令；运行不带参数的 zzc 查看用法。", .{}),
+        error.Usage => printErr(zzc.prog_prefix ++ "未知或不完整的子命令；运行不带参数的 zzc 查看用法。", .{}),
         error.Failed => {}, // 母语报错已在编译阶段打印，无需重复
         // D36（第 84 轮）：符号表被手工编辑出同一 z_N 归两个不同母语名——若不容忍静默合并，
         // 必须源头拒并点名文件与修法（两标识符转码后共享同名会静默改变程序语义）。
-        error.DuplicateSymbol => printErr("zzc: 符号表 {s} 撞号：同一编号被分给两个不同母语名。请删除该文件让 zzc 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{symbols_path}), // 198 D66：路径经 seam 可覆写，文案插值以保证点名与实际文件始终一致
+        error.DuplicateSymbol => printErr(zzc.prog_prefix ++ "符号表 {s} 撞号：同一编号被分给两个不同母语名。请删除该文件让 zzc 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{symbols_path}), // 198 D66：路径经 seam 可覆写，文案插值以保证点名与实际文件始终一致
         // 常见文件系统/内存错误给纯母语可操作提示（避免把 `NotDir`/`AccessDenied` 等
         // Zig 内部英文标识符直接泄给方言用户）；未收录错误保留中文句式、仅附一个诊断码。
         else => {
             if (cli.localizeFsErr(e)) |zh| {
-                printErr("zzc: {s}", .{zh});
+                printErr(zzc.prog_prefix ++ "{s}", .{zh});
             } else {
-                printErr("zzc: 操作未能完成（诊断码 {s}）；请重试，若持续失败请携此码反馈。", .{@errorName(e)});
+                printErr(zzc.prog_prefix ++ "操作未能完成（诊断码 {s}）；请重试，若持续失败请携此码反馈。", .{@errorName(e)});
             }
         },
     }
@@ -954,10 +954,10 @@ fn bail(e: anyerror) noreturn {
     if (bail_table) |t| saveSymbols(t.*);
     flushUntranslated();
     out_w.flush() catch |flush_err| {
-        printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(flush_err)});
+        printErr(zzc.prog_prefix ++ "刷新标准输出失败：{s}", .{@errorName(flush_err)});
     };
     werr.flush() catch |flush_err| {
-        printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(flush_err)});
+        printErr(zzc.prog_prefix ++ "刷新错误输出失败：{s}", .{@errorName(flush_err)});
     };
     std.process.exit(if (e == error.Usage) 2 else 1);
 }
@@ -1117,14 +1117,14 @@ fn cmdLsp(lang: Pack) void {
         // 缓冲内逐帧消费
         while (true) {
             const f = lsp_jsonrpc.parseFrame(pend.items) catch |e| {
-                printErr("zzc: LSP 帧解析失败（{s}），流已不可信，结束。", .{@errorName(e)});
+                printErr(zzc.prog_prefix ++ "LSP 帧解析失败（{s}），流已不可信，结束。", .{@errorName(e)});
                 werr.flush() catch {};
                 return;
             };
             const frame = f orelse break;
             var out: lsp.OutList = .empty;
             srv.handle(frame.body, &out) catch {
-                printErr("zzc: LSP 处理本条报文失败（内存不足），已跳过。\n", .{});
+                printErr(zzc.prog_prefix ++ "LSP 处理本条报文失败（内存不足），已跳过。\n", .{});
             };
             defer {
                 for (out.items) |m| gpa_.free(m);
@@ -1146,7 +1146,7 @@ fn cmdLsp(lang: Pack) void {
                 io_broke = true;
             };
             if (io_broke) {
-                printErr("zzc: LSP 标准输出写入失败，客户端已断开，结束。\n", .{});
+                printErr(zzc.prog_prefix ++ "LSP 标准输出写入失败，客户端已断开，结束。\n", .{});
                 return;
             }
             // 消费已处理字节
@@ -1160,7 +1160,7 @@ fn cmdLsp(lang: Pack) void {
         const n = in_r.interface.readSliceShort(&chunk) catch 0;
         if (n == 0) return; // stdin 关闭：客户端断开，正常收束
         pend.appendSlice(gpa_, chunk[0..n]) catch {
-            printErr("zzc: LSP 读缓冲耗尽（内存不足），结束。\n", .{});
+            printErr(zzc.prog_prefix ++ "LSP 读缓冲耗尽（内存不足），结束。\n", .{});
             return;
         };
     }
@@ -1197,14 +1197,14 @@ pub fn main(init: std.process.Init) !void {
     var stdout_file = Io.File.Writer.init(.stdout(), io_, &stdout_buf);
     out_w = &stdout_file.interface;
     defer out_w.flush() catch |e| {
-        printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "刷新标准输出失败：{s}", .{@errorName(e)});
     };
 
     var wbuf: [4096]u8 = undefined;
     var werr_file_local = Io.File.Writer.init(.stderr(), io_, &wbuf);
     werr = &werr_file_local.interface;
     defer werr.flush() catch |e| {
-        printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "刷新错误输出失败：{s}", .{@errorName(e)});
     };
 
     // all_args[0] 是可执行文件自身路径，子命令从 [1] 开始
@@ -1234,7 +1234,7 @@ pub fn main(init: std.process.Init) !void {
     const lang_name = cli.findLangFlag(args);
     const lang_file = cli.findLangFileFlag(args);
     if (lang_name != null and lang_file != null) {
-        printErr("zzc: --lang 与 --lang-file 互斥：内置选包、外部包文件二选一。", .{});
+        printErr(zzc.prog_prefix ++ "--lang 与 --lang-file 互斥：内置选包、外部包文件二选一。", .{});
         werr.flush() catch {};
         std.process.exit(2); // 用法错与未知包同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }
@@ -1254,7 +1254,7 @@ pub fn main(init: std.process.Init) !void {
                     installed_src = ip;
                     break :blk loadExternalPack(ip) catch |e| bail(e);
                 }
-                printErr("zzc: 未知语言包「{s}」。当前可用：", .{n});
+                printErr(zzc.prog_prefix ++ "未知语言包「{s}」。当前可用：", .{n});
                 for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
                 printErr("\n", .{});
                 werr.flush() catch {};
@@ -1264,24 +1264,24 @@ pub fn main(init: std.process.Init) !void {
             registry.defaultEntry();
         // R11（第 53 轮）：基包 + 补充层叠加加载（当前 zh 无补充层，overlays 为空→等价单包）。
         const bp = Pack.loadWithOverlays(gpa_, chosen.bytes, chosen.overlays) catch |e| {
-            printErr("zzc: 语言包解析失败（{s}），这属于工具自身缺陷，请反馈。", .{@errorName(e)});
+            printErr(zzc.prog_prefix ++ "语言包解析失败（{s}），这属于工具自身缺陷，请反馈。", .{@errorName(e)});
             bail(error.Failed); // noreturn：不外泄 error 名与栈帧（同外部源形制）
         };
         break :blk bp;
     };
     defer lang.deinit();
     var stripped = cli.stripLangFlag(gpa_, args) catch |e| {
-        printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
         return e;
     };
     defer stripped.deinit(gpa_);
     var filtered = cli.stripLangFileFlag(gpa_, stripped.items) catch |e| {
-        printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
         return e;
     };
     defer filtered.deinit(gpa_);
     var mach_stripped = cli.stripBoolFlag(gpa_, filtered.items, mcon.flag_machine) catch |e| {
-        printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
+        printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
         return e;
     };
     defer mach_stripped.deinit(gpa_);
@@ -1291,11 +1291,11 @@ pub fn main(init: std.process.Init) !void {
     // 外部包（R9g）失败则是贡献者缺陷，消息面向包作者携带路径可行动。
     lang.validate() catch |e| {
         if (lang_file) |fp|
-            printErr("zzc: 外部语言包「{s}」不完整：{s}", .{ fp, describePackError(e) })
+            printErr(zzc.prog_prefix ++ "外部语言包「{s}」不完整：{s}", .{ fp, describePackError(e) })
         else if (installed_src) |ip|
-            printErr("zzc: 已装语言包「{s}」不完整（装后又被改坏了？）：{s}", .{ ip, describePackError(e) })
+            printErr(zzc.prog_prefix ++ "已装语言包「{s}」不完整（装后又被改坏了？）：{s}", .{ ip, describePackError(e) })
         else
-            printErr("zzc: 语言包不完整：{s}", .{describePackError(e)});
+            printErr(zzc.prog_prefix ++ "语言包不完整：{s}", .{describePackError(e)});
         bail(error.Failed); // 静默退 1：不外泄 error 名与栈帧（探针实锤形，第 103 轮）
     };
 
@@ -1321,7 +1321,7 @@ pub fn main(init: std.process.Init) !void {
             cmdLangAdd(argv[1..]);
             return;
         }
-        printErr("zzc: lang 只有 add 子命令：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与可注册包）；「{s}」不是有效子命令。", .{verb});
+        printErr(zzc.prog_prefix ++ "lang 只有 add 子命令：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与可注册包）；「{s}」不是有效子命令。", .{verb});
         werr.flush() catch {};
         std.process.exit(2); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }

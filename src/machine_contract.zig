@@ -22,6 +22,7 @@
 //! `zig build check-machine-matcher` 守卫步（`addFileArg` 声明文件依赖），本模块只提供其判据真值。
 
 const std = @import("std");
+const zzc = @import("zzc_paths.zig"); // 第 210 轮 D78：示例命令行的程序名首词取单一真值（与 build.zig 产出的 exe 名同源）
 
 /// comptime 片段串接（小工具）：拼定长缓冲、零堆分配，供由真值派生对面值时用。
 fn comptimeCat(comptime parts: anytype) []const u8 {
@@ -72,8 +73,8 @@ pub const line_fmt_tip: []const u8 = comptimeCat(.{ line_head, "{s}: {s}", "（�
 /// Zig 字面量里 `\\d` 即文件里的 `\d`，故本常量持单反斜杠形；守卫步负责先反转义再逐字节比。
 pub const matcher_regexp: []const u8 = "^([^\\s:].*?):(\\d+):(\\d+): (\\S+): (.*)$";
 
-/// 编辑器示例命令行的命令前缀（`tasks.json` 对面的 `command` 值），由两枚真值派生、非手抄。
-pub const tasks_command: []const u8 = comptimeCat(.{ "zzc ", sub_check, " ", flag_machine });
+/// 编辑器示例命令行的命令前缀（`tasks.json` 对面的 `command` 值），由程序名真值与两枚契约真值派生、非手抄（第 210 轮 D78）。
+pub const tasks_command: []const u8 = comptimeCat(.{ zzc.prog_name, " ", sub_check, " ", flag_machine });
 
 /// 帮助文案里的机读形制提示（由 `field_names` 与 `sep_after` 拼出，杜绝第二份手抄）。
 pub const shape_hint: []const u8 = buildShapeHint();

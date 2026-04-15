@@ -25,6 +25,7 @@ const lexer = @import("../transpiler/lexer.zig");
 const translate = @import("../transpiler/translate.zig");
 const fullwidth = @import("../diag/fullwidth.zig");
 const snippets = @import("../editor/snippets.zig");
+const paths = @import("../zzc_paths.zig"); // 第 210 轮 D78：诊断 source 标注的程序名取单一真值（与 CLI/编辑器同源）
 
 pub const OutList = std.ArrayList([]const u8);
 
@@ -390,7 +391,7 @@ pub const Server = struct {
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, s.message);
         defer gpa.free(msg_js);
-        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":{d},\"source\":\"zzc\",\"message\":{s}}}", .{ range, sev, msg_js });
+        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":{d},\"source\":\"{s}\",\"message\":{s}}}", .{ range, sev, paths.prog_name, msg_js });
     }
 
     fn publishRaw(self: *Server, out: *OutList, uri: []const u8, diags_json: []const u8) !void {
@@ -452,7 +453,7 @@ pub const Server = struct {
         defer gpa.free(range);
         const msg_js = try jsonrpc.jsonString(gpa, msg);
         defer gpa.free(msg_js);
-        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":1,\"source\":\"zzc\",\"message\":{s}}}", .{ range, msg_js });
+        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":1,\"source\":\"{s}\",\"message\":{s}}}", .{ range, paths.prog_name, msg_js });
     }
 
     /// 悬停：光标词（含点链）反查语言包；未命中/越界/文档不在表 → result null。
@@ -871,7 +872,7 @@ test "lsp.server：didSave 合并语义项、didOpen 不含语义（保存门控
     try testing.expect(std.mem.indexOf(u8, out.items[0], "假语义诊断XYZ") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"severity\":1") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"character\":3") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"source\":\"zzc\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"source\":\"" ++ paths.prog_name ++ "\"") != null); // 210：source 标注程序名同源
     freeOut(gpa, &out);
 
     // 未 open 的 uri：didSave 无文本可算，静默不发布。

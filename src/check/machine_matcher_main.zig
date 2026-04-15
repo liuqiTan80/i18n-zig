@@ -12,6 +12,7 @@
 
 const std = @import("std");
 const mcon = @import("zzc_core").machine;
+const paths = @import("zzc_core").paths; // 第 210 轮 D78：程序名单一真值与 `buildDeclaresExe` 判据
 
 /// 取 `text` 中 `from` 之后首个 `"key"` 对应的 JSON 字符串值；返回引号之间的**原始**片段
 /// （未反转义）与其后下标。非字符串值、无该键、引号不闭合皆返 null。
@@ -120,8 +121,23 @@ pub fn main(init: std.process.Init) !void {
         );
     }
 
+    // —— 对面三：`build.zig` 实际产出的 CLI exe 名（第 210 轮 D78）。示例命令首词由 `mcon.tasks_command`
+    //   派生自 `paths.prog_name`；若 build 脚本里的 `addExecutable(.name)` 与之分道（改名而忘同步），
+    //   编辑器照示例运行的 `zzc …` 就指向一个不存在的二进制——t2 探针 P1 实锤这条静默的功能级断裂。
+    const build_path = if (args.len >= 4) args[3] else "build.zig";
+    const build = std.Io.Dir.cwd().readFileAlloc(io, build_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ build_path, @errorName(e) });
+    defer gpa.free(build);
+    if (!paths.buildDeclaresExe(build)) {
+        fail(
+            "FAIL: {s} 未声明名为「{s}」的可执行文件（`.name = \"{s}\"`），与程序名真值分道——产出二进制会更名，" ++
+                "而编辑器示例命令/报错前缀/LSP source 仍写旧名。请同改 `{s}` 的 `.name` 与 `zzc_paths.prog_name`。\n",
+            .{ build_path, paths.prog_name, paths.prog_name, build_path },
+        );
+    }
+
     std.debug.print(
-        "OK: {s} 与 {s} 仍与机读契约同源（正则同骨、示例命令 =「{s}」）\n",
-        .{ pkg_path, tasks_path, mcon.tasks_command },
+        "OK: {s}／{s} 与机读契约同源，且 {s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」）\n",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command },
     );
 }
