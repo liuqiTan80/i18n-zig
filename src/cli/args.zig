@@ -4,6 +4,8 @@ const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack; // 第 142 轮：模板生成器按包组词需 Pack 反查面
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：.zzc 内部路径族改由该模块持唯一真值
 const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读旗标名与单行形制的契约 hub
+const kdiag = @import("../diag/kind.zig"); // 第 227 轮 D95：ps1 码点断言 needle 由 kind 词汇真值派生（错误）
+const snippets_hub = @import("../editor/snippets.zig"); // 第 227 轮 D95：hover 词类标签真值派生（关键字）
 
 pub const EntryPick = struct {
     /// 方言入口文件路径（缺省为 src/main.zz）
@@ -1709,4 +1711,146 @@ test "第 226 轮 T0 ps1 命令词族 needle 派生形：逐字节独立手抄�
     // A3 语义分工钉：`--lang` needle 不得是 `--lang-file` 的子串形（两者以尾引号区分，
     // 防派生退化后宽松伪钉——207 轮同族判例）。
     try std.testing.expect(std.mem.indexOf(u8, "\"--lang-file\"", "\"--lang\"") == null);
+}
+
+// ═════════════════════════ 第 227 轮 D95：ps1 码点构造文案断言族单一真值 ═══════════════════════════
+// `tools/check-demos.ps1` 为保持脚本纯 ASCII（第 91 轮形制：`Native 0xXXXX,…` 码点构造中文），
+// 其 21 处 Contains 断言的本体子串是 src 出口文案字面的第二份跨文件手抄——码点形正好绕过
+// 了第 226 轮 D94 的字面量普查（当时只收命令词族 ASCII 形）。t2 探针实锤：src 文案漂（P1
+// 「已创建→已落成」）与 ps1 码点漂（P2）双双 fresh 589/589 全绿静默——文案一改，e2e 基线
+// 本机静默 [FAIL] 错红、GitCode 不跑 Actions（D17）＋ NO_PWSH 双盲，防线失信无人知。
+// 本段把 18 枚文案段提为真值常量（main/server/translate 输出点委派），「错误」「关键字」
+// 分别由 kind.zig/snippets.zig 既有真值派生，「类型」由本 hub 持真值供 translate 回译表委派；
+// needle 由码点转换 comptime 派生（带 `Native ` 前缀形防子串宽松伪钉），交守卫对面十八
+// 第二清单对账（ps1 已经 addFileArg 入文件依赖·零新增 I/O）。
+// 不纳针面如实登册：方言关键字构造形 14 员（$N_const 等）真值源在语言包数据文件——pack 漂向
+// 测试图已有 29 枚 fixture 间接钉捕获（t2 P6 坐实），ps1 自身漂向属数据面双盲、同 226 M8 形制；
+// 「中文」系 pack $name 数据面（同族）；usage_text 同词系人约文本面（ps1 断言不命中帮助文本）。
+
+/// UTF-8 串 → PowerShell 码点参数列（大写 hex、逗号无空格——ps1 全点位统一形制）。
+/// 仅供 comptime 拼 needle；非 ASCII 字节序列直接编译拒（文案真值必为 CJK/全角形）。
+fn cps(comptime s: []const u8) []const u8 {
+    const DIGITS = "0123456789ABCDEF";
+    var buf: [s.len * 11]u8 = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) {
+        const l = std.unicode.utf8ByteSequenceLength(s[i]) catch @compileError("cps：非 UTF-8 字节");
+        const cp: u21 = std.unicode.utf8Decode(s[i .. i + l]) catch @compileError("cps：坏 UTF-8 序列");
+        // 手写大写 hex 转换（comptime 不借 std.fmt——bufPrint 在编译期超反向分支配额）。
+        var tmp: [6]u8 = undefined;
+        var dn: usize = 0;
+        var d = cp;
+        while (true) {
+            tmp[dn] = DIGITS[d & 0xF];
+            dn += 1;
+            d >>= 4;
+            if (d == 0) break;
+        }
+        buf[n] = '0';
+        buf[n + 1] = 'x';
+        var k: usize = 0;
+        while (k < dn) : (k += 1) buf[n + 2 + k] = tmp[dn - 1 - k];
+        n += 2 + dn;
+        if (i + l < s.len) {
+            buf[n] = ',';
+            n += 1;
+        }
+        i += l;
+    }
+    return buf[0..n];
+}
+
+/// 码点断言 needle（`Native 0x…` 前缀形：防「语言包」⊂「当前语言包」类包含关系宽松伪钉）。
+fn nativeAssert(comptime phrase: []const u8) []const u8 {
+    return "Native " ++ cps(phrase);
+}
+
+// —— 文案段真值（main.zig/server.zig/translate.zig 输出口委派至此；ps1 断言 needle 由此派生）——
+pub const np_not_detected = "未检测到"; // eject 无 zig 提示（main cmdEject）
+pub const np_could_not_query = "未能向"; // fingerprint 查询失败提示（main）
+pub const np_upgrade = "请升级"; // $format 过新提示（main lang add）
+pub const np_created = "已创建"; // init 成功行（main cmdInit）
+pub const np_no_overwrite = "未覆盖"; // init 入口已存在提示（main）
+pub const np_unsafe = "不安全"; // init 工程名拒绝（main）
+pub const np_subcmd = "子命令"; // 未知子命令提示（main dispatch）+ lang verb 拒绝行
+pub const np_artifact = "产物"; // build 成功行（main）+ eject 验证成功消息
+pub const np_pass = "通过"; // 检查通过行（main cmdCheck）+ eject 验证消息
+pub const np_dialect_files = "方言文件"; // 检查通过行量词宾语（main）
+pub const np_cur_pack = "当前语言包"; // lang 详情头（main）
+pub const np_reg_packs = "可注册包"; // lang 详情列表头（main）+ lang verb 拒绝行
+pub const np_pack_word = "语言包"; // version 行回显（main）
+pub const np_installed = "已装入"; // lang add 成功行（main）
+pub const np_dup_installed = "本工程内已装有"; // lang add 重复拒绝（main）
+pub const np_reg_key_open = "注册名「"; // lang add 非法注册名拒绝（main）
+pub const np_unknown_pack = "未知语言包"; // --lang 未知包拒绝（main）
+pub const np_lexical = "词法"; // 词法诊断 kind 前缀（main 机读出口 + server 诊断体）
+pub const np_type = "类型"; // zig 报错回译短语段（diag/translate 回译表）
+
+/// ps1 码点断言 needle 二十一枚——改任一真值，needle 随动、ps1 旧码点即失配红；
+/// 改 ps1 码点，needle 不落空而守卫红。双向耦合自此单源（守卫对面十八第二清单）。
+pub const ps1_native_face = [_]Ps1Needle{
+    .{ .needle = nativeAssert(np_not_detected), .why = "init/eject 出口文案「未检测到」码点断言——漂即 nozig 守卫静默错红（第 227 轮 D95）" },
+    .{ .needle = nativeAssert(np_could_not_query), .why = "fingerprint 查询失败提示「未能向」——漂即 nozig stderr 守卫错红" },
+    .{ .needle = nativeAssert(np_upgrade), .why = "外部包过新提示「请升级」——漂即 r9g B 守卫错红" },
+    .{ .needle = nativeAssert(np_created), .why = "init 成功行「已创建」——漂即 init A 守卫错红（t2 P1/P2 双静默主证）" },
+    .{ .needle = nativeAssert(np_no_overwrite), .why = "init 防覆盖提示「未覆盖」——漂即 init B 守卫错红" },
+    .{ .needle = nativeAssert(np_unsafe), .why = "init 工程名拒绝「不安全」——漂即 init C 守卫错红" },
+    .{ .needle = nativeAssert(np_subcmd), .why = "未知子命令提示「子命令」——漂即 dispatch A 守卫错红" },
+    .{ .needle = nativeAssert(np_artifact), .why = "build 成功行「产物」——漂即 build A / flag C 两守卫错红" },
+    .{ .needle = nativeAssert(kdiag.zhOf("error")), .why = "裸诊断前缀「错误」由 kind 词汇 hub 派生（D77）——非 args 另立手抄" },
+    .{ .needle = nativeAssert(np_pass), .why = "检查通过「通过」——漂即 test A / check A 守卫错红" },
+    .{ .needle = nativeAssert(np_dialect_files), .why = "「方言文件」量词宾语——漂即 check A 措辞降级守卫错红" },
+    .{ .needle = nativeAssert(np_cur_pack), .why = "lang 详情头「当前语言包」——漂即 lang 守卫错红" },
+    .{ .needle = nativeAssert(np_reg_packs), .why = "lang 列表头「可注册包」——漂即 lang 守卫错红（用户失行动面）" },
+    .{ .needle = nativeAssert(np_pack_word), .why = "version 行「语言包」回显——Native 前缀形防其为当前/未知语言包 needle 子串" },
+    .{ .needle = nativeAssert(np_unknown_pack), .why = "--lang 未知包拒绝「未知语言包」——漂即 flag B 守卫错红" },
+    .{ .needle = nativeAssert(np_installed), .why = "lang add 成功行「已装入」——漂即 langadd A 守卫错红" },
+    .{ .needle = nativeAssert(np_reg_key_open), .why = "非法注册名拒绝含全开引号「注册名「」——漂即 langadd E 守卫错红" },
+    .{ .needle = nativeAssert(np_dup_installed), .why = "重复拒绝行「本工程内已装有」——漂即 langadd C 守卫错红" },
+    .{ .needle = nativeAssert(np_lexical), .why = "词法诊断 kind「词法」（main 机读出口 + server 委派）——漂即 lsp 守卫错红" },
+    .{ .needle = nativeAssert(snippets_hub.g_keyword), .why = "hover 词类标签「关键字」由 snippets 真值派生（D87）——非 args 另立手抄" },
+    .{ .needle = nativeAssert(np_type), .why = "回译短语「类型」段（translate 回译表委派）——漂即 on-save 语义守卫错红" },
+};
+
+test "第 227 轮 T0 ps1 码点文案断言 needle：逐字节独立手抄对拍 + 基数钉 + Native 前缀互斥钉" {
+    // A1 派生形钉：廿一枚 needle 与 ps1 码点断言的期望字面逐字节对拍——本 want 表独立手抄
+    //（ps1 非测试图 source dep·202 轮硬约束），与守卫对面十八第二清单双向互备。
+    const want_native = [_][]const u8{
+        "Native 0x672A,0x68C0,0x6D4B,0x5230",
+        "Native 0x672A,0x80FD,0x5411",
+        "Native 0x8BF7,0x5347,0x7EA7",
+        "Native 0x5DF2,0x521B,0x5EFA",
+        "Native 0x672A,0x8986,0x76D6",
+        "Native 0x4E0D,0x5B89,0x5168",
+        "Native 0x5B50,0x547D,0x4EE4",
+        "Native 0x4EA7,0x7269",
+        "Native 0x9519,0x8BEF",
+        "Native 0x901A,0x8FC7",
+        "Native 0x65B9,0x8A00,0x6587,0x4EF6",
+        "Native 0x5F53,0x524D,0x8BED,0x8A00,0x5305",
+        "Native 0x53EF,0x6CE8,0x518C,0x5305",
+        "Native 0x8BED,0x8A00,0x5305",
+        "Native 0x672A,0x77E5,0x8BED,0x8A00,0x5305",
+        "Native 0x5DF2,0x88C5,0x5165",
+        "Native 0x6CE8,0x518C,0x540D,0x300C",
+        "Native 0x672C,0x5DE5,0x7A0B,0x5185,0x5DF2,0x88C5,0x6709",
+        "Native 0x8BCD,0x6CD5",
+        "Native 0x5173,0x952E,0x5B57",
+        "Native 0x7C7B,0x578B",
+    };
+    // A2 基数钉：成员单边增删即红（与 226 T0 同族形制）。
+    try std.testing.expectEqual(want_native.len, ps1_native_face.len);
+    for (ps1_native_face, want_native) |f, w| {
+        try std.testing.expectEqualStrings(w, f.needle);
+    }
+    // A3 Native 前缀互斥钉：短词 needle 不得为长词 needle 子串（「语言包」⊂「当前语言包」、
+    // 「注册包」∈「可注册包」类包含关系以 `Native ` 前缀形消解——207/226 轮宽松伪钉判例同族）。
+    for (ps1_native_face) |a| {
+        for (ps1_native_face) |b| {
+            if (a.needle.len < b.needle.len) {
+                try std.testing.expect(std.mem.indexOf(u8, b.needle, a.needle) == null);
+            }
+        }
+    }
 }

@@ -972,8 +972,8 @@ if ($leString.Trim().Length -ne 0) { Write-Output ("  [FAIL] lsp: human text lea
 $msgs = @([regex]::Split($ltxt, "Content-Length:\s*\d+`r`n`r`n") | Where-Object { $_.Trim().Length -gt 0 })
 if ($msgs.Count -ne 5) { Write-Output ("  [FAIL] lsp: expected exactly 5 framed messages, got " + $msgs.Count); $lspOk = $false }
 if ($lspOk) {
-    $N_cifa = Native 0x8BCD, 0x6CD5        # ci-fa (lexical diagnostics kind)
-    $N_gjz  = Native 0x5173, 0x952E, 0x5B57 # guan-jian-zi (hover group label)
+    $N_cifa = Native 0x8BCD,0x6CD5        # ci-fa (lexical diagnostics kind)
+    $N_gjz  = Native 0x5173,0x952E,0x5B57 # guan-jian-zi (hover group label)
     if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true') -and $msgs[0].Contains('"semanticTokensProvider"'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form / semanticTokensProvider)"; $lspOk = $false }
     if (-not ($msgs[1].Contains('publishDiagnostics') -and $msgs[1].Contains('file:///g156.zz') -and $msgs[1].Contains($N_cifa))) { Write-Output "  [FAIL] lsp: didOpen did not publish native-lexical diagnostics for the fullwidth comma"; $lspOk = $false }
     if (-not ($msgs[2].Contains('"id":2') -and $msgs[2].Contains('const') -and $msgs[2].Contains($N_gjz))) { Write-Output "  [FAIL] lsp: hover on chang-shu did not resolve to const/keyword-group"; $lspOk = $false }

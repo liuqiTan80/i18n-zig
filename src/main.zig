@@ -369,12 +369,12 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
                 if (v.ascii.len > 0) {
                     if (v.ascii[0] == ' ') {
                         // 全角空格：半角替换字面不可见，改用文字描述而非反引号包裹。
-                        printErr(mcon.line_head ++ "词法: {s}，请改用半角空格作缩进/分隔", .{ rel, lc.line, lc.col, v.hint });
+                        printErr(mcon.line_head ++ cli.np_lexical ++ ": {s}，请改用半角空格作缩进/分隔", .{ rel, lc.line, lc.col, v.hint });
                     } else {
-                        printErr(mcon.line_head ++ "词法: {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ rel, lc.line, lc.col, v.hint, v.ascii });
+                        printErr(mcon.line_head ++ cli.np_lexical ++ ": {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ rel, lc.line, lc.col, v.hint, v.ascii });
                     }
                 } else {
-                    printErr(mcon.line_head ++ "词法: {s}（`{s}`）", .{ rel, lc.line, lc.col, v.hint, v.word });
+                    printErr(mcon.line_head ++ cli.np_lexical ++ ": {s}（`{s}`）", .{ rel, lc.line, lc.col, v.hint, v.word });
                 }
             }
             return error.Failed;
@@ -516,7 +516,7 @@ fn loadExternalPack(path: []const u8) !Pack {
     };
     return Pack.parse(gpa_, bytes) catch |e| switch (e) {
         error.PackFormatTooNew => {
-            printErr(zzc.prog_prefix ++ "外部语言包「{s}」声明的 $format 过新（当前 " ++ zzc.prog_name ++ " 仅支持格式 {d}）。请升级 " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
+            printErr(zzc.prog_prefix ++ "外部语言包「{s}」声明的 $format 过新（当前 " ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ cli.np_upgrade ++ " " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
             return error.Failed;
         },
         error.InvalidLangPack => {
@@ -552,7 +552,7 @@ fn cmdLangAdd(args: []const []const u8) void {
     };
     const key = cli.findFlag(args, cli.flag_as) orelse pk.code; // 缺省取包内 $code（与内置注册名同源）
     if (!userpack.keyIsSafe(key)) {
-        printErr(zzc.prog_prefix ++ "注册名「{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
+        printErr(zzc.prog_prefix ++ cli.np_reg_key_open ++ "{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
         werr.flush() catch {};
         std.process.exit(2);
     }
@@ -561,13 +561,13 @@ fn cmdLangAdd(args: []const []const u8) void {
     userpack.install(io_, gpa_, userpack.default_dir, key, bytes) catch |e| switch (e) {
         error.BadKey => unreachable, // 上面已拦
         error.AlreadyInstalled => {
-            printErr(zzc.prog_prefix ++ "本工程内已装有语言包「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
+            printErr(zzc.prog_prefix ++ cli.np_dup_installed ++ cli.np_pack_word ++ "「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
             werr.flush() catch {};
             std.process.exit(2); // 与 init 防覆盖形制一致：退 2 且原文件逐字节不动
         },
         else => bail(e), // 权限/IsDir/超限等：bail 的 localizeFsErr 母语兜底既有形
     };
-    printOut("✔ 已装入语言包「{s}({s})」→ {s}/{s}.txt；用 `--lang {s}` 选用（免重编译，仅本工程可见）。", .{ pk.name, key, userpack.default_dir, key, key });
+    printOut("✔ " ++ cli.np_installed ++ cli.np_pack_word ++ "「{s}({s})」→ {s}/{s}.txt；用 `--lang {s}` 选用（免重编译，仅本工程可见）。", .{ pk.name, key, userpack.default_dir, key, key });
 }
 
 fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
@@ -616,7 +616,7 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
         };
     }
     if (any_fail) return error.Failed;
-    printOut("✔ 检查通过：{d} 个方言文件已翻译为合法 Zig", .{proj.units.items.len});
+    printOut("✔ 检查" ++ cli.np_pass ++ "：{d} 个" ++ cli.np_dialect_files ++ "已翻译为合法 Zig", .{proj.units.items.len});
 }
 
 const BuildMode = enum { build, run, test_ };
@@ -665,7 +665,7 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
 
     switch (mode) {
         .test_ => printOut("✔ zig test 通过", .{}),
-        .build => printOut("✔ 产物：{s}", .{bin_full}),
+        .build => printOut("✔ " ++ cli.np_artifact ++ "：{s}", .{bin_full}),
         .run => {
             var run_argv: std.ArrayList([]const u8) = .empty;
             try run_argv.append(gpa_, bin_full);
@@ -709,7 +709,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     // 静默把工程建到父目录）。拒绝在任何 createDirPath/writeWhole 副作用之前。给出精确消息+exit 2
     // （与无名字 init 的 error.Usage 退出码一致）；std.process.exit 跳过 defer 刷写，故先显式 flush。
     if (cli.initNameIsUnsafe(name)) {
-        printErr(zzc.prog_prefix ++ "工程名 `{s}` 不安全（不能为空、`.`/`..`、上溯路径或绝对路径）；请用相对当前目录的子目录名（如 `zzc init myapp`）。", .{name});
+        printErr(zzc.prog_prefix ++ "工程名 `{s}` " ++ cli.np_unsafe ++ "（不能为空、`.`/`..`、上溯路径或绝对路径）；请用相对当前目录的子目录名（如 `zzc init myapp`）。", .{name});
         out_w.flush() catch |e| {
             printErr(zzc.prog_prefix ++ "刷新标准输出失败：{s}", .{@errorName(e)});
         };
@@ -721,7 +721,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     const main_zz = try zzc.initEntryPathFor(gpa_, name); // 第 201 轮 D69：入口构造取族 hub（旧形制本处自持一枚 "{s}/src/main.zz"）
     // 防覆盖：入口文件已存在则不写盘，避免清空用户已有工程的劳动成果（幂等、非破坏）。
     if (pathExists(main_zz)) {
-        printOut(zzc.prog_prefix ++ "工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：" ++ zzc.prog_name ++ " " ++ cli.sub_run, .{ name, main_zz });
+        printOut(zzc.prog_prefix ++ "工程 {s} 的入口 {s} 已存在，" ++ cli.np_no_overwrite ++ "；如需重新初始化请先删除该文件。进入目录后运行：" ++ zzc.prog_name ++ " " ++ cli.sub_run, .{ name, main_zz });
         return;
     }
     try std.Io.Dir.cwd().createDirPath(io_, name);
@@ -730,7 +730,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
     // 选外语包时出生即碎码（探针 T2 实锤）——现在全部词形取自所选包、缺则安全降级。
     const tmpl_src = try cli.buildInitTemplate(gpa_, lang);
     try writeWhole(main_zz, tmpl_src);
-    printOut("已创建工程 {s}（{s}）。进入目录后运行：" ++ zzc.prog_name ++ " " ++ cli.sub_run, .{ name, zzc.default_entry });
+    printOut(cli.np_created ++ "工程 {s}（{s}）。进入目录后运行：" ++ zzc.prog_name ++ " " ++ cli.sub_run, .{ name, zzc.default_entry });
 }
 
 /// 判断 eject 目标是否会与源码树重叠的纯谓词已移到 cli.ejectDestHitsSourceTree（属
@@ -738,9 +738,9 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
 /// eject 的两条出口消息：文件名段取自毕业族真值（第 204 轮 D72），使「承诺含哪些文件」与「实际写了
 /// 哪些文件」同源。旧形制此处手抄两枚文件名且只报 `build.zig`——而 zon 在验证前就已落盘（措辞与
 /// 真因错位，190 轮尾注在册），故本轮按 D65 失实文案先例一并更正为两枚齐报。
-const eject_ok_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；`zig build` 验证通过，产物：{s}/zig-out/bin/{s}。";
+const eject_ok_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；`zig build` 验证" ++ cli.np_pass ++ "，" ++ cli.np_artifact ++ "：{s}/zig-out/bin/{s}。";
 
-const eject_no_zig_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；未检测到 zig，无法自动验证构建。";
+const eject_no_zig_msg: []const u8 = "已导出标准 Zig 到 {s}/（含 " ++ zzc.out_build_zig ++ " + " ++ zzc.out_build_zon ++ "）；" ++ cli.np_not_detected ++ " zig，无法自动验证构建。";
 
 fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const dest = if (args.len > 0) args[0] else zzc.eject_default_dest; // 第 213 轮 D81：缺省落点取族 hub（usage/文案/忽略面同源）
@@ -844,7 +844,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     if (fp) |t| {
         try writeWhole(zon_path, try ejectZoneText(app_name, t));
     } else {
-        printErr(zzc.prog_prefix ++ "未能向 zig 查询包 fingerprint（zig 不可用？）；zon 暂缺该字段，首次 `zig build` 会提示合法值。", .{});
+        printErr(zzc.prog_prefix ++ cli.np_could_not_query ++ " zig 查询包 fingerprint（zig 不可用？）；zon 暂缺该字段，首次 `zig build` 会提示合法值。", .{});
     }
 
     // 验证“毕业路径”：进入导出目录直接 `zig build`，确认可独立构建。
@@ -930,7 +930,7 @@ fn verifyBuild(dest: []const u8) BuildVerify {
 /// 避免把 zzc 自身的 Zig 错误返回跟踪（stderr 栈帧）暴露给方言用户。
 fn bail(e: anyerror) noreturn {
     switch (e) {
-        error.Usage => printErr(zzc.prog_prefix ++ "未知或不完整的子命令；运行不带参数的 " ++ zzc.prog_name ++ " 查看用法。", .{}),
+        error.Usage => printErr(zzc.prog_prefix ++ "未知或不完整的" ++ cli.np_subcmd ++ "；运行不带参数的 " ++ zzc.prog_name ++ " 查看用法。", .{}),
         error.Failed => {}, // 母语报错已在编译阶段打印，无需重复
         // D36（第 84 轮）：符号表被手工编辑出同一 z_N 归两个不同母语名——若不容忍静默合并，
         // 必须源头拒并点名文件与修法（两标识符转码后共享同名会静默改变程序语义）。
@@ -1254,7 +1254,7 @@ pub fn main(init: std.process.Init) !void {
                     installed_src = ip;
                     break :blk loadExternalPack(ip) catch |e| bail(e);
                 }
-                printErr(zzc.prog_prefix ++ "未知语言包「{s}」。当前可用：", .{n});
+                printErr(zzc.prog_prefix ++ cli.np_unknown_pack ++ "「{s}」。当前可用：", .{n});
                 for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
                 printErr("\n", .{});
                 werr.flush() catch {};
@@ -1300,7 +1300,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     if (std.mem.eql(u8, cmd, cli.sub_version)) {
-        printOut(zzc.prog_name ++ " {s}（语言包：{s}）", .{ version_str, lang.name });
+        printOut(zzc.prog_name ++ " {s}（" ++ cli.np_pack_word ++ "：{s}）", .{ version_str, lang.name });
         return;
     }
     if (std.mem.eql(u8, cmd, cli.sub_lang)) {
@@ -1310,7 +1310,7 @@ pub fn main(init: std.process.Init) !void {
         const verb = if (argv.len > 0) argv[0] else "";
         if (verb.len == 0) {
             // R9：反映注册表——除当前选定包详情外，列出可注册的包名（多包加载面可见）。
-            printOut("当前语言包：{s}({s}) —— 关键字 {d} 条 / 路径别名 {d} 条 / 报错模式 {d} 条\n可注册包：", .{
+            printOut(cli.np_cur_pack ++ "：{s}({s}) —— 关键字 {d} 条 / 路径别名 {d} 条 / 报错模式 {d} 条\n" ++ cli.np_reg_packs ++ "：", .{
                 lang.name, lang.code, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
             });
             for (registry.entries) |p| printOut("{s}({s}) ", .{ p.key, p.display });
@@ -1321,7 +1321,7 @@ pub fn main(init: std.process.Init) !void {
             cmdLangAdd(argv[1..]);
             return;
         }
-        printErr(zzc.prog_prefix ++ "lang 只有 add 子命令：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与可注册包）；「{s}」不是有效子命令。", .{verb});
+        printErr(zzc.prog_prefix ++ "lang 只有 add " ++ cli.np_subcmd ++ "：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与" ++ cli.np_reg_packs ++ "）；「{s}」不是有效" ++ cli.np_subcmd ++ "。", .{verb});
         werr.flush() catch {};
         std.process.exit(2); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }

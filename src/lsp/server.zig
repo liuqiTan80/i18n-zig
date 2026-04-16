@@ -26,6 +26,7 @@ const translate = @import("../transpiler/translate.zig");
 const fullwidth = @import("../diag/fullwidth.zig");
 const snippets = @import("../editor/snippets.zig");
 const paths = @import("../zzc_paths.zig"); // 第 210 轮 D78：诊断 source 标注的程序名取单一真值（与 CLI/编辑器同源）
+const cli = @import("../cli/args.zig"); // 第 227 轮 D95：词法诊断 kind 前缀取文案真值 hub（与 CLI 机读出口/ps1 断言同源）
 
 /// 语义 token 图例（第 214 轮 D82 单一真值）：initialize 应答 `tokenTypes`、`tokenTypeOf`/
 /// `classToTokenType` 的索引值、客户端 `editors/vscode/extension.js` 的 `SEMANTIC_TOKEN_TYPES`
@@ -672,11 +673,11 @@ pub const Server = struct {
         defer if (maybe_vs) |vs| gpa.free(vs);
         for (maybe_vs orelse &.{}) |v| {
             const msg = if (v.ascii.len > 0 and v.ascii[0] == ' ')
-                try std.fmt.allocPrint(gpa, "词法: {s}，请改用半角空格作缩进/分隔", .{v.hint})
+                try std.fmt.allocPrint(gpa, cli.np_lexical ++ ": {s}，请改用半角空格作缩进/分隔", .{v.hint})
             else if (v.ascii.len > 0)
-                try std.fmt.allocPrint(gpa, "词法: {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ v.hint, v.ascii })
+                try std.fmt.allocPrint(gpa, cli.np_lexical ++ ": {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ v.hint, v.ascii })
             else
-                try std.fmt.allocPrint(gpa, "词法: {s}（`{s}`）", .{ v.hint, v.word });
+                try std.fmt.allocPrint(gpa, cli.np_lexical ++ ": {s}（`{s}`）", .{ v.hint, v.word });
             defer gpa.free(msg);
             try items.append(gpa, try self.diagItem(text, v.off, v.off + v.len, msg));
         }

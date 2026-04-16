@@ -18,6 +18,7 @@ const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：内部路径族的隐藏判据与族成员同源
 const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读单行格式串取契约 hub 真值
 const kdiag = @import("kind.zig"); // 第 208 轮 D76：机读 kind 词汇(en↔zh↔severity)取单一真值 hub
+const clihub = @import("../cli/args.zig"); // 第 227 轮 D95：回译短语「类型」段取文案真值 hub（与 ps1 码点断言同源）；别名避与 200 T1 测体内 `cli` 局部遮蔽
 
 /// 产品时间源（F3）：主层启动时经 `setIo` 注入；单测图不注入保持默认 null → 取时回 0，
 /// 诊断纯函数测试图不被 Io 污染（D7 可测性守则）。
@@ -401,18 +402,18 @@ const runner_pairs = [_][2][]const u8{
     // 格式串与实参类型不符（`std.fmt`/打印 常见）：`invalid format string 'd' for type 'X'`——
     // 用一对短语保住格式符 'd' 与类型操作数 'X'（整句模板反而会丢这两个关键信息）。
     .{ "invalid format string ", "无效格式串 " },
-    .{ " for type '", " 对类型 '" },
-    .{ "type '", "类型 '" },
+    .{ " for type '", " 对" ++ clihub.np_type ++ " '" },
+    .{ "type '", clihub.np_type ++ " '" },
     // 枚举 `匹配` 非穷尽时逐条列出的说明行 `unhandled enumeration value: 'X'`——保住未处理的枚举成员名 'X'（主错 `switch must handle` 已由 packs `匹配不穷尽` 接住）。
     .{ "unhandled enumeration value", "未处理的枚举取值" },
     // 格式串/括号未闭合 `missing closing }`（std @compileError）——保住实际的闭合字符 `}`（同族还有 `)` 等）。
     .{ "missing closing ", "缺少闭合的 " },
     // comptime_int 变量须 const：`variable of type 'X' must be const or comptime`——用一对短语把 “variable of type X” 重排为中文的“变量（类型 X）”，
     // 闭括号搭在第二段开头，既保住类型操作数 'X'、又拼出自然语序（const→常数、comptime→计期 用真实别名）。
-    .{ "variable of type ", "变量（类型 " },
+    .{ "variable of type ", "变量（" ++ clihub.np_type ++ " " },
     .{ " must be const or comptime", "）必须是 `常数`（const）或 `计期`（comptime）" },
-    .{ "error union type", "错误联合类型" },
-    .{ "optional type", "可选类型" }, // `expected optional type, found 'i64'`（对非可选值用 `.?`）：`expected `/`, found ` 已由上面短语翻译，这里补中间描述词；'i64' 类型签名保留。
+    .{ "error union type", "错误联合" ++ clihub.np_type },
+    .{ "optional type", "可选" ++ clihub.np_type }, // `expected optional type, found 'i64'`（对非可选值用 `.?`）：`expected `/`, found ` 已由上面短语翻译，这里补中间描述词；'i64' 类型签名保留。
     .{ "does not support", "不支持" },
     .{ "field access", "字段访问" },
     .{ "not a function", "不是函数" },
