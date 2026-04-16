@@ -245,8 +245,15 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(main_txt);
     checkFace(main_path, &cli_hub.tl_face, main_txt);
 
+    // —— 对面十七：`package.json` 的 problemMatcher pattern 字段映射五枚（第 225 轮 D93）。
+    //   「file/location/column/code/message 各取第几捕获组」与机读行段序（line_fmt 占位符序）同骨，
+    //   而对面一只核 regexp 词、从不读这五枚数字——t2 探针 P1/P2/P3 改数字 fresh 585/585 全绿
+    //   静默，活体消费模拟坐实面板字段串位（file 收到行号、code 收到消息本体）而构建链恒绿。
+    //   本片复用对面一已读的 pkg（零新增 I/O），按 hub 派生 needle 清单逐字节对账。
+    checkFace(pkg_path, &mcon.pattern_face, pkg);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path },
     );
 }

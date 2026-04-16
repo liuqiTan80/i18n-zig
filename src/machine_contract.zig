@@ -76,6 +76,87 @@ pub const matcher_regexp: []const u8 = "^([^\\s:].*?):(\\d+):(\\d+): (\\S+): (.*
 /// 编辑器示例命令行的命令前缀（`tasks.json` 对面的 `command` 值），由程序名真值与两枚契约真值派生、非手抄（第 210 轮 D78）。
 pub const tasks_command: []const u8 = comptimeCat(.{ zzc.prog_name, " ", sub_check, " ", flag_machine });
 
+// ---------------------------------------------------------- pattern 字段映射（第 225 轮 D93）
+//
+// `package.json` 的 problemMatcher `pattern` 除 `regexp` 外还有五枚**字段→捕获组号**映射
+// （`"file": 1` … `"message": 5`）——对面一只核 regexp 词与同骨（段数/分隔符），从不读这五枚数字；
+// t2 探针 P1/P2/P3 三路改数字 fresh 585/585 全绿静默，而 VSCode 按清单消费即面板字段串位
+// （file 收到行号、code 收到消息本体）。本段把「五字段各取第几组、该组须为何种型」立为真值，
+// 型序与 `line_fmt` 占位符序互钉（s,d,d,s,s），对面十七以派生 needle 逐字节对账 package.json。
+
+/// VSCode pattern 五字段名与其应对的占位符型（组号 = 列序 + 1，与 `line_fmt` 占位符同序）。
+/// `ty` 即 `line_fmt` 对应段占位符字符：'s' 字符串段、'd' 数字段——语义对应 file→路径、
+/// location→行、column→列、code→种类、message→消息（与 `field_names` 同序，人约字面并列钉于 225 T0）。
+pub const PatternPair = struct { key: []const u8, ty: u8 };
+pub const pattern_pairs = .{
+    .{ .key = "file", .ty = 's' },
+    .{ .key = "location", .ty = 'd' },
+    .{ .key = "column", .ty = 'd' },
+    .{ .key = "code", .ty = 's' },
+    .{ .key = "message", .ty = 's' },
+};
+
+/// 单个数字字（本族段数恒 ≤ 5，组号皆单字符）。
+fn digit(comptime n: usize) []const u8 {
+    return switch (n) {
+        1 => "1",
+        2 => "2",
+        3 => "3",
+        4 => "4",
+        5 => "5",
+        else => @compileError("digit 只容单个数字字（1..=5）"),
+    };
+}
+
+/// 对面十七核对项（与守卫 checkFace 同形的 needle/why 对；判据入 hub，守卫只做 I/O）。
+pub const PatternFace = struct { needle: []const u8, why: []const u8 };
+
+/// 由 `pattern_pairs` 派生的五枚逐字节 needle（`"file": 1` … `"message": 5`）——
+/// 改任一枚字段名/组号皆回到本真值重派生，杜绝第二份手抄。
+pub const pattern_face: [pattern_pairs.len]PatternFace = blk: {
+    var out: [pattern_pairs.len]PatternFace = undefined;
+    for (pattern_pairs, 0..) |pf, i| {
+        out[i] = .{
+            .needle = comptimeCat(.{ "\"", pf.key, "\": ", digit(i + 1) }),
+            .why = "problemMatcher pattern 字段「" ++ pf.key ++ "」须取第 " ++ digit(i + 1) ++
+                " 捕获组（机读行段序真值）——漂移即编辑器 Problems 面板字段串位而构建链恒绿（第 225 轮 D93 t2 实锤）",
+        };
+    }
+    break :blk out;
+};
+
+/// 从 Zig 格式串按序抽占位符型数组（只认 {s}/{d}单字符型、恰 `field_count` 枚，否则 null）。
+pub fn fmtPlaceholderTypes(fmt: []const u8) ?[field_count]u8 {
+    var out: [field_count]u8 = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < fmt.len) {
+        if (fmt[i] != '{') {
+            i += 1;
+            continue;
+        }
+        const close = std.mem.indexOfScalar(u8, fmt[i..], '}') orelse return null;
+        const spec = fmt[i + 1 .. i + close];
+        if (spec.len != 1) return null;
+        if (n >= field_count) return null;
+        out[n] = spec[0];
+        n += 1;
+        i += close + 1;
+    }
+    if (n != field_count) return null;
+    return out;
+}
+
+/// `pattern_pairs` 声明的字段型序是否与格式串占位符型序逐位相配（对面十七的值侧判据，
+/// 供测钉直接比对：若 line_fmt 段型与面板字段语义脱钩——如把行号段改成 {s}——即判否）。
+pub fn patternTypesAgree(fmt: []const u8) bool {
+    const t = fmtPlaceholderTypes(fmt) orelse return false;
+    inline for (pattern_pairs, 0..) |pf, i| {
+        if (t[i] != pf.ty) return false;
+    }
+    return true;
+}
+
 /// 帮助文案里的机读形制提示（由 `field_names` 与 `sep_after` 拼出，杜绝第二份手抄）。
 pub const shape_hint: []const u8 = buildShapeHint();
 
@@ -256,4 +337,33 @@ test "第 203 轮 T0 机读出口契约族：值钉／派生对面值／骨架�
     try std.testing.expect(regexpSkel("^([^\\s:].*?):(\\d+):(\\d+): (\\S+): (.*)x$") == null); // 末组后有字面
     try std.testing.expect(regexpSkel("^(?:x)(\\d+):(\\d+): (\\S+): (.*)$") == null); // 非捕获组不在族形内
     try std.testing.expect(regexpSkel("^([^\\s:].*?):(\\d+):(\\d+): (\\S+): (.*)") == null); // 缺尾锚
+}
+
+test "第 225 轮 T0 pattern 字段映射族：needle 派生形钉／型序相配判据／基数与同序钉（D93）" {
+    // —— A1 派生 needle 形钉：五枚逐字节形独立手抄与 pattern_face 对拍（派生失真即红，
+    //    守卫据其对账 package.json；此钉不依赖对面文件，入测试图）。
+    const want_needles = [_][]const u8{ "\"file\": 1", "\"location\": 2", "\"column\": 3", "\"code\": 4", "\"message\": 5" };
+    try std.testing.expectEqual(pattern_face.len, want_needles.len);
+    for (pattern_face, want_needles) |pf, w| {
+        try std.testing.expectEqualStrings(w, pf.needle);
+    }
+    // —— A2 型序相配：line_fmt 占位符型序 s,d,d,s,s 与 pattern_pairs 逐位相配（正例）；
+    //    把行号段改成 {s} 的漂移形即判否（负例：面板 location 收到字符串即串位）。
+    try std.testing.expect(patternTypesAgree(line_fmt));
+    try std.testing.expect(!patternTypesAgree("{s}:{s}:{d}: {s}: {s}\n"));
+    try std.testing.expect(!patternTypesAgree("{s}:{d}:{d}: {s}\n")); // 段数不足亦 null→否
+    // 抽型函数自身形钉：真形逐字 d/s 序。
+    const types = fmtPlaceholderTypes(line_fmt) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("sdds"[0..1], types[0..1]);
+    try std.testing.expectEqual(@as(u8, 'd'), types[1]);
+    try std.testing.expectEqual(@as(u8, 'd'), types[2]);
+    try std.testing.expectEqual(@as(u8, 's'), types[3]);
+    try std.testing.expectEqual(@as(u8, 's'), types[4]);
+    // —— A3 同序与基数钉：五枚字段名/型/分隔符/标签四表同长（field_names 与 pattern_pairs
+    //    的中文↔VSCode 字段语义对应为人约字面，此处钉长度与序位防单边增删）。
+    try std.testing.expectEqual(field_count, pattern_pairs.len);
+    try std.testing.expectEqual(field_names.len, pattern_face.len);
+    // 提示式超出 pattern 判据域：tip 体以第六占位符并入末段显示（不新增 ASCII 分隔符，
+    // 五捕获组形不变），故 fmtPlaceholderTypes 对 tip 式判 null——此形为设计意图，钉住防变。
+    try std.testing.expect(fmtPlaceholderTypes(line_fmt_tip) == null);
 }
