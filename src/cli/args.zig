@@ -1641,3 +1641,72 @@ test "第 213 轮 T1 usage eject 行默认目录名与族 hub 耦合：字面量
     const want = "（默认 " ++ zzc.eject_default_dest ++ "/）";
     try std.testing.expect(std.mem.indexOf(u8, usage_text, want) != null);
 }
+
+// ── CI e2e 基线脚本命令词族单一真值（第 226 轮 · D94）────────────────────────
+// `tools/check-demos.ps1` 是本仓 CI（ci.yml 末步）与 Windows 用户本地的端到端基线守卫：
+// 它以 PowerShell 字面量直接敲 `zzc` 的子命令、旗标与落盘路径——本 hub 的 sub_*/flag_*
+// 与 zzc_paths 的目录族在那份脚本里各持第二份手抄。ps1 非测试图 source dependency、
+// 也不在任何 addFileArg 清单（226 t2 探针 P1–P4 四路字面漂 fresh 587/587 全绿静默实锤），
+// 且 GitCode 从不执行 Actions（D17 在册）＋本机 NO_PWSH 构成双盲区——词族漂移即基线脚本
+// 打向不存在的命令/路径：清理循环静默漏删（残留污染）或守卫节 [FAIL] 错报（防线失信）。
+// 第 213 轮 D81 判例为实证：`standard` 收编四源当时未含 ps1 两处（`eject standard` 与
+// `@(".zzc", "standard")`），若彼轮真改名，ps1 即静默分道。本段把 ps1 活路径的逐字节
+// 形制由既有真值派生成 needle 清单，交守卫步对面十八对账（ps1 经 addFileArg 入文件依赖）。
+
+/// 对面十八核对项（needle/why 对；判据入 hub，守卫只做 I/O）。
+pub const Ps1Needle = struct { needle: []const u8, why: []const u8 };
+
+/// 由既有真值 comptime 派生的 ps1 活路径 needle 十七枚——改任一真值，needle 随动、
+/// ps1 旧字面即失配红；改 ps1 字面，needle 不落空而守卫红。双向耦合自此单源。
+pub const ps1_face = [_]Ps1Needle{
+    .{ .needle = "\"zig-out/bin/" ++ zzc.prog_name ++ "\"", .why = "ps1 取用的 CLI exe 路径含程序名真值——改名即基线脚本找不到 exe（第 226 轮 D94）" },
+    .{ .needle = "@(\"" ++ zzc.root ++ "\", \"" ++ zzc.eject_default_dest ++ "\")", .why = "demo 前置清理对含 .zzc 根与 eject 缺省落点两枚族真值——漂即清理静默漏删、残留污染（D81 判例面）" },
+    .{ .needle = "\"" ++ zzc.symbols_file ++ "\"", .why = "D38 守卫节读写的符号表路径由落盘族派生——漂即守卫读空假绿或错红" },
+    .{ .needle = "\"" ++ zzc.gen_dir ++ "/" ++ zzc.src_dir ++ "/\"", .why = "embed 镜像面路径由 gen 族派生——漂即 e2e A/B 两半失配" },
+    .{ .needle = "\"" ++ zzc.default_entry ++ "\"", .why = "工程入口路径由布局族派生（多路活点位）——漂即守卫节打向不存在的入口" },
+    .{ .needle = sub_eject ++ " " ++ zzc.eject_default_dest, .why = "活调用行 `& $zzc eject standard` 同含子命令名与缺省落点两枚真值——D81 时漏收编的成员（第 226 轮补）" },
+    .{ .needle = "\"" ++ zzc.eject_default_dest ++ "/zig-out/bin\"", .why = "毕业产物查找路径首段=缺省落点真值——漂即 [FAIL] no eject artifact 错红" },
+    .{ .needle = "-ArgumentList \"" ++ sub_run ++ "\"", .why = "demo 活路 run 调用词由子命令族派生——漂即全 demo [FAIL]" },
+    .{ .needle = "-ArgumentList \"" ++ sub_check ++ "\"", .why = "check 活路调用词同族（多点位共用一 needle）——漂即 multi-file 回归守卫失联" },
+    .{ .needle = "@(\"" ++ sub_init ++ "\"", .why = "init 守卫节 argv 首词同族——漂即 init e2e 错红" },
+    .{ .needle = "-ArgumentList \"" ++ sub_version ++ "\"", .why = "version 活路调用词同族——漂即版本面守卫失联" },
+    .{ .needle = "@(\"" ++ sub_lang ++ "\"", .why = "lang add 族活路首词同族——漂即 R140 系守卫错红" },
+    .{ .needle = "@(\"" ++ sub_build ++ "\"", .why = "build 活路首词同族——漂即 R9g 外部包 build 路径守卫失联" },
+    .{ .needle = "-ArgumentList \"" ++ sub_lsp ++ "\"", .why = "lsp 活路子进程调用词同族——漂即 R156 客户端守卫节失联" },
+    .{ .needle = "\"" ++ flag_lang ++ "\"", .why = "--lang 旗标带引号形命中（与 --lang-file 以尾引号区分）——漂即选包守卫错红" },
+    .{ .needle = "\"" ++ flag_lang_file ++ "\"", .why = "--lang-file 旗标形由旗标族派生——漂即 R9g 外部包三路透传守卫失联" },
+    .{ .needle = "\"" ++ flag_as ++ "\"", .why = "--as 旗标形同族（207 轮孤字面量收编的消费对面）——漂即 lang add 别名面守卫错红" },
+};
+
+test "第 226 轮 T0 ps1 命令词族 needle 派生形：逐字节独立手抄对拍 + 基数钉（守卫对面十八的测试图备份）" {
+    // A1 派生形钉：十七枚 needle 与 ps1 活路径的期望字面逐字节对拍——本 want 表独立
+    // 手抄（ps1 非测试图 source dep、@embedFile 越不出 src 包路径·202 轮硬约束），与守卫
+    // 对面十八双向互备：hub 派生漂（真值被改而未同步手抄期望面）即此测红；ps1 字面漂即守卫红。
+    const want_needles = [_][]const u8{
+        "\"zig-out/bin/zzc\"",
+        "@(\".zzc\", \"standard\")",
+        "\".zzc/symbols.txt\"",
+        "\".zzc/gen/src/\"",
+        "\"src/main.zz\"",
+        "eject standard",
+        "\"standard/zig-out/bin\"",
+        "-ArgumentList \"run\"",
+        "-ArgumentList \"check\"",
+        "@(\"init\"",
+        "-ArgumentList \"version\"",
+        "@(\"lang\"",
+        "@(\"build\"",
+        "-ArgumentList \"lsp\"",
+        "\"--lang\"",
+        "\"--lang-file\"",
+        "\"--as\"",
+    };
+    // A2 基数钉：新增/删除族成员须同时动 want 表（单边增删即此钉红）。
+    try std.testing.expectEqual(want_needles.len, ps1_face.len);
+    for (ps1_face, want_needles) |f, w| {
+        try std.testing.expectEqualStrings(w, f.needle);
+    }
+    // A3 语义分工钉：`--lang` needle 不得是 `--lang-file` 的子串形（两者以尾引号区分，
+    // 防派生退化后宽松伪钉——207 轮同族判例）。
+    try std.testing.expect(std.mem.indexOf(u8, "\"--lang-file\"", "\"--lang\"") == null);
+}

@@ -252,8 +252,19 @@ pub fn main(init: std.process.Init) !void {
     //   本片复用对面一已读的 pkg（零新增 I/O），按 hub 派生 needle 清单逐字节对账。
     checkFace(pkg_path, &mcon.pattern_face, pkg);
 
+    // —— 对面十八：`tools/check-demos.ps1` 的 CI e2e 基线脚本命令词族（第 226 轮 D94）。
+    //   该脚本以 PowerShell 字面量直敲 zzc 子命令/旗标/落盘路径——hub 真值在其上持第二份
+    //   手抄，而 ps1 非测图 source dep、不在旧 addFileArg 清单，且 GitCode 不跑 Actions
+    //   （D17）＋本机 NO_PWSH 双盲——t2 探针 P1–P4 四路字面漂 fresh 587/587 全绿静默，
+    //   漂移即基线防线错红/清理静默漏删（D81 漏员判例）。本步按 hub 派生 needle 逐字节对账。
+    const ps1_path = if (args.len >= 8) args[7] else "tools/check-demos.ps1";
+    const ps1_txt = std.Io.Dir.cwd().readFileAlloc(io, ps1_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ ps1_path, @errorName(e) });
+    defer gpa.free(ps1_txt);
+    checkFace(ps1_path, &cli_hub.ps1_face, ps1_txt);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中\n",
-        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path },
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中\n",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path },
     );
 }

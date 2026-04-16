@@ -159,6 +159,11 @@ pub fn build(b: *std.Build) void {
     // 对面十六（第 224 轮 D92）：工具链 spawn argv 词族的消费侧——main.zig 须以委派形引用
     // `cli.tl_*` 真值（t2 探针 P1–P7 七路字面量漂移 583/583 全绿静默，真跑即功能级断裂）。
     check_matcher_run.addFileArg(b.path("src/main.zig"));
+    // 对面十八（第 226 轮 D94）：CI e2e 基线脚本 `tools/check-demos.ps1`——其命令词族（子命令/旗标/
+    // 落盘路径）是 `cli.sub_*`/`flag_*`/`zzc_paths` 真值的第二份跨文件手抄；ps1 不在测试图（本机与 CI
+    // 双盲：NO_PWSH + GitCode 不跑 Actions·D17 在册）、203 t2 判例同形「改对面文件而测数行为空」，
+    // 故须以 addFileArg 声明依赖后由守卫核对十七枚派生 needle 在脚本面逐一命中。
+    check_matcher_run.addFileArg(b.path("tools/check-demos.ps1"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 
