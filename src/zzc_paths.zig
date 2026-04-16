@@ -68,8 +68,12 @@ pub const symbols_file: []const u8 = root ++ "/symbols.txt";
 /// `check` 深检时各根的临时发射物（用后即弃、固定同名串行覆盖）。
 pub const check_root: []const u8 = root ++ "/tmp_check_root";
 
-/// 上者的完整 zig 旗标形（`-femit-bin=` 前缀与路径同源，不另立字面量）。
-pub const check_root_flag: []const u8 = "-femit-bin=" ++ check_root;
+/// zig 产物发射旗标前缀（第 224 轮 D92：旧形制下此前缀在两处手抄——本 `check_root_flag`
+/// 派生形与 `cmdBuild` 的 `-femit-bin={s}` argv 拼装模板；改持唯一真值后两处皆由它派生）。
+pub const emit_bin_prefix: []const u8 = "-femit-bin=";
+
+/// 上者的完整 zig 旗标形（前缀与路径同源，不另立字面量）。
+pub const check_root_flag: []const u8 = emit_bin_prefix ++ check_root;
 
 /// 未翻译清单落盘目录的根（相对当前工作目录）——与 `root` 并列的**第二族根**（第 202 轮 D70）：
 /// `root` 树是我方内部状态/产物（对用户隐藏），本树是**用户/CI 可见的产出面**（语言包作者与 CI 在仓外

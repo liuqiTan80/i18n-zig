@@ -825,6 +825,71 @@ pub fn zigDriftNote(major: u32, minor: u32, buf: []u8) ?[]const u8 {
     }) catch null;
 }
 
+// ---------------------------------------------------------------------------
+// 第 224 轮 D92：工具链 spawn argv 词族单一真值。
+// main.zig 五处活路径（check 深检/浅检、run/build/test、eject 探纹/验建、版本漂警）共 13 处
+// 旧形制各自持字面量：测面零钉（全仓唯 zzc_paths:293 钉自家派生形）、守卫 15 面对象皆
+// editors/build.zig 文件词从未核 zig argv——t2 探针 P1–P7 七路词漂 583/583 全绿静默，真跑
+// 坐实变异版 `zzc run` 即 `unknown command: build-exx` 功级断裂而构建链恒绿。本段收编。
+// ---------------------------------------------------------------------------
+
+/// zig 可执行文件名（PATH 查找，六处 spawn 首词同源）。
+pub const tl_zig: []const u8 = "zig";
+/// 深检/产物臂子命令词（check ① 臂与 cmdBuild 非 test 臂）。
+pub const tl_build_exe: []const u8 = "build-exe";
+/// 浅检臂子命令词（check ② 臂：不含 main 的模块只解名字）。
+pub const tl_ast_check: []const u8 = "ast-check";
+/// `zzc test` 臂子命令词（cmdBuild 的 .test_ 分支）。
+pub const tl_test: []const u8 = "test";
+/// eject 探纹/验建两臂子命令词（probeFingerprint 与 verifyBuild）。
+pub const tl_build: []const u8 = "build";
+/// 版本漂警子命令词（maybeWarnZigDrift）。
+pub const tl_version: []const u8 = "version";
+
+/// `cmdBuild` 非 test 臂的产物发射旗标模板：与 `zzc_paths.emit_bin_prefix` 同源派生，
+/// 不另立第二枚 `-femit-bin=` 手抄（旧形制 allocPrint 模板内另持整串前缀）。
+pub const tl_emit_bin_fmt: []const u8 = zzc.emit_bin_prefix ++ "{s}";
+
+/// 对面十六（src/main.zig 委派形清单）：守卫读 main.zig 文本逐字节对账，防字面量回退——
+/// 消费侧若改回手抄字面量，委派形 needle 即消失、守卫红；`count` 由 224 T0 在测试图内
+/// 以 @embedFile 直接钉死（同一 needle 形可能多处同形，如 `zig build` 两臂）。
+pub const tl_face = .{
+    .{ .needle = "&.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, bin }", .count = @as(usize, 1), .why = "check 深检臂：含 main 的根走 build-exe 传递性语义深检，漂即 check 入口断裂" },
+    .{ .needle = "&.{ cli.tl_zig, cli.tl_ast_check, u.gen_rel }", .count = @as(usize, 1), .why = "check 浅检臂：不含 main 的模块只 ast-check，漂即库模块检查断裂" },
+    .{ .needle = "try argv.append(gpa_, cli.tl_zig);", .count = @as(usize, 1), .why = "cmdBuild spawn 首词：run/build/test 三入口共用，漂即三入口全断" },
+    .{ .needle = "if (mode == .test_) cli.tl_test else cli.tl_build_exe", .count = @as(usize, 1), .why = "cmdBuild 模式分支词：test 与 build-exe 两臂同源，漂即对应入口断" },
+    .{ .needle = "cli.tl_emit_bin_fmt, .{bin_full}", .count = @as(usize, 1), .why = "cmdBuild 发射旗标模板：前缀由 zzc_paths 派生，漂即产物落点失控" },
+    .{ .needle = "&.{ cli.tl_zig, cli.tl_build }", .count = @as(usize, 2), .why = "eject 探纹/验建两臂：毕业工程 fingerprint 探测与独立构建验证，漂即 eject 断裂" },
+    .{ .needle = "&.{ cli.tl_zig, cli.tl_version }", .count = @as(usize, 1), .why = "版本漂警臂：升代早警面，漂即静默失效（不回译告警永不发）" },
+};
+
+test "224 T0：工具链 spawn argv 词族单一真值＋委派形双向钉（第 224 轮）——D92" {
+    // A1：六枚词值钉＋发射旗标模板与 zzc_paths 前缀同源钉（hub 本体漂移即红）。
+    try std.testing.expectEqualStrings("zig", tl_zig);
+    try std.testing.expectEqualStrings("build-exe", tl_build_exe);
+    try std.testing.expectEqualStrings("ast-check", tl_ast_check);
+    try std.testing.expectEqualStrings("test", tl_test);
+    try std.testing.expectEqualStrings("build", tl_build);
+    try std.testing.expectEqualStrings("version", tl_version);
+    try std.testing.expectEqualStrings("-femit-bin=", zzc.emit_bin_prefix);
+    try std.testing.expectEqualStrings("-femit-bin={s}", tl_emit_bin_fmt);
+    // A2：对面十六清单自身钉（成员数与对面十五形制同骨：一面对多针）。
+    try std.testing.expectEqual(@as(usize, 7), tl_face.len);
+    // A3：委派形双向钉——@embedFile 直读 src/main.zig（真 source dependency：改 main.zig
+    // 必重编本测），逐 needle 命中且频次全等：消费侧改回手抄字面量（委派形消失）或
+    // hub 改名而接线不随动，皆在测试图直接红，不必等守卫步。
+    const main_src = @embedFile("../main.zig");
+    inline for (tl_face) |c| {
+        var n: usize = 0;
+        var i: usize = 0;
+        while (std.mem.indexOf(u8, main_src[i..], c.needle)) |k| : ({
+            i += k + c.needle.len;
+            n += 1;
+        }) {}
+        try std.testing.expectEqual(c.count, n);
+    }
+}
+
 test "parseZigVersion：取前两级、dev/hash 后缀容忍、垃圾输入 null（第 164 轮 R11）" {
     const v1 = parseZigVersion("0.17.0\n");
     try std.testing.expect(v1 != null);

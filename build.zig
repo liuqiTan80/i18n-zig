@@ -156,6 +156,9 @@ pub fn build(b: *std.Build) void {
     check_matcher_run.addFileArg(b.path("editors/vscode/extension.js"));
     // 对面十（第 217 轮 D85）：LSP 基座协议帧客户端实现——帧头名/分隔符/上限与服务端同骨面。
     check_matcher_run.addFileArg(b.path("editors/vscode/client_frames.js"));
+    // 对面十六（第 224 轮 D92）：工具链 spawn argv 词族的消费侧——main.zig 须以委派形引用
+    // `cli.tl_*` 真值（t2 探针 P1–P7 七路字面量漂移 583/583 全绿静默，真跑即功能级断裂）。
+    check_matcher_run.addFileArg(b.path("src/main.zig"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 

@@ -596,7 +596,7 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     for (proj.units.items) |u| {
         if (!cli.zigHasMainFn(u.zig_str)) continue;
         const bin = zzc.check_root_flag; // 第 200 轮 D68：旗标前缀与路径同源（旧形制整串一枚字面量）
-        const argv: []const []const u8 = &.{ "zig", "build-exe", u.gen_rel, bin };
+        const argv: []const []const u8 = &.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, bin }; // 第 224 轮 D92：工具链词族取单一真值
         zigCompile(lang, table.*, proj, argv, &seen) catch |e| {
             if (e == error.Failed) {
                 any_fail = true;
@@ -606,7 +606,7 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     // ② 其余模块（不含 main 者）：仅做 ast-check（源码级语法 + 名字解析，不需要 main）。
     for (proj.units.items) |u| {
         if (cli.zigHasMainFn(u.zig_str)) continue; // 已作为语义根 build-exe
-        const chk: []const []const u8 = &.{ "zig", "ast-check", u.gen_rel };
+        const chk: []const []const u8 = &.{ cli.tl_zig, cli.tl_ast_check, u.gen_rel }; // 第 224 轮 D92：同上
         zigCompile(lang, table.*, proj, chk, &seen) catch |e| {
             if (e == error.Failed) {
                 any_fail = true;
@@ -648,11 +648,11 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
     try std.Io.Dir.cwd().createDirPath(io_, zzc.bin_dir);
 
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.append(gpa_, "zig");
-    try argv.append(gpa_, if (mode == .test_) "test" else "build-exe");
+    try argv.append(gpa_, cli.tl_zig); // 第 224 轮 D92：spawn 首词取单一真值
+    try argv.append(gpa_, if (mode == .test_) cli.tl_test else cli.tl_build_exe);
     try argv.append(gpa_, unit.gen_rel);
     if (mode != .test_) {
-        try argv.append(gpa_, try std.fmt.allocPrint(gpa_, "-femit-bin={s}", .{bin_full}));
+        try argv.append(gpa_, try std.fmt.allocPrint(gpa_, cli.tl_emit_bin_fmt, .{bin_full})); // 第 224 轮 D92：前缀由 zzc_paths 派生
     }
     // 透传除入口文件外的其余参数（含各种 zig 旗标及其值）：入口可能在任意位置，
     // 故按 pickEntry 命中的下标剔除，而非假设入口总在首位。
@@ -883,7 +883,7 @@ fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
 /// 取 `value: 0x` 之后的十六进制串；missing 与 invalid 两种措辞都含此子串。
 fn probeFingerprint(dest: []const u8) ?[]const u8 {
     const res = std.process.run(gpa_, io_, .{
-        .argv = &.{ "zig", "build" },
+        .argv = &.{ cli.tl_zig, cli.tl_build }, // 第 224 轮 D92：eject 探纹臂词族取单一真值
         .cwd = .{ .path = dest },
         .create_no_window = true,
     }) catch return null;
@@ -917,7 +917,7 @@ const BuildVerify = enum { ok, fail, no_zig };
 /// 跑 `zig build` 验证毕业构建可独立成功。
 fn verifyBuild(dest: []const u8) BuildVerify {
     const res = std.process.run(gpa_, io_, .{
-        .argv = &.{ "zig", "build" },
+        .argv = &.{ cli.tl_zig, cli.tl_build }, // 第 224 轮 D92：eject 验建臂词族取单一真值
         .cwd = .{ .path = dest },
         .create_no_window = true,
     }) catch return .no_zig;
@@ -1174,7 +1174,7 @@ fn cmdLsp(lang: Pack) void {
 /// 既有 stdout 契约（clean-check 无泄漏守卫）不受影响。只挂编译类四入口消费 [diagnostics] 措辞表的路径。
 fn maybeWarnZigDrift() void {
     const res = std.process.run(gpa_, io_, .{
-        .argv = &.{ "zig", "version" },
+        .argv = &.{ cli.tl_zig, cli.tl_version }, // 第 224 轮 D92：版本漂警臂词族取单一真值
         .create_no_window = true,
     }) catch return; // zig 不在 PATH：静默，交由后续真实编译给出母语提示
     defer gpa_.free(res.stdout);

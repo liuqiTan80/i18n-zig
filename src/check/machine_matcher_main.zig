@@ -18,6 +18,7 @@ const lid = @import("zzc_core").lang_id; // 第 215 轮 D83：编辑器语言标
 const lcfg = @import("zzc_core").lsp_cfg; // 第 216 轮 D84：LSP 客户端接线族真值与清单/客户端两面 needle 清单
 const jrpc = @import("zzc_core").lsp_jsonrpc; // 第 217 轮 D85：LSP 基座协议帧族真值与 client_frames.js 对面 needle 清单
 const lsp_srv = @import("zzc_core").lsp_server; // 第 218 轮 D86：LSP 方法名族真值与 extension.js 对面 needle 清单
+const cli_hub = @import("zzc_core").cli; // 第 224 轮 D92：工具链 spawn argv 词族真值与 main.zig 委派形对面清单
 
 /// 一面（needle 清单）逐字节对账：缺任一枚即分道退出。判据（needle 与后果描述）全在 hub，
 /// 本函数只做「在已读入的对面文本里找」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
@@ -233,8 +234,19 @@ pub fn main(init: std.process.Init) !void {
     //   漂即协议错误语义跨侧塌陷，needle 数值由 `ec_*` 派生（t2 P1 静默面）。
     checkFace(ext_path, &lsp_srv.errors_face, ext);
 
+    // —— 对面十六：`src/main.zig` 的工具链 spawn argv 委派形（第 224 轮 D92）。五处活路径 13 处
+    //   旧各自持字面量，守卫 1–15 面对象皆 editors/build.zig 文件词从未核 zig argv——
+    //   t2 探针 P1–P7 七路词漂 583/583 全绿静默、真跑坐实 `unknown command: build-exx` 断裂。
+    //   本步读 main.zig 文本验委派形在位（消费侧改回手抄字面量即红）；频次全等钉另由
+    //   224 T0 在测试图内以 @embedFile 守（本面对账与测试图双向互备）。
+    const main_path = if (args.len >= 7) args[6] else "src/main.zig";
+    const main_txt = std.Io.Dir.cwd().readFileAlloc(io, main_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ main_path, @errorName(e) });
+    defer gpa.free(main_txt);
+    checkFace(main_path, &cli_hub.tl_face, main_txt);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中\n",
-        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path },
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中\n",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path },
     );
 }
