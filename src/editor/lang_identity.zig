@@ -47,6 +47,41 @@ pub const grammar_emit_path: []const u8 = "editors/vscode/" ++ grammar_asset_pat
 /// 同上，补全片段。
 pub const snippets_emit_path: []const u8 = "editors/vscode/" ++ snippets_asset_path;
 
+// ———————————————————— 语言常量词集与词类判序（第 231 轮 · D99）————————————————————————————
+//   「哪些映射值属语言字面常量」与「一个词形归哪一类」的判序，曾在 `src/editor/tmlang.zig`
+//   （语法高亮生成侧）与 `src/editor/snippets.zig`（补全/hover 分类侧）各写一份同体手抄、且判序
+//   不同。`std.zig.isPrimitive` 的 names 集合本就含 true/false/null/undefined 四枚值名，故必须
+//   先判「语言常量」再判「原始类型」，否则四词被 isPrimitive 先吞、误归「类型」。第 169 轮 D56
+//   只在 snippets 侧修了此判序，tmlang 侧漏修——231 t2 探针 P1 实锤：改正 tmlang 判序并重生成
+//   committed，真/假/空值/未定义 由 types 组移入 literals 组而 **595/595 全绿静默**（语法侧路由
+//   语义此前零锚，唯 P1b 的「生成字节==committed 字节」同步守卫可感），而 snippets 侧判序被 server
+//   D56 测钉住（P2 改 snippets 判序→6 测红）——一侧有锚一侧零锚的跨模块不对称。本 hub 立词集与
+//   判序单一真值，令 tmlang/snippets/server 测三处皆委派之，从结构上杜绝「修一侧漏一侧」。
+
+/// 语言字面常量映射值集：四枚标准 Zig 值名（与 `std.zig.isPrimitive` 的交集即 D56 判序陷阱源）。
+pub const language_constants = [_][]const u8{ "true", "false", "null", "undefined" };
+
+/// 映射值是否语言字面常量（供高亮/补全/hover 三侧共判·词集单源）。
+pub fn is_language_constant(value: []const u8) bool {
+    for (language_constants) |k| {
+        if (std.mem.eql(u8, value, k)) return true;
+    }
+    return false;
+}
+
+/// 词类枚举：`classify_kind` 判序的输出；两侧据各自需要映射到 scope（tmlang）/标签（snippets）。
+pub const Kind = enum { builtin, constant, type_, keyword, other };
+
+/// 单一判序真值：`@` 前缀→内建，语言常量→字面常量（**必先于原始类型·D56**），原始类型→类型，
+/// Zig 关键字→控制流/声明关键字，其余→方言/其他。判序漂移（常量后于 primitive）即四词误入类型。
+pub fn classify_kind(value: []const u8) Kind {
+    if (value.len > 0 and value[0] == '@') return .builtin;
+    if (is_language_constant(value)) return .constant;
+    if (std.zig.isPrimitive(value)) return .type_;
+    if (std.zig.Token.keywords.has(value)) return .keyword;
+    return .other;
+}
+
 // ———————————————————— 注释标记族（第 229 轮 · D97）————————————————————————————
 //   同一门方言的注释标记散在两处手抄：`src/editor/tmlang.zig` 的 comptime 模板（高亮正则）与
 //   `editors/vscode/language-configuration.json`（VSCode 注释快捷键/折叠行为）。229 t2 探针 P1 实锤
@@ -182,4 +217,33 @@ test "第 229 轮 T0 注释标记族派生与双对面 needle 形钉：三枚真
     // A5 面清单基数钉：四/二 枚——新增注释相关对面字段须在此随动（防只加常量不加对账面）。
     try testing.expectEqual(@as(usize, 4), langconf_face.len);
     try testing.expectEqual(@as(usize, 2), tm_face.len);
+}
+
+test "第 231 轮 T0 语言常量词集与 classify_kind 判序单源钉：四枚值钉／is_language_constant 行为／判序回归（常量先于 primitive）／基数（防 hub 自身失真与 D56 判序回潮）" {
+    // A1 词集值钉 + 基数钉：四枚标准值名逐字节钉住、长度为四（扩充/改名须同时过本钉与两侧委派消费面）。
+    try testing.expectEqual(@as(usize, 4), language_constants.len);
+    try testing.expectEqualStrings("true", language_constants[0]);
+    try testing.expectEqualStrings("false", language_constants[1]);
+    try testing.expectEqualStrings("null", language_constants[2]);
+    try testing.expectEqualStrings("undefined", language_constants[3]);
+    // A2 is_language_constant 行为钉：恰四真 + near-miss（大小写/缀词/尾空/空串）皆假。
+    for (language_constants) |k| try testing.expect(is_language_constant(k));
+    try testing.expect(!is_language_constant("True"));
+    try testing.expect(!is_language_constant("truex"));
+    try testing.expect(!is_language_constant("null "));
+    try testing.expect(!is_language_constant("undefinedy"));
+    try testing.expect(!is_language_constant(""));
+    // A3 判序回归钉（D56 核心）：四枚常量必须先于 primitive 归 .constant（若回潮为 primitive 先判即误归 .type_）。
+    for (language_constants) |k| try testing.expectEqual(Kind.constant, classify_kind(k));
+    // A4 判序不过度捕获钉：真原始类型名（非语言常量）仍归 .type_；@前缀→.builtin；Zig 关键字→.keyword；余者→.other。
+    try testing.expectEqual(Kind.type_, classify_kind("bool"));
+    try testing.expectEqual(Kind.type_, classify_kind("u8"));
+    try testing.expectEqual(Kind.type_, classify_kind("void"));
+    try testing.expectEqual(Kind.builtin, classify_kind("@import"));
+    try testing.expectEqual(Kind.keyword, classify_kind("fn"));
+    try testing.expectEqual(Kind.keyword, classify_kind("if"));
+    try testing.expectEqual(Kind.other, classify_kind("常数"));
+    try testing.expectEqual(Kind.other, classify_kind(""));
+    // A5 交集形状钉（陷阱源实锤）：四枚常量皆同时在 isPrimitive 集内——这正是必须常量先判的根因（若某枚不在交集则本判序修复对该枚多余）。
+    for (language_constants) |k| try testing.expect(std.zig.isPrimitive(k));
 }

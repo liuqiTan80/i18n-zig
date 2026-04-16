@@ -12,14 +12,12 @@
 
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack;
+const lang_id = @import("lang_identity.zig"); // 第 231 轮 D99：语言常量词集与词类判序取单一真值（与 tmlang 高亮侧同源）
 
-/// 判断映射值是否属于语言常量（true/false/null/undefined）。
+/// 判断映射值是否属于语言常量（true/false/null/undefined）。第 231 轮 D99：词集下沉 hub、
+/// 本函数委派 `lang_identity.is_language_constant` 单源（与 tmlang 侧共词集·不再同体手抄）。
 fn isLanguageConstant(value: []const u8) bool {
-    const set = [_][]const u8{ "true", "false", "null", "undefined" };
-    for (set) |k| {
-        if (std.mem.eql(u8, value, k)) return true;
-    }
-    return false;
+    return lang_id.is_language_constant(value);
 }
 
 /// 词类标签族（第 219 轮 D87 单一真值）：`classify` 返回五值与 aliases 条目 `.group`，同
@@ -47,11 +45,14 @@ pub const groups_all = [_][]const u8{ g_builtin, g_constant, g_type, g_keyword, 
 /// 补全描述与悬停被错标为「类型」、语义 token 错着类型色，而 classToTokenType 的字面常量支成死分支）。
 /// 四字面量名与任何类型名互斥，故本序调整不影响 bool/void/u8/i32 等真类型名（仍走 isPrimitive→「类型」）。
 pub fn classify(value: []const u8) []const u8 {
-    if (value.len > 0 and value[0] == '@') return g_builtin;
-    if (isLanguageConstant(value)) return g_constant;
-    if (std.zig.isPrimitive(value)) return g_type;
-    if (std.zig.Token.keywords.has(value)) return g_keyword;
-    return g_dialect;
+    // 第 231 轮 D99：判序下沉 hub `classify_kind` 单源（与 tmlang 生成侧共一套判序·常量先于 primitive）。
+    return switch (lang_id.classify_kind(value)) {
+        .builtin => g_builtin,
+        .constant => g_constant,
+        .type_ => g_type,
+        .keyword => g_keyword,
+        .other => g_dialect,
+    };
 }
 
 /// 一条补全片段。

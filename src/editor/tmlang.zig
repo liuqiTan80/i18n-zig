@@ -90,13 +90,10 @@ fn jsonStr(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u8) void 
     out.append(gpa, '"') catch @panic("OOM");
 }
 
-/// 判断映射值是否属于语言常量（true/false/null/undefined）。
+/// 判断映射值是否属于语言常量（true/false/null/undefined）。第 231 轮 D99：词集下沉 hub、
+/// 本函数委派 `lang_identity.is_language_constant` 单源（与 snippets 补全侧共词集）。
 fn isLanguageConstant(value: []const u8) bool {
-    const set = [_][]const u8{ "true", "false", "null", "undefined" };
-    for (set) |k| {
-        if (std.mem.eql(u8, value, k)) return true;
-    }
-    return false;
+    return lang_id.is_language_constant(value);
 }
 
 /// 从 Pack 生成 tmLanguage JSON 字节（调用方 free）。
@@ -121,16 +118,15 @@ pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
         const key = e.key_ptr.*;
         const value = e.value_ptr.*;
         const w = Word{ .text = key, .len = key.len };
-        if (value.len > 0 and value[0] == '@') {
-            try kw_builtin.append(gpa, w);
-        } else if (std.zig.isPrimitive(value)) {
-            try kw_type.append(gpa, w);
-        } else if (isLanguageConstant(value)) {
-            try kw_literal.append(gpa, w);
-        } else if (std.zig.Token.keywords.has(value)) {
-            try kw_control.append(gpa, w);
-        } else {
-            try kw_other.append(gpa, w);
+        // 第 231 轮 D99：分类判序下沉 hub `classify_kind` 单源（常量先于 primitive）——此前本侧
+        // 先判 isPrimitive 将 真/假/空值/未定义 误归 types 组（literals 组恒空）、而 snippets 侧 169
+        // 轮 D56 已修正——两面共此一判序真值即从结构上杜绝「修一侧漏一侧」的高亮错色回归。
+        switch (lang_id.classify_kind(value)) {
+            .builtin => try kw_builtin.append(gpa, w),
+            .type_ => try kw_type.append(gpa, w),
+            .constant => try kw_literal.append(gpa, w),
+            .keyword => try kw_control.append(gpa, w),
+            .other => try kw_other.append(gpa, w),
         }
     }
 
@@ -299,6 +295,38 @@ test "tmlang.generate 确定性——同包两次生成逐字节一致（第 228
     const b = try generate(gpa, lang);
     defer gpa.free(b);
     try testing.expectEqualStrings(a, b);
+}
+
+test "第 231 轮 T0 tmlang.generate 语言常量路由落 literals 组（承 hub classify_kind 单源·补 tmlang 侧此前零语义锚的 D99 缺口）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    const json_bytes = try generate(gpa, lang);
+    defer gpa.free(json_bytes);
+
+    // 切段：生成侧发序为 types→literals→keywords，故取三段字面区间。
+    const types_i = std.mem.indexOf(u8, json_bytes, "\"types\"") orelse return error.TestUnexpectedResult;
+    const lit_i = std.mem.indexOf(u8, json_bytes, "\"literals\"") orelse return error.TestUnexpectedResult;
+    const kw_i = std.mem.indexOf(u8, json_bytes, "\"keywords\"") orelse return error.TestUnexpectedResult;
+    const types_sec = json_bytes[types_i..lit_i];
+    const lit_sec = json_bytes[lit_i..kw_i];
+
+    // 遍历包：凡映射值属 hub 语言常量集者，其方言词形必落 literals 段、且不得现于 types 段。
+    // D99 前本侧先判 isPrimitive → 真/假/空值/未定义 误入 types、literals 恒空，此钉当时即红（未存）。
+    var it = lang.keywords.iterator();
+    var pinned: usize = 0;
+    while (it.next()) |e| {
+        if (lang_id.is_language_constant(e.value_ptr.*)) {
+            const word = e.key_ptr.*;
+            try testing.expect(std.mem.indexOf(u8, lit_sec, word) != null); // 落 literals
+            try testing.expect(std.mem.indexOf(u8, types_sec, word) == null); // 不污染 types
+            pinned += 1;
+        }
+    }
+    try testing.expect(pinned >= 4); // 中文包至少 真/假/空值/未定义 四枚方言词命中 hub 常量集
 }
 
 test "tmlang.generate：空 Pack 不崩溃、输出有效 JSON 骨架（第 154 轮）" {

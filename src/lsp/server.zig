@@ -25,6 +25,7 @@ const lexer = @import("../transpiler/lexer.zig");
 const translate = @import("../transpiler/translate.zig");
 const fullwidth = @import("../diag/fullwidth.zig");
 const snippets = @import("../editor/snippets.zig");
+const lang_id = @import("../editor/lang_identity.zig"); // 第 231 轮 D99：字面常量词集取单一真值（与 classify/高亮侧同源）
 const paths = @import("../zzc_paths.zig"); // 第 210 轮 D78：诊断 source 标注的程序名取单一真值（与 CLI/编辑器同源）
 const cli = @import("../cli/args.zig"); // 第 227 轮 D95：词法诊断 kind 前缀取文案真值 hub（与 CLI 机读出口/ps1 断言同源）
 
@@ -1352,7 +1353,7 @@ test "lsp.server：classToTokenType 图例索引全分支钉（承 162 共享真
 // 修后 classify 先判 isLanguageConstant→「字面常量」→classToTokenType→0（keyword）。坐实设计意图支由死变活。
 test "lsp.server：classify→classToTokenType 字面量四值经图例归 keyword(0)（承 162/165 共享真相源·第 169 轮 D56）" {
     var asserts: usize = 0;
-    for ([_][]const u8{ "true", "false", "null", "undefined" }) |v| {
+    for (lang_id.language_constants) |v| {
         try testing.expectEqualStrings(snippets.g_constant, snippets.classify(v));
         asserts += 1;
         try testing.expectEqual(@as(u8, 0), classToTokenType(snippets.classify(v))); // 字面常量 → keyword
