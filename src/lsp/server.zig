@@ -199,6 +199,32 @@ pub const ec_parse_error: i64 = -32700;
 pub const ec_invalid_request: i64 = -32600;
 pub const ec_method_not_found: i64 = -32601;
 
+/// —— D98 LSP initialize capability 协商串族（第 230 轮）：服务端 `initialize` 应答声明的
+/// capability 对象形串（`textDocumentSync` 对象形／`hoverProvider`／`semanticTokensProvider`／
+/// `serverInfo`）在三处各持一份手抄——写侧 `handle` 应答字面串、服务端自测 `out.items[0]` 的
+/// indexOf 钉、e2e 基线 `check-demos.ps1` LSP 守卫段的 Contains 断言——互不引用；守卫对面
+/// 十八／十九只核 ps1 命令词族与码点文案族，从未核这些 JSON capability 形串。t2 探针 P1 独漂
+/// ps1 断言 fresh 593/593 全绿静默、P3 写侧＋自测同步演进而 ps1 落单亦 fresh 593/593 全绿静默
+/// （ps1 断言与真应答形串已分道，唯 NO_PWSH＋GitCode 双盲此守卫从不触发→静默腐坏·同 D82/D84/D96 假锚族）。
+/// `cap_*` 诸枚为唯一真值：写侧应答拼接、自测 indexOf、`cap_face` ps1 needle 全由此派生。
+const cap_open_close = "\"openClose\":true";
+const cap_change_full = "\"change\":1"; // 全量同步 kind=1（TextDocumentSyncKind.Full）
+const cap_save_no_text = "\"save\":{\"includeText\":false}";
+const cap_sync_obj = "\"textDocumentSync\":{" ++ cap_open_close ++ "," ++ cap_change_full ++ "," ++ cap_save_no_text ++ "}";
+const cap_hover = "\"hoverProvider\":true";
+const cap_semtok_key = "\"semanticTokensProvider\"";
+const cap_semtok = cap_semtok_key ++ ":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}";
+const cap_server_info = "\"serverInfo\":{\"name\":\"" ++ paths.prog_name ++ "-lsp\"}";
+
+/// 对面·`tools/check-demos.ps1` LSP 握手断言 capability 族 needle（守卫对面二十——同 `methods_face`
+/// 形制，判据入 hub、守卫视只读 I/O，复用对面十八已读的 ps1 实文、零新增 I/O）。写侧应答形串与
+/// ps1 Contains 断言同源：一侧漂形即分道（t2 P1/P3 静默面转锚）。`serverInfo` ps1 零消费不入针（登册）。
+pub const cap_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = cap_sync_obj, .why = "ps1 断言应答含 save-对象形 sync 形串——与写侧 cap_sync_obj 分道即 e2e LSP 守卫静默失的（双盲从不跑·t2 P1/P3 形）" },
+    .{ .needle = cap_hover, .why = "ps1 断言 hoverProvider 在——与写侧漂即能力协商断言与实际应答分道、守卫形同虚设" },
+    .{ .needle = cap_semtok_key, .why = "ps1 断言 semanticTokensProvider 在——与写侧键漂即语义高亮供给能力无人核验" },
+};
+
 /// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
 const ek_jsonrpc = "\"" ++ k_jsonrpc ++ "\"";
 const ek_id = "\"" ++ k_id ++ "\"";
@@ -500,7 +526,7 @@ pub const Server = struct {
             // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
             // semanticTokensProvider（第 161 轮）：声明语义 token 图例（token 类型索引即下表顺序）+ full 供给，
             // 把方言母语词汇的语义高亮据 LSP 标准面供任意客户端（编辑端渲染留 162）。
-            const res = "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"semanticTokensProvider\":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}},\"serverInfo\":{\"name\":\"zzc-lsp\"}}";
+            const res = "{\"capabilities\":{" ++ cap_sync_obj ++ "," ++ cap_hover ++ "," ++ cap_semtok ++ "}," ++ cap_server_info ++ "}";
             try self.respond(out, idv, res);
             return;
         }
@@ -901,12 +927,39 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"initialize\",\"params\":{}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":7") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"hoverProvider\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}}") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_hover) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_sync_obj) != null);
     // 第 161 轮：新增语义 token 供给能力（图例七类 + full），供任意 LSP 客户端语义高亮。
     // 第 214 轮 D82 手抄清剿：图例段断言改以 hub 派生的 legend_json 构造（改图例则断言随动，
     // 杜绝「应答与测各抄一份、一改两红」的自照形制）。
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"semanticTokensProvider\":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_semtok) != null);
+}
+
+test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 对面 needle 形钉：片段组合／值形／serverInfo 程序名派生／cap_face 同源基数／近名负例" {
+    // A1 片段组合钉：sync 对象形由三子能力串拼成（写侧应答与 ps1 needle 同吃此组合，杜绝各抄一份）。
+    try testing.expectEqualStrings("\"openClose\":true", cap_open_close);
+    try testing.expectEqualStrings("\"change\":1", cap_change_full);
+    try testing.expectEqualStrings("\"save\":{\"includeText\":false}", cap_save_no_text);
+    try testing.expectEqualStrings(
+        "\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}}",
+        cap_sync_obj,
+    );
+    // A2 各 capability 值形钉（本族基线；改形须同时过写侧应答、自测、ps1 守卫对面二十）。
+    try testing.expectEqualStrings("\"hoverProvider\":true", cap_hover);
+    try testing.expectEqualStrings("\"semanticTokensProvider\"", cap_semtok_key);
+    try testing.expectEqualStrings("\"serverInfo\":{\"name\":\"zzc-lsp\"}", cap_server_info);
+    // A3 serverInfo 名程序名派生钉：随 D78 prog_name 真值动（脱钩即此处红·承 matcher_name 形制）。
+    try testing.expectEqualStrings("\"serverInfo\":{\"name\":\"" ++ paths.prog_name ++ "-lsp\"}", cap_server_info);
+    // A4 cap_face 同源与基数钉：三枚 needle 逐字节等于写侧 cap_* 常量（守卫据此对 ps1 实文，针源=写侧源）。
+    try testing.expectEqual(@as(usize, 3), cap_face.len);
+    try testing.expectEqualStrings(cap_sync_obj, cap_face[0].needle);
+    try testing.expectEqualStrings(cap_hover, cap_face[1].needle);
+    try testing.expectEqualStrings(cap_semtok_key, cap_face[2].needle);
+    // A5 判据小样：真形命中、change:1→2 漂形即缺（t2 P1/P3 消费侧漂形转锚·防子串假命中）。
+    const ps1_good = "Contains('" ++ cap_sync_obj ++ "')";
+    const ps1_drift = "Contains('\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}}')";
+    try testing.expect(std.mem.indexOf(u8, ps1_good, cap_face[0].needle) != null);
+    try testing.expect(std.mem.indexOf(u8, ps1_drift, cap_face[0].needle) == null);
 }
 
 test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 UTF-16（第 156 轮）" {

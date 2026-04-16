@@ -285,8 +285,18 @@ pub fn main(init: std.process.Init) !void {
     checkFace(langconf_path, &lid.langconf_face, langconf);
     checkFace(tm_path, &lid.tm_face, tm_txt);
 
+    // —— 对面二十：`tools/check-demos.ps1` 的 LSP initialize capability 协商形串族（第 230 轮 D98）。
+    //   服务端 `initialize` 应答声明的 capability 对象形串（textDocumentSync 对象形／hoverProvider／
+    //   semanticTokensProvider）在写侧 server.zig 应答字面、服务端自测 indexOf 钉、e2e 基线 ps1 的
+    //   Contains 断言三处各持一份手抄——守卫对面十八／十九只核 ps1 命令词族与码点文案族，从未核这些
+    //   JSON capability 形串；ps1 属双盲防线（NO_PWSH＋GitCode 不跑·D17）。t2 探针 P1 独漂 ps1 断言
+    //   fresh 593/593 全绿静默、P3 写侧＋自测同步演进而 ps1 落单亦全绿静默（writer↔consumer 脱钩无信号）。
+    //   本步以 hub 派生三枚 needle 复用对面十八已读的 ps1 实文逐字节对账（零新增 I/O）：写侧应答形串与
+    //   ps1 Contains 断言同源，一侧漂形即分道转锚。serverInfo ps1 零消费不入针（如实登册）。
+    checkFace(ps1_path, &lsp_srv.cap_face, ps1_txt);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中\n",
-        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path },
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族三 枚 needle 在 e2e 基线脚本 {s} 面命中\n",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path, ps1_path },
     );
 }
