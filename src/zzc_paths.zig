@@ -163,6 +163,19 @@ pub fn ejectPathFor(alloc: std.mem.Allocator, dest: []const u8, name: []const u8
     return std.fmt.allocPrint(alloc, "{s}/{s}", .{ dest, name });
 }
 
+/// 毕业工程 `build.zig.zon` 的 `.name` 字段赋值前缀 token（第 232 轮 D100）：写侧 `ejectZoneText` 落的
+/// `    .name = .<app>` 行与读侧 `parseFingerprintFromZone` 认读的 `.name = .` 前缀共用的唯一真值。旧形制
+/// 跨 main↔args≥5 处同体手抄（写侧 emit、读侧 name_marker、189 T2 want、204 A2 fixture、parse 自测各一）、
+/// 互不引用，且全仓无真 writer→parser 往返锚（t2 探针 P1 实测：协同改写侧 emit 与其 189 T2 want、独不动读侧
+/// marker，`zig build test` 恒 600/600 全绿，而生产 eject 落盘 zon 与读侧认读形制静默脱钩——readExistingFingerprint
+/// 恒 null、fingerprint 每次重探、build.zig.zon 逐次漂移，破坏 eject 幂等复现）。本枚为该 token 的唯一真值。
+pub const zon_name_marker: []const u8 = ".name = .";
+
+/// 毕业工程 `build.zig.zon` 的 `.fingerprint` 字段赋值前缀 token（第 232 轮 D100）：写侧 emit 的
+/// `    .fingerprint = <0x..>` 与读侧认读的 `.fingerprint = 0x` 共用的字段前缀唯一真值（读侧再拼 `0x`
+/// 定位十六进制值起点）。与 `zon_name_marker` 同族同治。
+pub const zon_fingerprint_prefix: []const u8 = ".fingerprint = ";
+
 /// 工具链标定基线的两级真值（第 205 轮 D73）：诊断回译标定（`cli.diag_baseline_zig`）、eject 模板写进
 /// 每个毕业工程的 `.minimum_zig_version`、「无法启动 zig」提示里的版本下限、本仓 `build.zig.zon` 与 CI
 /// 安装版本共用的唯一真值。旧形制四处各抄一份同值字面量、互不引用（t2 探针 P3/P4 实锤改对面与本仓 zon

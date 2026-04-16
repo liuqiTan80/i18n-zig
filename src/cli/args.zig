@@ -752,7 +752,7 @@ test "布尔旗标 hasBoolFlag/stripBoolFlag：单元素形识别与剔离、等
 /// 供 `eject` 幂等复用：重复导出到同一目标时沿用既有 fingerprint（zig 每次探得的低半随机）。
 pub fn parseFingerprintFromZone(text: []const u8, expected_name: []const u8) ?[]const u8 {
     // 先校包名一致：`    .name = .app,` 中的 `app` 须等于本次 app_name。
-    const name_marker = ".name = .";
+    const name_marker = zzc.zon_name_marker; // 第 232 轮 D100：与写侧 ejectZoneText 同一 token 真值，两侧不再分抄
     const ni = std.mem.indexOf(u8, text, name_marker) orelse return null;
     const ns = ni + name_marker.len;
     if (!std.mem.startsWith(u8, text[ns..], expected_name)) return null;
@@ -763,7 +763,7 @@ pub fn parseFingerprintFromZone(text: []const u8, expected_name: []const u8) ?[]
         else => return null,
     }
     // 再取 fingerprint 十六进制串。
-    const marker = ".fingerprint = 0x";
+    const marker = zzc.zon_fingerprint_prefix ++ "0x"; // 第 232 轮 D100：字段前缀取 hub 真值、再拼 `0x` 定位十六进制值起点
     const idx = std.mem.indexOf(u8, text, marker) orelse return null;
     const ds = idx + marker.len; // 指向第一个十六进制位（0x 之后）
     var end = ds;

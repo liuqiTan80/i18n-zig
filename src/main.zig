@@ -862,9 +862,9 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
 fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
     var z: std.ArrayList(u8) = .empty;
     try z.appendSlice(gpa_, "// 由 " ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " 生成；可独立 `zig build` 构建。\n.{\n");
-    try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .name = .{s},\n", .{app_name}));
+    try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    " ++ zzc.zon_name_marker ++ "{s},\n", .{app_name})); // 第 232 轮 D100：字段名 token 取 hub 单一真值（与读侧 parseFingerprintFromZone 同源）
     try z.appendSlice(gpa_, "    .version = \"" ++ zzc.zzc_version ++ "\",\n"); // 第 211 轮 D79：毕业工程继承的版本行委派族真值（与 L867 minimum_zig_version 委派 zig_version 同族同形）
-    if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .fingerprint = {s},\n", .{t}));
+    if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    " ++ zzc.zon_fingerprint_prefix ++ "{s},\n", .{t})); // 第 232 轮 D100：fingerprint 字段前缀取 hub 真值
     try z.appendSlice(gpa_, "    .minimum_zig_version = \"" ++ zzc.zig_version ++ "\",\n");
     try z.appendSlice(gpa_, "    .dependencies = .{},\n");
     // `.paths` 条目由族集合派生（第 204 轮 D72）：与写侧落盘名同源，杜绝「文件写成 A、清单列的是 B」。
@@ -1687,7 +1687,7 @@ test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp �
     // 形 A：fp=null（首写占位 zon，fp 行必须缺席——存在即被回写覆盖前的非法中间态泄漏）。
     const want_a =
         "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n" ++
-        "    .name = .pj,\n" ++
+        "    " ++ zzc.zon_name_marker ++ "pj,\n" ++
         "    .version = \"0.1.0\",\n" ++
         tail;
     try std.testing.expectEqualStrings(want_a, try ejectZoneText("pj", null));
@@ -1695,9 +1695,9 @@ test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp �
     // 形 B：fp 非空——fingerprint 行恰插于 .version 之后、.minimum_zig_version 之前（字节位钉）。
     const want_b =
         "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n" ++
-        "    .name = .pj,\n" ++
+        "    " ++ zzc.zon_name_marker ++ "pj,\n" ++
         "    .version = \"0.1.0\",\n" ++
-        "    .fingerprint = 0xdeadbeef,\n" ++
+        "    " ++ zzc.zon_fingerprint_prefix ++ "0xdeadbeef,\n" ++
         tail;
     try std.testing.expectEqualStrings(want_b, try ejectZoneText("pj", "0xdeadbeef"));
 
@@ -1706,10 +1706,34 @@ test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp �
     // 防日后在本函数静默加判致两侧双闸或措辞改动无人知。
     const want_c =
         "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n" ++
-        "    .name = .,\n" ++
+        "    " ++ zzc.zon_name_marker ++ ",\n" ++
         "    .version = \"0.1.0\",\n" ++
         tail;
     try std.testing.expectEqualStrings(want_c, try ejectZoneText("", null));
+}
+
+test "第 232 轮 T0 eject zon schema 字段名 token 单源 + 真 writer→parser 往返锚" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 文件级 arena 接线（189 T2/204 T1 同族形制）
+    // A1 token 值钉：hub 两枚字段名 token 的字面形（hub 自身漂移即本测红，杜绝真值源头静默改形）。
+    try std.testing.expectEqualStrings(".name = .", zzc.zon_name_marker);
+    try std.testing.expectEqualStrings(".fingerprint = ", zzc.zon_fingerprint_prefix);
+    // A2 真往返锚：写侧 ejectZoneText 的真产物**不转手**直接喂读侧 parseFingerprintFromZone，取回的指纹须
+    //   原样复现。这是 D100 的核心缺口——旧 204 A2 系喂硬编 fixture、非真产物，故写读 token 协同漂移即静默失联。
+    const fp = "0xdeadbeefcafebabe";
+    const zon = try ejectZoneText("pj", fp);
+    defer gpa_.free(zon);
+    try std.testing.expectEqualStrings(fp, cli.parseFingerprintFromZone(zon, "pj").?);
+    // A3 名字闸透传真产物：改名后读侧须拒（不吃旧包名的 fingerprint）。
+    try std.testing.expectEqual(@as(?[]const u8, null), cli.parseFingerprintFromZone(zon, "other"));
+    // A4 无指纹形（fp=null）真产物：读侧无 fingerprint 字段须返回 null（首写占位 zon 的幂等前置态）。
+    const zon0 = try ejectZoneText("pj", null);
+    defer gpa_.free(zon0);
+    try std.testing.expectEqual(@as(?[]const u8, null), cli.parseFingerprintFromZone(zon0, "pj"));
+    // A5 写侧 emit 与 hub token 同源钉：真产物须含两枚 token 原形（若写侧回退内联手抄而 hub 漂，本钉翻红）。
+    try std.testing.expect(std.mem.indexOf(u8, zon, zzc.zon_name_marker) != null);
+    try std.testing.expect(std.mem.indexOf(u8, zon, zzc.zon_fingerprint_prefix) != null);
 }
 
 // 第 190 轮审计注：承 189 对账，main.zig 再锁定测面零直调两域——
@@ -2670,9 +2694,10 @@ test "第 204 轮 T1 毕业工程产物族跨点位耦合：`.paths` 清单⟺�
         defer gpa_.free(needle);
         try std.testing.expect(std.mem.indexOf(u8, seg, needle) != null);
     }
-    // A2 写↔读往返锚：按**写侧的同一构造**落一份带 fingerprint 的 zon，再走读侧真函数回读。写侧与读侧
-    // 原系两份同体字面量（204 t2 P2 实测：单改写侧后 226/226 全绿，重复 eject 的「复用既有指纹」幂等路径
-    // 静默失效、build.zig.zon 逐次漂移）；两侧不同名即刻红，同名单侧改名（回退内联）则行为等价不可锚。
+    // A2 写↔读往返锚：把**写侧 ejectZoneText 的真产物**直接落盘，再走读侧真函数回读。旧形制此处喂的是一
+    // 份与写侧脱钩的硬编 fixture（写侧 emit 与其自测协同漂移时，本锚仍拿旧 fixture 喂 parser 恒绿——232 t2 P1
+    // 实测协同改写侧 token 后 600/600 全绿而生产 eject→read 静默断）；本轮改喂真产物，写读两侧字段名 token 一旦
+    // 分道即刻现形（写侧 emit 的 `.name`/`.fingerprint` 形与读侧 marker 不同源则回读拿不到指纹）。
     const priv = tpriv.Priv.init(io_);
     var bdir: [96]u8 = undefined;
     const dpre = "/tmp/zzc204proj-";
@@ -2684,7 +2709,7 @@ test "第 204 轮 T1 毕业工程产物族跨点位耦合：`.paths` 清单⟺�
     };
     defer std.Io.Dir.cwd().deleteTree(io_, dir) catch {}; // 整树归零（192 轮同族形制，勿用 deleteFile+deleteDir）
     const zon = try zzc.ejectPathFor(gpa_, dir, zzc.out_build_zon); // 与 cmdEject 写侧同一函数、同一真值
-    try writeWhole(zon, "// zzc\n.{\n    .name = .pj,\n    .fingerprint = 0xfeedface,\n}\n");
+    try writeWhole(zon, try ejectZoneText("pj", "0xfeedface")); // 第 232 轮 D100：喂写侧真产物而非硬编 fixture（真往返锚）
     try std.testing.expectEqualStrings("0xfeedface", readExistingFingerprint(dir, "pj").?);
     try std.testing.expectEqual(@as(?[]const u8, null), readExistingFingerprint(dir, "other")); // 名闸透传
     // A3 文案现形钉：两条出口消息都须现形两枚产物名（承诺与落盘集同源）。旧形制的 `.no_zig` 只报
