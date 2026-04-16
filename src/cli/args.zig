@@ -49,12 +49,14 @@ pub const gen_dir_prefix: []const u8 = zzc.gen_dir_prefix;
 /// 第 60 轮自 main.zig 下沉至测试图（D7：main.zig 的 test 块从不执行、此纯函数此前零有效覆盖）；
 /// 激活测时发现旧实现对根目录文件会因 `dirname orelse "."` 产出 `.zzc/gen/./main.zig` 的 `.` 段噪声，按测意图修正。
 /// 第 199 轮 D67：目录段改取 `gen_dir` 真值（拼接仍在编译期完成、产物字节不变）。
+/// 第 234 轮 D102：落盘名扩展名 `.zig` 改取 `zzc.std_ext` 真值（仍编译期拼接、产物字节不变）——
+/// 与 `transpiler/translate.zig` 导入改写的替换形 `std_import_suffix` 同源，两侧不再各写 `.zig` 字面量。
 pub fn genPathFor(gpa: std.mem.Allocator, rel: []const u8) ![]const u8 {
     const stem = std.fs.path.stem(std.fs.path.basename(rel));
     if (std.fs.path.dirname(rel)) |dir_of| {
-        return std.fmt.allocPrint(gpa, gen_dir ++ "/{s}/{s}.zig", .{ dir_of, stem });
+        return std.fmt.allocPrint(gpa, gen_dir ++ "/{s}/{s}" ++ zzc.std_ext, .{ dir_of, stem });
     }
-    return std.fmt.allocPrint(gpa, gen_dir ++ "/{s}.zig", .{stem});
+    return std.fmt.allocPrint(gpa, gen_dir ++ "/{s}" ++ zzc.std_ext, .{stem});
 }
 
 /// 生成树内相对路径 → 剥掉 `gen_dir_prefix` 后的相对路径（保层级）；前缀失配者回退 basename。

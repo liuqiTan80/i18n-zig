@@ -16,6 +16,10 @@ const Mangle = @import("mangle.zig");
 const Pack = @import("../lang/pack.zig");
 const ColumnMap = @import("column_map.zig");
 const fullwidth = @import("../diag/fullwidth.zig");
+// 第 234 轮 D102：导入改写的扩展名对（匹配形 `.zz"`／替换形 `.zig"`）唯一真值下沉至 zzc_paths hub，
+// 与 `cli/args.zig` 的 `genPathFor`（落盘名 `.zig`）同源——本模块此前根本不 import hub，故 `.zig` 系
+// 跨模块手抄的第二份私货；接 hub 后改写侧与落盘侧结构性无法单边漂移（见 234 T0 值钉与 main 往返锚）。
+const zzc = @import("../zzc_paths.zig");
 
 pub const Result = struct {
     zig_str: []const u8,
@@ -282,8 +286,10 @@ pub fn translate(
                 const text = t.text(src);
                 // 导入路径扩展名改写：`导入("foo.zz")` 里的 "foo.zz" -> "foo.zig"。
                 // 仅当该字符串确为导入参数时才改，避免误伤任意以 `.zz` 结尾的普通字符串字面量。
-                if (std.mem.endsWith(u8, text, ".zz\"") and isImportOperand(lang, src, toks, i)) {
-                    const repl = try std.mem.replaceOwned(u8, gpa, text, ".zz\"", ".zig\"");
+                // 第 234 轮 D102：匹配/替换后缀取自 hub（`dialect_import_suffix`/`std_import_suffix`），
+                // 与 genPathFor 落盘名同源；旧此处两份手抄字面量 `.zz""`/`.zig""` 已收敛为委派（逐字节等价）。
+                if (std.mem.endsWith(u8, text, zzc.dialect_import_suffix) and isImportOperand(lang, src, toks, i)) {
+                    const repl = try std.mem.replaceOwned(u8, gpa, text, zzc.dialect_import_suffix, zzc.std_import_suffix);
                     defer gpa.free(repl);
                     try emitReplacement(gpa, &out, &map, t.off, text.len, repl);
                     continue;

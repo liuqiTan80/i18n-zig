@@ -123,6 +123,20 @@ pub const source_family = [_][]const u8{
 /// 方言源码扩展名（采集器筛源文件、入口选择判据、embed 资产豁免判据三处共用的唯一真值，第 201 轮 D69）。
 pub const dialect_ext: []const u8 = ".zz";
 
+/// 标准 Zig 源扩展名——转译后 `@import` 目标与 `genPathFor` 落盘文件名的两处共用唯一真值（第 234 轮 D102）。
+/// 旧形制下这枚 `.zig` 分散硬编在 `transpiler/translate.zig`（导入改写的替换形 `.zig"`，而该模块根本不 import 本 hub）
+/// 与 `cli/args.zig` 的 `genPathFor`（`{s}.zig` 输出名）两处，与 `dialect_ext` 无任何引用关系。t2 探针 P1 实锤：
+/// 合规重命名 `dialect_ext`（`.zz`→`.zv`）后，12 枚 hub 消费测红、而改写侧与落盘侧因不引 hub **恒绿**——真跑
+/// `导入("lib.zv")` 不被改写（仍找旧 `.zz"`）而 `genPathFor` 落盘 `lib.zig`，生成码 `@import("lib.zv")`「找不到要导入的模块」。
+/// 本枚与下面两枚派生后缀落地后，两侧皆由 hub 单源派生、扩展名对不再可能单边漂移。
+pub const std_ext: []const u8 = ".zig";
+
+/// 导入参数字符串 token 里的方言扩展名后缀（= `dialect_ext` 并入闭引号 `"`）：改写**匹配形**唯一真值。
+pub const dialect_import_suffix: []const u8 = dialect_ext ++ "\"";
+
+/// 导入参数改写后的标准扩展名后缀（= `std_ext` 并入闭引号 `"`）：改写**替换形**唯一真值，与 `genPathFor` 落盘名同源。
+pub const std_import_suffix: []const u8 = std_ext ++ "\"";
+
 /// 方言工程的源码目录段（相对工程根）。
 pub const src_dir: []const u8 = "src";
 
@@ -492,4 +506,23 @@ test "第 213 轮 T0 eject 缺省目录名族：值钉＋收编落盘族＋忽�
     try std.testing.expect(!dirIgnored("**/standar-d/\n", eject_default_dest)); // 近名不混（P1 探针形）
     try std.testing.expect(!dirIgnored("standard\n", eject_default_dest)); // 无尾斜杠＝文件规则
     try std.testing.expect(!dirIgnored("standard/\n", "stan-d")); // 反向：异名产物不被本条目冒充覆盖
+}
+
+test "第 234 轮 T0 源扩展名对族：std_ext 值钉 + 两枚改写后缀派生钉与独立字面量钉（防 .zz↔.zig 跨模块手抄单边漂移）" {
+    // A1 std_ext 值钉：标准扩展名是 `@import` 目标与 genPathFor 落盘名两处共用的对外契约（生成的
+    // zig 码要能被 zig 工具链解析），不复用常量、直接写死（196/197 通则）。改本枚即本钉红，连带要求
+    // 改写侧（transpiler/translate.zig）与落盘侧（cli/args.zig genPathFor）同步复跑。
+    try std.testing.expectEqualStrings(".zig", std_ext);
+    // A2 派生一致性钉：两枚改写后缀必恰为对应扩展名并入闭引号——改写匹配形/替换形的唯一真值。
+    try std.testing.expectEqualStrings(dialect_ext ++ "\"", dialect_import_suffix);
+    try std.testing.expectEqualStrings(std_ext ++ "\"", std_import_suffix);
+    // A3 独立字面量钉（不复用 dialect_ext/std_ext，遵判据不复用常量通则）：与 285-286 旧硬编形逐字节同。
+    try std.testing.expectEqualStrings(".zz\"", dialect_import_suffix);
+    try std.testing.expectEqualStrings(".zig\"", std_import_suffix);
+    // A4 成对形制契约（独立 oracle）：两枚后缀同为「扩展名 + 一个引号」，长度差必等于两扩展名长度差——
+    //    若一侧漏引号或多引号，改写会把非法 token 落进生成码。
+    try std.testing.expectEqual(
+        @as(isize, @intCast(dialect_import_suffix.len - dialect_ext.len)),
+        @as(isize, @intCast(std_import_suffix.len - std_ext.len)),
+    );
 }

@@ -1736,6 +1736,38 @@ test "第 232 轮 T0 eject zon schema 字段名 token 单源 + 真 writer→pars
     try std.testing.expect(std.mem.indexOf(u8, zon, zzc.zon_fingerprint_prefix) != null);
 }
 
+test "第 234 轮 T1 源扩展名对跨模块往返锚：真 translate 改写目标 ↔ 真 genPathFor 落盘名 ↔ hub std_ext 三者必同（防任一侧退回内联手抄）" {
+    // 本锚是 D102 的核心缺口补位：t2 探针 P1 实锤 hub 重命名 `dialect_ext` 后，改写侧（transpiler）与
+    // 落盘侧（genPathFor）因不引 hub 恒绿——两侧各自手抄、与 hub 无任何引用关系。接线后本锚同时驱动
+    // **真** translate 与 **真** genPathFor，期望串皆由 `zzc.std_ext` 拼出（随 hub 而动）：任一侧若
+    // 退回内联 `.zig` 手抄，则 hub 改值时该侧产物与本锚 hub 形期望失配即红（结构性捕获单边漂移）。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    // A1 真改写侧：方言原文 `导入("lib" ++ dialect_ext)` 产出的 `@import` 目标必以 hub `std_ext` 收尾。
+    //    源/期望皆拼 hub、不写死 `.zz`/`.zig`——dialect_ext/std_ext 任一漂移，此路随之而动而不失配。
+    const dialect_operand = "lib" ++ zzc.dialect_ext; // lib.zz
+    const src = try std.fmt.allocPrint(gpa, "常数 库 = 导入(\"{s}\");\n", .{dialect_operand});
+    const res = try translate.translate(gpa, src, lang, &table);
+    const std_operand = "lib" ++ zzc.std_ext; // lib.zig（改写目标，随 hub）
+    const want_import = try std.fmt.allocPrint(gpa, "@import(\"{s}\")", .{std_operand});
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, want_import) != null);
+    // 改写后不得残留方言后缀（否则 genPathFor 落盘的 `.zig` 名与生成码引用的 `.zz` 名互斥→ zig 找不到模块）。
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, zzc.dialect_import_suffix) == null);
+
+    // A2 真落盘侧：被引用单元 `src/lib.zz` 经 genPathFor 落盘的文件名（basename）须与 A1 改写目标同名。
+    const gen_rel = try cli.genPathFor(gpa, "src/" ++ dialect_operand);
+    try std.testing.expect(std.mem.endsWith(u8, gen_rel, zzc.std_ext));
+    // A3 跨侧不变量（模块解析真锚）：生成码内 `@import` 的词干目标名 == 落盘文件 basename——
+    //    二者皆源自 hub `std_ext`，zig 工具链据此在生成树内定位被导入模块；名不匹配即「找不到要导入的模块」。
+    try std.testing.expectEqualStrings(std_operand, std.fs.path.basename(gen_rel));
+}
+
 // 第 190 轮审计注：承 189 对账，main.zig 再锁定测面零直调两域——
 // ①findUnit（L394·入口→unit 三层检索：samePathRel 精确臂（分隔符归一）→ stem
 //   宽松臂 → null）唯 cmdCheck L549 / cmdBuild L609 两生产直调；samePathRel/stem
