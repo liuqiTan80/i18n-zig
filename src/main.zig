@@ -369,12 +369,12 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
                 if (v.ascii.len > 0) {
                     if (v.ascii[0] == ' ') {
                         // 全角空格：半角替换字面不可见，改用文字描述而非反引号包裹。
-                        printErr(mcon.line_head ++ cli.np_lexical ++ ": {s}，请改用半角空格作缩进/分隔", .{ rel, lc.line, lc.col, v.hint });
+                        printErr(mcon.line_head ++ cli.msg_fw_space, .{ rel, lc.line, lc.col, v.hint }); // 第 233 轮 D101：文案正文取 hub 单一真值（与 lsp server 同源）
                     } else {
-                        printErr(mcon.line_head ++ cli.np_lexical ++ ": {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ rel, lc.line, lc.col, v.hint, v.ascii });
+                        printErr(mcon.line_head ++ cli.msg_fw_symbol, .{ rel, lc.line, lc.col, v.hint, v.ascii }); // 第 233 轮 D101
                     }
                 } else {
-                    printErr(mcon.line_head ++ cli.np_lexical ++ ": {s}（`{s}`）", .{ rel, lc.line, lc.col, v.hint, v.word });
+                    printErr(mcon.line_head ++ cli.msg_fw_other, .{ rel, lc.line, lc.col, v.hint, v.word }); // 第 233 轮 D101
                 }
             }
             return error.Failed;
@@ -386,7 +386,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
         if (eng.items.len > 0) {
             for (eng.items) |v| {
                 const lc = ColumnMap.lineColOf(nat_src, v.off);
-                printErr(mcon.line_head ++ "纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", .{ rel, lc.line, lc.col, v.word, v.native });
+                printErr(mcon.line_head ++ cli.msg_pure_native, .{ rel, lc.line, lc.col, v.word, v.native }); // 第 233 轮 D101：纯母语提示正文取 hub 单一真值
             }
             return error.Failed;
         }

@@ -700,11 +700,11 @@ pub const Server = struct {
         defer if (maybe_vs) |vs| gpa.free(vs);
         for (maybe_vs orelse &.{}) |v| {
             const msg = if (v.ascii.len > 0 and v.ascii[0] == ' ')
-                try std.fmt.allocPrint(gpa, cli.np_lexical ++ ": {s}，请改用半角空格作缩进/分隔", .{v.hint})
+                try std.fmt.allocPrint(gpa, cli.msg_fw_space, .{v.hint}) // 第 233 轮 D101：文案正文取 hub 单一真值（与 CLI cmdCheck 逐字同形）
             else if (v.ascii.len > 0)
-                try std.fmt.allocPrint(gpa, cli.np_lexical ++ ": {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ v.hint, v.ascii })
+                try std.fmt.allocPrint(gpa, cli.msg_fw_symbol, .{ v.hint, v.ascii }) // 第 233 轮 D101
             else
-                try std.fmt.allocPrint(gpa, cli.np_lexical ++ ": {s}（`{s}`）", .{ v.hint, v.word });
+                try std.fmt.allocPrint(gpa, cli.msg_fw_other, .{ v.hint, v.word }); // 第 233 轮 D101
             defer gpa.free(msg);
             try items.append(gpa, try self.diagItem(text, v.off, v.off + v.len, msg));
         }
@@ -712,7 +712,7 @@ pub const Server = struct {
         var eng = translate.findEnglishWordForms(gpa, self.lang.*, text) catch return;
         defer eng.deinit();
         for (eng.items) |v| {
-            const msg = try std.fmt.allocPrint(gpa, "纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", .{ v.word, v.native });
+            const msg = try std.fmt.allocPrint(gpa, cli.msg_pure_native, .{ v.word, v.native }); // 第 233 轮 D101：纯母语提示正文取 hub 单一真值
             defer gpa.free(msg);
             try items.append(gpa, try self.diagItem(text, v.off, v.off + v.word.len, msg));
         }

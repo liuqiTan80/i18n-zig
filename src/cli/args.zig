@@ -1787,6 +1787,17 @@ pub const np_unknown_pack = "未知语言包"; // --lang 未知包拒绝（main�
 pub const np_lexical = "词法"; // 词法诊断 kind 前缀（main 机读出口 + server 诊断体）
 pub const np_type = "类型"; // zig 报错回译短语段（diag/translate 回译表）
 
+// —— 全角/纯母语拦截文案模板族（第 233 轮 D101）——
+// main `cmdCheck` 与 lsp `server.appendFastItems` 两出口对同一违例的提示正文必须逐字同形
+//（server.zig 顶注所声明的不变量）。旧形制两处各持整串字面量手抄、任一侧重措另一侧静默失联，
+// 全仓无测捕获（233 t2 P1：独漂 server 正文 fresh 601•601 全绿）。此处立正文单一真值，两出口
+// 各自 ++ 坐标前缀（main 加 mcon.line_head、server 走 LSP range）后共用同一 msg body。fw_* 三枚
+// 沿用 np_lexical 作 kind 前缀（前缀段 D95 已有 ps1 针，此处连带正文入源、共一份真值）。
+pub const msg_fw_space: []const u8 = np_lexical ++ ": {s}，请改用半角空格作缩进/分隔";
+pub const msg_fw_symbol: []const u8 = np_lexical ++ ": {s}，请改用半角 `{s}`（Zig 语法符号不翻译）";
+pub const msg_fw_other: []const u8 = np_lexical ++ ": {s}（`{s}`）";
+pub const msg_pure_native: []const u8 = "纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`";
+
 /// ps1 码点断言 needle 二十一枚——改任一真值，needle 随动、ps1 旧码点即失配红；
 /// 改 ps1 码点，needle 不落空而守卫红。双向耦合自此单源（守卫对面十八第二清单）。
 pub const ps1_native_face = [_]Ps1Needle{
@@ -1853,4 +1864,65 @@ test "第 227 轮 T0 ps1 码点文案断言 needle：逐字节独立手抄对拍
             }
         }
     }
+}
+
+test "第 233 轮 T0 全角/纯母语拦截文案模板族单源＋两出口委派源级锚＋真渲染同形——D101" {
+    // A1 四枚正文值锚（把「逐字同形」文案升为刻意、有测的单一真值；hub 自身漂移即红）。
+    try std.testing.expectEqualStrings("词法: {s}，请改用半角空格作缩进/分隔", msg_fw_space);
+    try std.testing.expectEqualStrings("词法: {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", msg_fw_symbol);
+    try std.testing.expectEqualStrings("词法: {s}（`{s}`）", msg_fw_other);
+    try std.testing.expectEqualStrings("纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", msg_pure_native);
+    // A2 fw_ 三枚 kind 前缀仍由 np_lexical 派生（前缀段与正文段共源、不各立手抄）。
+    try std.testing.expect(std.mem.startsWith(u8, msg_fw_space, np_lexical));
+    try std.testing.expect(std.mem.startsWith(u8, msg_fw_symbol, np_lexical));
+    try std.testing.expect(std.mem.startsWith(u8, msg_fw_other, np_lexical));
+
+    // A3 两出口委派源级锚：@embedFile 直读消费文件真源（真 source dep、改其委派形必重编本测），
+    // 逐 needle 命中且频次为 1：任一出口回退手抄字面量（委派形消失）即红——跨模块「逐字同形」
+    // 不变量自此有真锚（承 224 T0 A3 委派形双向锚形制）。
+    const main_src = @embedFile("../main.zig");
+    const server_src = @embedFile("../lsp/server.zig");
+    const countNeedle = struct {
+        fn f(hay: []const u8, ndl: []const u8) usize {
+            var n: usize = 0;
+            var i: usize = 0;
+            while (std.mem.indexOf(u8, hay[i..], ndl)) |k| {
+                i += k + ndl.len;
+                n += 1;
+            }
+            return n;
+        }
+    }.f;
+    const main_face = [_][]const u8{
+        "mcon.line_head ++ cli.msg_fw_space",
+        "mcon.line_head ++ cli.msg_fw_symbol",
+        "mcon.line_head ++ cli.msg_fw_other",
+        "mcon.line_head ++ cli.msg_pure_native",
+    };
+    for (main_face) |nd| try std.testing.expectEqual(@as(usize, 1), countNeedle(main_src, nd));
+    const server_face = [_][]const u8{
+        "allocPrint(gpa, cli.msg_fw_space",
+        "allocPrint(gpa, cli.msg_fw_symbol",
+        "allocPrint(gpa, cli.msg_fw_other",
+        "allocPrint(gpa, cli.msg_pure_native",
+    };
+    for (server_face) |nd| try std.testing.expectEqual(@as(usize, 1), countNeedle(server_src, nd));
+    // A4 反锚：正文整串只应存于本 hub（args.zig）、两消费文件不得再持字面量（回退手抄即命中→红）。
+    const bodies = [_][]const u8{
+        "请改用半角空格作缩进/分隔",
+        "Zig 语法符号不翻译",
+        "方言源须全用母语词形",
+    };
+    for (bodies) |b| {
+        try std.testing.expectEqual(@as(usize, 0), countNeedle(main_src, b));
+        try std.testing.expectEqual(@as(usize, 0), countNeedle(server_src, b));
+    }
+
+    // A5 两出口真渲染同形：同一违例经 CLI 形（line_head ++ msg）与 LSP 形（msg 独用）分别渲染，
+    // 剥坐标前缀后正文逐字节相等——把 server.zig 顶注的人约不变量升为运行期真锚。
+    var cb: [256]u8 = undefined;
+    const cli_line = std.fmt.bufPrint(&cb, mcon.line_head ++ msg_fw_symbol, .{ "src/main.zz", @as(usize, 4), @as(usize, 21), "全角分号", ";" }) catch return error.TestUnexpectedResult;
+    var lb: [256]u8 = undefined;
+    const lsp_line = std.fmt.bufPrint(&lb, msg_fw_symbol, .{ "全角分号", ";" }) catch return error.TestUnexpectedResult;
+    try std.testing.expect(std.mem.endsWith(u8, cli_line, lsp_line));
 }
