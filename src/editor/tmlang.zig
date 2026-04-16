@@ -277,6 +277,23 @@ test "tmlang.generate：合法 JSON、包含方言词、分类正确（第 154 �
     try testing.expect(usi_pos < zi_pos or usi_pos == zi_pos); // 同组内超串先出
 }
 
+test "tmlang.generate 确定性——同包两次生成逐字节一致（第 228 轮 D96）：`check-editor-syntax` 以「生成字节 == committed 字节」等形判同步，非确定性即每构建假红、该前提此前零钉" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+
+    // 同一 Pack 连生两次——若生成侧引入任何不稳定序（哈希迭代序、未排序 append 等），
+    // 两次字节即分歧、byte-equality 守卫永不可靠。此钉坐实 D96 挂载的健全性前提。
+    const a = try generate(gpa, lang);
+    defer gpa.free(a);
+    const b = try generate(gpa, lang);
+    defer gpa.free(b);
+    try testing.expectEqualStrings(a, b);
+}
+
 test "tmlang.generate：空 Pack 不崩溃、输出有效 JSON 骨架（第 154 轮）" {
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();

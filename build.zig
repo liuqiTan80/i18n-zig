@@ -86,7 +86,15 @@ pub fn build(b: *std.Build) void {
     const check_syntax_step = b.step("check-editor-syntax", "校验 tmLanguage 与语言包同步（CI 守卫）");
     const check_run = b.addRunArtifact(gen_tmlang_exe);
     check_run.addArg("check");
+    // 第 228 轮 D96：committed 生成物与语言包均声明为文件依赖（`addFileArg` 把二
+    // 者内容哈希计入本步依赖）——改任一即重跑本步；本步挂在 `test` 上，使
+    // `zig build test`/CI 必检。此前本步既不入 `test`、亦不在 CI（ci.yml 仅 `zig build`/
+    // `zig build test`/`check-demos.ps1`），committed tmLanguage 相对语言包/生成器漂移
+    // 全程静默（228 t2 探针 P1 实锤「追加 1 字节 → 591/591 全绿」的假锚形制）。
+    check_run.addFileArg(b.path("editors/vscode/syntaxes/zz.tmLanguage.json"));
+    check_run.addFileArg(b.path("src/lang/packs/中文.txt"));
     check_syntax_step.dependOn(&check_run.step);
+    test_step.dependOn(&check_run.step);
 
     // 第 155 轮：补全片段生成器（编辑器集成 MVP 补全面）。
     const gen_snippets_exe = b.addExecutable(.{
@@ -107,7 +115,12 @@ pub fn build(b: *std.Build) void {
     const check_snippets_step = b.step("check-editor-snippets", "校验 snippets 与语言包同步（CI 守卫）");
     const check_snip_run = b.addRunArtifact(gen_snippets_exe);
     check_snip_run.addArg("check");
+    // 第 228 轮 D96：同 syntax 侧——committed snippets 与语言包声明为文件依赖、本步挂 `test`。
+    // 此前该步从不被 `zig build test`/CI 触发，committed zz.json 漂移全程静默。
+    check_snip_run.addFileArg(b.path("editors/vscode/snippets/zz.json"));
+    check_snip_run.addFileArg(b.path("src/lang/packs/中文.txt"));
     check_snippets_step.dependOn(&check_snip_run.step);
+    test_step.dependOn(&check_snip_run.step);
 
     // 第 202 轮 D70：落盘族 ↔ 仓根 `.gitignore` 覆盖守卫（跨文件同步守卫形制，同上面的 syntax/snippets）。
     // 为什么必须是独立构建步而不是测试图内读盘：`@embedFile("../.gitignore")` 被 zig 0.17 的 module 包路径

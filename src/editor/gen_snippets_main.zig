@@ -1,5 +1,5 @@
 //! 补全片段生成工具（第 155 轮）：读取语言包、生成 editors/vscode/snippets/zz.json。
-//! 用法：gen-snippets emit [输出路径]  |  gen-snippets check [文件路径]
+//! 用法：gen-snippets emit [输出路径]  |  gen-snippets check [文件路径] [包路径]
 //!   emit = 生成并写入（默认路径 editors/vscode/snippets/zz.json）
 //!   check = 生成并与磁盘文件比对，不同则退出码 1（CI 守卫）
 
@@ -25,8 +25,9 @@ pub fn main(init: std.process.Init) !void {
     const default_out = lang_id.snippets_emit_path;
     const out_path = if (args.len >= 3) args[2] else default_out;
 
-    // 读取语言包。
-    const pack_path = "src/lang/packs/中文.txt";
+    // 读取语言包。第 228 轮 D96：check 模式下包路径由 `build.zig` 以 `addFileArg` 作
+    // 第三参传入（声明为文件依赖·改包即重跑守卫），不再固定 cwd 相对读；emit 缺省仍取仓根包。
+    const pack_path = if (args.len >= 4) args[3] else "src/lang/packs/中文.txt";
     const pack_bytes = std.Io.Dir.cwd().readFileAlloc(io, pack_path, gpa, .unlimited) catch |e| {
         std.debug.print("无法读取语言包 {s}（{s}）\n", .{ pack_path, @errorName(e) });
         std.process.exit(1);
