@@ -269,8 +269,24 @@ pub fn main(init: std.process.Init) !void {
     //   双路 fresh 589/589 全绿静默。本步读同一 ps1 文本（零新增 I/O）按 hub 派生码点 needle 对账。
     checkFace(ps1_path, &cli_hub.ps1_native_face, ps1_txt);
 
+    // —— 对面十九：编辑器注释标记族（第 229 轮 D97）。`language-configuration.json` 的注释声明
+    //   （lineComment/blockComment/折叠起止）与 `zz.tmLanguage.json` 的注释高亮正则互为同一词形
+    //   的两份手抄，前者既非 source dep 也不在任何对面——t2 探针 P1 实锤改 `//`→`##`、`/*`→`<<`
+    //   fresh 592/592 全绿静默。本步以 hub 派生四/二 枚 needle 同时对两文件逐字节对账：
+    //   任一侧漂即红，两面同时命中即互洽（同源传递）。
+    const langconf_path = if (args.len >= 9) args[8] else "editors/vscode/language-configuration.json";
+    const tm_path = if (args.len >= 10) args[9] else "editors/vscode/syntaxes/zz.tmLanguage.json";
+    const langconf = std.Io.Dir.cwd().readFileAlloc(io, langconf_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ langconf_path, @errorName(e) });
+    defer gpa.free(langconf);
+    const tm_txt = std.Io.Dir.cwd().readFileAlloc(io, tm_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ tm_path, @errorName(e) });
+    defer gpa.free(tm_txt);
+    checkFace(langconf_path, &lid.langconf_face, langconf);
+    checkFace(tm_path, &lid.tm_face, tm_txt);
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中\n",
-        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path },
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中\n",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path },
     );
 }

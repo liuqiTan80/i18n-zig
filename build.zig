@@ -177,6 +177,12 @@ pub fn build(b: *std.Build) void {
     // 双盲：NO_PWSH + GitCode 不跑 Actions·D17 在册）、203 t2 判例同形「改对面文件而测数行为空」，
     // 故须以 addFileArg 声明依赖后由守卫核对十七枚派生 needle 在脚本面逐一命中。
     check_matcher_run.addFileArg(b.path("tools/check-demos.ps1"));
+    // 对面十九（第 229 轮 D97）：编辑器注释标记族——`language-configuration.json` 的注释声明与
+    // `zz.tmLanguage.json` 的注释高亮皆是 `lang_identity` 注释族真值的手抄面；前者既非 source dep
+    // （229 t2 探针 P1 改 `//`→`##` fresh 592/592 全绿静默）也无任何守卫读过，后者虽被 check-editor-syntax
+    // 比对生成物却从不与声明面对账——故两文件皆须 addFileArg 声明后由守卫逐字节对账。
+    check_matcher_run.addFileArg(b.path("editors/vscode/language-configuration.json"));
+    check_matcher_run.addFileArg(b.path("editors/vscode/syntaxes/zz.tmLanguage.json"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 

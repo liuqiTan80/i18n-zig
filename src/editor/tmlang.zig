@@ -158,6 +158,12 @@ pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
     ) catch @panic("OOM");
     // fileTypes 同源派生（清单 `extensions` 与 `zzc_paths.dialect_ext` 同族）。
     out.appendSlice(gpa, "\n  \"fileTypes\": [\"" ++ lang_id.file_type_stem ++ "\"],\n") catch @panic("OOM");
+    // 注释高亮两条目（第 229 轮 D97）：标记词形由 `lang_identity` 注释族真值派生，
+    // 与 `language-configuration.json` 声明面经守卫对面十九互钉（两处手抄分道即红）。
+    const comment_line_entry =
+        "        { \"name\": \"comment.line.double-slash." ++ lang_id.file_type_stem ++ "\", \"match\": \"" ++ lang_id.line_comment ++ ".*$\" },\n";
+    const comment_block_entry =
+        "        { \"name\": \"comment.block." ++ lang_id.file_type_stem ++ "\", \"begin\": \"" ++ lang_id.tm_block_begin_regex ++ "\", \"end\": \"" ++ lang_id.tm_block_end_regex ++ "\" }\n";
     out.appendSlice(gpa,
         \\  "patterns": [
         \\    { "include": "#comments" },
@@ -172,8 +178,9 @@ pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
         \\  "repository": {
         \\    "comments": {
         \\      "patterns": [
-        \\        { "name": "comment.line.double-slash.zz", "match": "//.*$" },
-        \\        { "name": "comment.block.zz", "begin": "/\\*", "end": "\\*/" }
+    ) catch @panic("OOM");
+    out.appendSlice(gpa, "\n" ++ comment_line_entry ++ comment_block_entry) catch @panic("OOM");
+    out.appendSlice(gpa,
         \\      ]
         \\    },
         \\    "strings": {

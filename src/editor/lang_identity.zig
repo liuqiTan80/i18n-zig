@@ -47,6 +47,42 @@ pub const grammar_emit_path: []const u8 = "editors/vscode/" ++ grammar_asset_pat
 /// 同上，补全片段。
 pub const snippets_emit_path: []const u8 = "editors/vscode/" ++ snippets_asset_path;
 
+// ———————————————————— 注释标记族（第 229 轮 · D97）————————————————————————————
+//   同一门方言的注释标记散在两处手抄：`src/editor/tmlang.zig` 的 comptime 模板（高亮正则）与
+//   `editors/vscode/language-configuration.json`（VSCode 注释快捷键/折叠行为）。229 t2 探针 P1 实锤
+//   改后者 `//`→`##`、`/*`→`<<` fresh 592/592 全绿静默（该文件既非 source dep 也不在任何对面），
+//   而真编译器（`lexer`）只认 `//` 行注释——`/*` `*/` 属编辑器侧单边声明（blockComment 不支持，已登册）。
+
+/// 行注释标记：真编译器 `lexer` 唯一认得的注释词法（高亮正则与 langconf `lineComment` 共用）。
+pub const line_comment: []const u8 = "//";
+/// 块注释起始标记（仅编辑器侧声明；`lexer` 不识别，列此为主从同源的词形锚）。
+pub const block_begin: []const u8 = "/*";
+/// 块注释结束标记（同上）。
+pub const block_end: []const u8 = "*/";
+
+/// 转义星的 tmLanguage JSON 文本形：正则 `\*` 经 JSON 字符串编码后为双反斜杠加星（文件内字节）。
+/// 标记族里唯一需转义的元字符即 `*`（本版 Zig 禁全局常量引 comptime 局部，故不写成循环转义函数，
+/// 而由真值字符拼接派生——改标记真字符即随动，转义位置由标记形状定，229 T0 A2 逐字节钉死其形）。
+const esc_star: []const u8 = "\\\\*";
+
+/// 块标记的正则 JSON 文本形（tmLanguage 生成物内字节：`/\\*` 与 `\\*/`）。
+pub const tm_block_begin_regex: []const u8 = block_begin[0..1] ++ esc_star;
+pub const tm_block_end_regex: []const u8 = esc_star ++ block_end[1..2];
+
+/// 对面·`editors/vscode/language-configuration.json`：注释配置四针（行/块/折叠起止）。
+pub const langconf_face = [_]FaceCheck{
+    .{ .needle = "\"lineComment\": \"" ++ line_comment ++ "\"", .why = "VSCode 行注释Toggle 须用行注释真值，分道即 Ctrl+/ 注错字符" },
+    .{ .needle = "\"blockComment\": [\"" ++ block_begin ++ "\", \"" ++ block_end ++ "\"]", .why = "块注释对须与块标记真值同形（虽 lexer 不识别块注释，声明漂即误导用户写编译器不认的注释）" },
+    .{ .needle = "\"start\": \"^\\\\s*" ++ line_comment ++ "\\\\s*#region\\\\b\"", .why = "折叠起点须嵌行注释真值，分道即 #region 折叠静默失效" },
+    .{ .needle = "\"end\": \"^\\\\s*" ++ line_comment ++ "\\\\s*#endregion\\\\b\"", .why = "折叠终点同上（另一端）" },
+};
+
+/// 对面·生成的 `zz.tmLanguage.json`：注释高亮两针（与 langconf 面同源——两面皆吃 hub 真值即互洽）。
+pub const tm_face = [_]FaceCheck{
+    .{ .needle = "\"match\": \"" ++ line_comment ++ ".*$\"", .why = "tmLanguage 行注释高亮正则须由行注释真值派生，分道即注释不高亮" },
+    .{ .needle = "\"begin\": \"" ++ tm_block_begin_regex ++ "\", \"end\": \"" ++ tm_block_end_regex ++ "\"", .why = "tmLanguage 块注释高亮须由块标记真值派生，与 langconf 声明互洽" },
+};
+
 /// 一次对面核对项：逐字节 needle 与「分道即何为」的说明（守卫据此报错，判据不另立）。
 pub const FaceCheck = struct {
     needle: []const u8,
@@ -117,4 +153,33 @@ test "第 215 轮 T0 语言标识族派生与对面 needle 形钉：值钉／剥
     try testing.expectEqual(@as(usize, 9), pkg_face.len);
     try testing.expectEqual(@as(usize, 1), client_face.len);
     try testing.expectEqual(@as(usize, 1), tasks_face.len);
+}
+
+test "第 229 轮 T0 注释标记族派生与双对面 needle 形钉：三枚真值／正则 JSON 文本形／折叠嵌值／近名负例（防 hub 自身失真）" {
+    // A1 值钉：注释标记字面真形（与 `lexer` 行注释词法、VSCode 声明三方共用，改形须同时过守卫与两对面）。
+    try testing.expectEqualStrings("//", line_comment);
+    try testing.expectEqualStrings("/*", block_begin);
+    try testing.expectEqualStrings("*/", block_end);
+    // A2 派生钉：块标记的正则 JSON 文本形确由真值转义而得（`*`→`\\*` 经 JSON 编码后为双反斜杠），
+    //    脱钩（转义形重写/漏逃）即此处红；行注释正则串直接嵌真值（`/` 无需转义）。
+    try testing.expectEqualStrings("/\\\\*", tm_block_begin_regex);
+    try testing.expectEqualStrings("\\\\*/", tm_block_end_regex);
+    try testing.expectEqualStrings("//.*$", line_comment ++ ".*$");
+    // A3 needle 形钉：两对面逐字节形（即守卫判据自身的锚）；折叠两针内嵌行注释真值（串位即红）。
+    try testing.expectEqualStrings("\"lineComment\": \"//\"", langconf_face[0].needle);
+    try testing.expectEqualStrings("\"blockComment\": [\"/*\", \"*/\"]", langconf_face[1].needle);
+    try testing.expectEqualStrings("\"start\": \"^\\\\s*//\\\\s*#region\\\\b\"", langconf_face[2].needle);
+    try testing.expectEqualStrings("\"end\": \"^\\\\s*//\\\\s*#endregion\\\\b\"", langconf_face[3].needle);
+    try testing.expectEqualStrings("\"match\": \"//.*$\"", tm_face[0].needle);
+    try testing.expectEqualStrings("\"begin\": \"/\\\\*\", \"end\": \"\\\\*/\"", tm_face[1].needle);
+    // A4 判据小样：真面对命中、改名/近名皆缺（防子串假命中：`//`→`///`、`/*`→`<*`）。
+    try testing.expect(!missing(langconf_face[0].needle, langconf_face[0].needle));
+    try testing.expect(missing("\"lineComment\": \"##\"", langconf_face[0].needle));
+    try testing.expect(missing("\"lineComment\": \"///\",", langconf_face[0].needle));
+    try testing.expect(missing("\"blockComment\": [\"<<\", \">>\"]", langconf_face[1].needle));
+    try testing.expect(missing("\"match\": \"##.*$\"", tm_face[0].needle));
+    try testing.expect(missing("\"begin\": \"/\\\\+\", \"end\": \"\\\\+/\"", tm_face[1].needle));
+    // A5 面清单基数钉：四/二 枚——新增注释相关对面字段须在此随动（防只加常量不加对账面）。
+    try testing.expectEqual(@as(usize, 4), langconf_face.len);
+    try testing.expectEqual(@as(usize, 2), tm_face.len);
 }
