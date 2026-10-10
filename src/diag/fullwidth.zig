@@ -1,0 +1,502 @@
+//! 非 ASCII 词法安全审查（合并 fullwidth 与 unicode_confusion 两个关注点）：
+//!
+//!   - 方言只允许「母语字母词」与 ASCII Zig 语法。全角标点（；（）＝）、
+//!     同形异体字符（如西里尔字母冒充拉丁字母）都会在这里被拦截，
+//!     而不是透传给 zig 产生费解报错。
+//!   - 白名单策略：词元的每个码点必须满足
+//!       字母（Unicode Letter 属性）∪ CJK 表意文字 ∪ 半角下划线 ∪ 常见文字组合符，
+//!     或命中「危险字符表」给出针对性的更正提示。
+
+const std = @import("std");
+const lexer = @import("../transpiler/lexer.zig");
+
+pub const Violation = struct {
+    off: usize,
+    len: usize,
+    word: []const u8,
+    /// 命中的危险字符（UTF-8 序列）；纯未知字符时为 null
+    danger: ?[]const u8 = null,
+    /// 命中的危险字符对应的建议半角 ASCII（无则空）
+    ascii: []const u8 = "",
+    hint: []const u8 = "",
+};
+
+/// 常见全角/易混标点 -> 建议替换的半角 ASCII。
+const Danger = struct { full: []const u8, ascii: []const u8, label: []const u8 };
+const dangers = [_]Danger{
+    .{ .full = "；", .ascii = ";", .label = "全角分号" },
+    .{ .full = "，", .ascii = ",", .label = "全角逗号" },
+    .{ .full = "（", .ascii = "(", .label = "全角左括号" },
+    .{ .full = "）", .ascii = ")", .label = "全角右括号" },
+    .{ .full = "｛", .ascii = "{", .label = "全角左花括号" },
+    .{ .full = "｝", .ascii = "}", .label = "全角右花括号" },
+    .{ .full = "［", .ascii = "[", .label = "全角左方括号" },
+    .{ .full = "］", .ascii = "]", .label = "全角右方括号" },
+    .{ .full = "＝", .ascii = "=", .label = "全角等号" },
+    .{ .full = "：", .ascii = ":", .label = "全角冒号" },
+    .{ .full = "！", .ascii = "!", .label = "全角感叹号" },
+    .{ .full = "？", .ascii = "?", .label = "全角问号" },
+    // 全角空格（U+3000）：中文 IME 打缩进/分隔时最高频的误产出。它字节 E3 80 80≥0x80、会被
+    // lexer 归入 nonascii_word（ASCII 空白才被跳过），若不登记危险表只会落到泛白名单提示
+    // “不允许出现在母语标识符中”，对用户误导；这里给出“改用半角空格”的精确提示。
+    .{ .full = "　", .ascii = " ", .label = "全角空格" },
+    // 复制粘贴 / 自动更正的高频误产（与全角空格 U+3000 同族，都不是「非法标识符字符」）：
+    //   · 不间断空格 U+00A0、零宽空格 U+200B 不可见，多从网页/文档复制代码时混入；
+    //   · 长/短破折号 U+2014/U+2013 是自动更正把半角 `-` 变来的；省略号 U+2026 把 `...` 变来的。
+    // 若不登记危险表，它们只会落到泛白名单提示「不允许出现在母语标识符中」，对用户误导。
+    .{ .full = "\u{00A0}", .ascii = " ", .label = "不间断空格" },
+    .{ .full = "\u{200B}", .ascii = "", .label = "零宽空格（复制粘贴混入，请删除）" },
+    .{ .full = "\u{2014}", .ascii = "-", .label = "长破折号" },
+    .{ .full = "\u{2013}", .ascii = "-", .label = "短破折号" },
+    .{ .full = "\u{2026}", .ascii = "...", .label = "省略号" },
+    .{ .full = "。", .ascii = ".", .label = "句号" },
+    .{ .full = "、", .ascii = ",", .label = "顿号" },
+    .{ .full = "「", .ascii = "\"", .label = "引号" },
+    .{ .full = "」", .ascii = "\"", .label = "引号" },
+    // 弯引号（智能引号）：中英文输入法打字符串时最常见的误产出，单独给精确提示。
+    .{ .full = "\u{201C}", .ascii = "\"", .label = "弯双引号“”" },
+    .{ .full = "\u{201D}", .ascii = "\"", .label = "弯双引号“”" },
+    .{ .full = "\u{2018}", .ascii = "'", .label = "弯单引号‘’" },
+    .{ .full = "\u{2019}", .ascii = "'", .label = "弯单引号‘’" },
+    .{ .full = "＂", .ascii = "\"", .label = "全角双引号" },
+    .{ .full = "＇", .ascii = "'", .label = "全角单引号" },
+    // 全角/数学运算符：算术与位运算表达式里最常见的 IME 误产出（如 甲 ＋ 乙），
+    // 需与「标识符非法字符」区分开——给出半角运算符的精确替换提示。
+    .{ .full = "\u{FF0B}", .ascii = "+", .label = "全角加号" },
+    .{ .full = "\u{FF0D}", .ascii = "-", .label = "全角减号" },
+    .{ .full = "\u{2212}", .ascii = "-", .label = "数学减号" },
+    .{ .full = "\u{FF0A}", .ascii = "*", .label = "全角乘号" },
+    .{ .full = "\u{FF0F}", .ascii = "/", .label = "全角除号" },
+    .{ .full = "\u{FF05}", .ascii = "%", .label = "全角百分号" },
+    .{ .full = "\u{FF1C}", .ascii = "<", .label = "全角小于号" },
+    .{ .full = "\u{FF1E}", .ascii = ">", .label = "全角大于号" },
+    .{ .full = "\u{FF06}", .ascii = "&", .label = "全角与号" },
+    .{ .full = "\u{FF5C}", .ascii = "|", .label = "全角竖线" },
+    .{ .full = "\u{FF5E}", .ascii = "~", .label = "全角波浪号" },
+    .{ .full = "\u{FF3E}", .ascii = "^", .label = "全角脱字符" },
+    .{ .full = "\u{FF20}", .ascii = "@", .label = "全角 at 符号" },
+    .{ .full = "\u{FF3F}", .ascii = "_", .label = "全角下划线" },
+};
+
+fn isAllowedScalar(cp: u21) bool {
+    // 合并后非 ASCII 词元可含紧邻的 ASCII 字母/数字/下划线（`变量1` 这类整体母语标识符）→ 合法放行。
+    // （旧假设“ASCII 字母数字已由 lexer 归入 ascii_word、不会到这里”因词元合并而不再成立。）
+    if (cp < 0x80) {
+        const c: u8 = @intCast(cp);
+        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+    }
+    // 常用母语文字区白名单：CJK / 假名 / 谚文 / 喃字 / 全角字母数字以外的符号均拦截
+    if (cp >= 0x3040 and cp <= 0x30FF) return true; // 日文假名
+    if (cp >= 0x3400 and cp <= 0x4DBF) return true; // CJK 扩展 A
+    if (cp >= 0x4E00 and cp <= 0x9FFF) return true; // CJK 统一汉字
+    if (cp >= 0xF900 and cp <= 0xFAFF) return true; // CJK 兼容汉字
+    if (cp >= 0xAC00 and cp <= 0xD7AF) return true; // 谚文音节
+    if (cp >= 0x1100 and cp <= 0x11FF) return true; // 谚文字母
+    if (cp >= 0x20000 and cp <= 0x2FA1F) return true; // CJK 扩展 B-F / 兼容
+    if (cp >= 0x0400 and cp <= 0x04FF) return true; // 西里尔字母（俄文方言合法，同形风险由冲突表拦）
+    if (cp >= 0x0600 and cp <= 0x06FF) return true; // 阿拉伯字母
+    if (cp >= 0x0E00 and cp <= 0x0E7F) return true; // 泰文
+    if (cp >= 0xFF10 and cp <= 0xFF19) return false; // 全角数字（显式拦截）
+    if (cp >= 0xFF21 and cp <= 0xFF3A) return false; // 全角拉丁字母（显式拦截）
+    if (cp >= 0xFF41 and cp <= 0xFF5A) return false; // 全角小写（显式拦截）
+    return false;
+}
+
+/// 全角 ASCII 变体区 U+FF01..U+FF5E 与半角 U+0021..U+007E 逐一对应（差值 0xFEE0）。
+/// 下标 i = cp - 0xFF01（0..93），取对应半角字符；comptime 生成，生命期为静态，供 Violation.ascii 直接引用。
+const halfwidth_of_fullwidth = blk: {
+    @setEvalBranchQuota(1000);
+    var buf: [94]u8 = undefined;
+    for (&buf, 0..) |*b, i| b.* = @intCast(0x21 + i);
+    break :blk buf;
+};
+
+const FwHint = struct { at: usize, len: usize, ascii: []const u8, danger: []const u8, label: []const u8 };
+
+/// 扫描词元中首个落在全角 ASCII 变体区的码点，给出按类划分的精确替换提示。
+/// 作为危险表的兜底，一网打尽全角数字（如 ５０→半角 50 场景）、全角拉丁字母与其余全角符号。
+fn fullwidthFormHint(word: []const u8) ?FwHint {
+    var i: usize = 0;
+    while (i < word.len) {
+        const blen = std.unicode.utf8ByteSequenceLength(word[i]) catch {
+            i += 1;
+            continue;
+        };
+        if (i + blen > word.len) break;
+        const cp = std.unicode.utf8Decode(word[i..][0..blen]) catch {
+            i += 1;
+            continue;
+        };
+        if (cp >= 0xFF01 and cp <= 0xFF5E) {
+            const idx = cp - 0xFF01; // 0..93
+            const label: []const u8 = if (cp >= 0xFF10 and cp <= 0xFF19)
+                "全角数字"
+            else if ((cp >= 0xFF21 and cp <= 0xFF3A) or (cp >= 0xFF41 and cp <= 0xFF5A))
+                "全角拉丁字母"
+            else
+                "全角符号";
+            return .{
+                .at = i,
+                .len = blen,
+                .ascii = halfwidth_of_fullwidth[idx .. idx + 1],
+                .danger = word[i .. i + blen],
+                .label = label,
+            };
+        }
+        i += blen;
+    }
+    return null;
+}
+
+/// 不可见空格类（Unicode Zs / 行段分隔）：与半角空格同职、但肉眼不可见，多从网页/文档复制粘贴混入。
+/// （NBSP U+00A0、全角空格 U+3000 已在危险表给专名，这里兜底其余所有不可见空格。）
+fn isInvisibleSpace(cp: u21) bool {
+    return switch (cp) {
+        0x1680, // 欧甘空格
+        0x2000...0x200A, // EN QUAD .. HAIR SPACE（连串宽度空格）
+        0x2028, // 行分隔符
+        0x2029, // 段分隔符
+        0x202F, // 窄不间断空格
+        0x205F,
+        => true, // 中数学空格
+        else => false,
+    };
+}
+
+/// 零宽/格式控制字符（Unicode Cf）：不可见且无可见半角替换，只能删除；
+/// 常由复制粘贴、bidi 排版标记、软连字符、文件中部 BOM 等混入。
+fn isZeroWidthFormat(cp: u21) bool {
+    return switch (cp) {
+        0x00AD, // 软连字符
+        0x180E, // 蒙古元音分隔符
+        0x200B, // 零宽空格
+        0x200C, // 零宽不连字
+        0x200D, // 零宽连字
+        0x200E, // 左到右标记
+        0x200F, // 右到左标记
+        0x202A...0x202E, // bidi 嵌入/覆盖
+        0x2060...0x2064, // 单词连接符与隐形运算符
+        0x2066...0x2069, // bidi 隔离
+        0xFEFF,
+        => true, // BOM / 零宽不换行空格（仅文件首会被 stripBom 剔除，正文中部会落到这里）
+        else => false,
+    };
+}
+
+/// 扫描词元中首个不可见字符（空格类 / 零宽格式类），复用 FwHint 结构。
+/// 作为危险表与全角变体兜底之后的不可见字符总网：它们既不在危险表、也不在 FF01–FF5E，
+/// 若不拦下只会落到泛白名单“不允许出现在母语标识符中”——对一个肉眼看不见的字符极为误导。
+fn invisibleFormHint(word: []const u8) ?FwHint {
+    var i: usize = 0;
+    while (i < word.len) {
+        const blen = std.unicode.utf8ByteSequenceLength(word[i]) catch {
+            i += 1;
+            continue;
+        };
+        if (i + blen > word.len) break;
+        const cp = std.unicode.utf8Decode(word[i..][0..blen]) catch {
+            i += 1;
+            continue;
+        };
+        if (isInvisibleSpace(cp)) {
+            return .{ .at = i, .len = blen, .ascii = " ", .danger = word[i .. i + blen], .label = "不可见空格" };
+        }
+        if (isZeroWidthFormat(cp)) {
+            return .{ .at = i, .len = blen, .ascii = "", .danger = word[i .. i + blen], .label = "零宽/格式控制字符（复制粘贴易混入，请删除）" };
+        }
+        i += blen;
+    }
+    return null;
+}
+
+/// 手写 UTF-8 码点迭代（std.unicode 无 DecodeIterator，版本兼容考虑）。
+const CpIter = struct {
+    bytes: []const u8,
+    i: usize = 0,
+
+    fn next(self: *CpIter) ?u21 {
+        if (self.i >= self.bytes.len) return null;
+        const len = std.unicode.utf8ByteSequenceLength(self.bytes[self.i]) catch {
+            self.i += 1;
+            return 0xFFFD;
+        };
+        if (self.i + len > self.bytes.len) {
+            self.i += 1;
+            return 0xFFFD;
+        }
+        const cp = std.unicode.utf8Decode(self.bytes[self.i..][0..len]) catch 0xFFFD;
+        self.i += len;
+        return cp;
+    }
+};
+
+/// 审查所有 nonascii_word 词元，返回违规列表（字符串/注释天然不参与）。
+pub fn check(gpa: std.mem.Allocator, src: []const u8, toks: []const lexer.Token) ![]Violation {
+    var out: std.ArrayList(Violation) = .empty;
+    errdefer out.deinit(gpa);
+
+    for (toks) |t| {
+        if (t.kind != .nonascii_word) continue;
+        const word = t.text(src);
+
+        // 1) 危险字符表命中：给出精确替换提示
+        var hit_danger = false;
+        for (dangers) |d| {
+            if (std.mem.indexOf(u8, word, d.full)) |at| {
+                try out.append(gpa, .{
+                    .off = t.off + at,
+                    .len = d.full.len,
+                    .word = word,
+                    .danger = d.full,
+                    .ascii = d.ascii,
+                    .hint = d.label,
+                });
+                hit_danger = true;
+                break;
+            }
+        }
+        // 已由危险表精确命中的字符不再走白名单，避免同一位置重复报错
+        if (hit_danger) continue;
+
+        // 2) 全角 ASCII 变体兜底：数字/拉丁字母/其余符号按类给半角替换提示（危险表未列举的）。
+        if (fullwidthFormHint(word)) |h| {
+            try out.append(gpa, .{
+                .off = t.off + h.at,
+                .len = h.len,
+                .word = word,
+                .danger = h.danger,
+                .ascii = h.ascii,
+                .hint = h.label,
+            });
+            continue;
+        }
+
+        // 2.5) 不可见字符总网：空格类→“改用半角空格”（走空格分支）；零宽/格式类→“请删除”（无可见替换、走通用分支显示所在词元定位）。
+        if (invisibleFormHint(word)) |h| {
+            try out.append(gpa, .{
+                .off = t.off + h.at,
+                .len = h.len,
+                .word = word,
+                .danger = h.danger,
+                .ascii = h.ascii,
+                .hint = h.label,
+            });
+            continue;
+        }
+
+        // 3) 逐码点白名单：拦截同形异体与未知字符
+        var it = CpIter{ .bytes = word };
+        while (it.next()) |cp| {
+            if (!isAllowedScalar(cp)) {
+                try out.append(gpa, .{
+                    .off = t.off,
+                    .len = t.len,
+                    .word = word,
+                    .hint = "该字符不允许出现在母语标识符中（可能是同形异体字符或混排标点）",
+                });
+                break;
+            }
+        }
+    }
+    // 精确大小复制后释放 ArrayList（避免调用方 free(items) 尺寸不一致）
+    const result = try gpa.dupe(Violation, out.items);
+    out.deinit(gpa);
+    return result;
+}
+
+test "全角标点与同形字符被拦截" {
+    const gpa = std.testing.allocator;
+    const src = "常数 ａ = 1; 常数 名， = 2;";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    // ａ 为全角字母（非字母白名单外，按未知字符拦截），，为全角逗号
+    try std.testing.expect(vs.len >= 2);
+}
+
+test "弯引号/全角引号命中危险表，给出半角引号精确提示" {
+    const gpa = std.testing.allocator;
+    // 字符串误用弯双引号 “ ”（最常见 IME 误产出）
+    const src = "常数 标准库 = 导入“std”;";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    try std.testing.expect(vs.len >= 1);
+    // 必须命中危险表（danger 非 null）且建议半角为 `"`，而非泛白名单拒绝。
+    var got_quote = false;
+    for (vs) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.ascii, "\"")) got_quote = true;
+    }
+    try std.testing.expect(got_quote);
+}
+
+test "全角运算符命中危险表，给出半角运算符精确提示（而非泛「标识符非法字符」）" {
+    const gpa = std.testing.allocator;
+    // 算术表达式里误用全角加号 ＋（U+FF0B）
+    const src = "常数 \u{4e59}: \u{6574}\u{6570} = \u{7532} \u{FF0B} 1;";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    try std.testing.expect(vs.len >= 1);
+    // 必须命中危险表（danger 非 null）且建议半角为 `+`，不应走泛白名单拒绝（那时 ascii 为空）。
+    var got_op = false;
+    for (vs) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.ascii, "+")) got_op = true;
+    }
+    try std.testing.expect(got_op);
+}
+
+test "全角数字/拉丁字母命中变体兜底，给出半角替换而非泛「标识符非法字符」" {
+    const gpa = std.testing.allocator;
+    // 数值字面量误用全角 ５０（U+FF15 U+FF10）
+    const src = "常数 \u{7532}: \u{6574}\u{6570} = \u{FF15}\u{FF10};";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    try std.testing.expect(vs.len >= 1);
+    // 首个全角数字 ５ 应命中：danger 非空、hint=全角数字、ascii=“5”（走专门提示而非泛拒绝）。
+    var got_digit = false;
+    for (vs) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.hint, "全角数字") and std.mem.eql(u8, v.ascii, "5")) got_digit = true;
+    }
+    try std.testing.expect(got_digit);
+}
+
+test "全角空格（U+3000）命中危险表，给出精确“全角空格”提示而非泛白名单拒绝" {
+    const gpa = std.testing.allocator;
+    // 用全角空格做缩进（中文 IME 最高频误产）：
+    const src = "常数 甲 = 1;\n\u{3000}常数 乙 = 2;";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    try std.testing.expect(vs.len >= 1);
+    // 必须命中危险表（danger 非 null）、label=全角空格、建议半角为一个空格，
+    // 而非落到泛白名单分支（那时 danger=null、hint 为“不允许出现在母语标识符中”）。
+    var got_fwsp = false;
+    for (vs) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.hint, "全角空格") and std.mem.eql(u8, v.ascii, " ")) got_fwsp = true;
+    }
+    try std.testing.expect(got_fwsp);
+}
+
+test "不间断空格/零宽空格/破折号/省略号命中危险表，给精确提示而非泛白名单拒绝" {
+    const gpa = std.testing.allocator;
+    // 复制粘贴混入的不间断空格 U+00A0（作分隔）、零宽空格 U+200B（粘在标识符里）：
+    const src_nb = "常数 甲 = 1;\n\u{00A0}常数 乙 = 2;";
+    const toks_nb = try lexer.scan(gpa, src_nb);
+    defer gpa.free(toks_nb);
+    const vs_nb = try check(gpa, src_nb, toks_nb);
+    defer gpa.free(vs_nb);
+    var got_nbsp = false;
+    for (vs_nb) |v| {
+        // 必须命中危险表（danger 非 null）、hint=不间断空格、建议半角为一个空格（走空格分支）。
+        if (v.danger != null and std.mem.eql(u8, v.hint, "不间断空格") and std.mem.eql(u8, v.ascii, " ")) got_nbsp = true;
+    }
+    try std.testing.expect(got_nbsp);
+
+    // 自动更正把半角 - 变来的长破折号 U+2014，以及把 ... 变来的省略号 U+2026：
+    const src_dash = "常数 丙 = 10 \u{2014} 3;";
+    const toks_dash = try lexer.scan(gpa, src_dash);
+    defer gpa.free(toks_dash);
+    const vs_dash = try check(gpa, src_dash, toks_dash);
+    defer gpa.free(vs_dash);
+    var got_dash = false;
+    for (vs_dash) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.ascii, "-")) got_dash = true;
+    }
+    try std.testing.expect(got_dash);
+
+    const src_eli = "常数 丁 = 1;\u{2026}";
+    const toks_eli = try lexer.scan(gpa, src_eli);
+    defer gpa.free(toks_eli);
+    const vs_eli = try check(gpa, src_eli, toks_eli);
+    defer gpa.free(vs_eli);
+    var got_eli = false;
+    for (vs_eli) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.ascii, "...")) got_eli = true;
+    }
+    try std.testing.expect(got_eli);
+
+    // 零宽空格 U+200B：无可见半角替换（ascii 为空），靠精确 label 传达“请删除”。
+    const src_zw = "常数 戊\u{200B} = 5;";
+    const toks_zw = try lexer.scan(gpa, src_zw);
+    defer gpa.free(toks_zw);
+    const vs_zw = try check(gpa, src_zw, toks_zw);
+    defer gpa.free(vs_zw);
+    var got_zw = false;
+    for (vs_zw) |v| {
+        if (v.danger != null and v.ascii.len == 0 and std.mem.indexOf(u8, v.hint, "零宽空格") != null) got_zw = true;
+    }
+    try std.testing.expect(got_zw);
+}
+
+test "不可见字符总网：未逐个登记的危险表外宽度空格与零宽格式字符仍给精确提示而非泛拒绝" {
+    const gpa = std.testing.allocator;
+    // 细空格 U+2009（不在危险表、不在 FF01–FF5E）作分隔：应归入不可见空格、建议半角为一个空格。
+    const src_thin = "常数 甲 = 1;\n\u{2009}常数 乙 = 2;";
+    const toks_thin = try lexer.scan(gpa, src_thin);
+    defer gpa.free(toks_thin);
+    const vs_thin = try check(gpa, src_thin, toks_thin);
+    defer gpa.free(vs_thin);
+    var got_thin = false;
+    for (vs_thin) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.hint, "不可见空格") and std.mem.eql(u8, v.ascii, " ")) got_thin = true;
+    }
+    try std.testing.expect(got_thin);
+
+    // 文件中部 BOM U+FEFF（stripBom 只处理起始）：应归零宽/格式类、无可见半角替换。
+    const src_bom = "常数 甲 = 1;\n\u{FEFF}常数 乙 = 2;";
+    const toks_bom = try lexer.scan(gpa, src_bom);
+    defer gpa.free(toks_bom);
+    const vs_bom = try check(gpa, src_bom, toks_bom);
+    defer gpa.free(vs_bom);
+    var got_bom = false;
+    for (vs_bom) |v| {
+        if (v.danger != null and v.ascii.len == 0 and std.mem.indexOf(u8, v.hint, "零宽/格式控制字符") != null) got_bom = true;
+    }
+    try std.testing.expect(got_bom);
+
+    // 单词连接符 U+2060（隐形运算符区）：同样归零宽/格式类。
+    const src_wj = "常数 甲 = 1;\n\u{2060}常数 乙 = 2;";
+    const toks_wj = try lexer.scan(gpa, src_wj);
+    defer gpa.free(toks_wj);
+    const vs_wj = try check(gpa, src_wj, toks_wj);
+    defer gpa.free(vs_wj);
+    var got_wj = false;
+    for (vs_wj) |v| {
+        if (v.danger != null and v.ascii.len == 0 and std.mem.indexOf(u8, v.hint, "零宽/格式控制字符") != null) got_wj = true;
+    }
+    try std.testing.expect(got_wj);
+}
+
+test "CJK+ASCII 尾合并词元（变量1/甲1）不被误拒（白名单已放行标识符内 ASCII）" {
+    const gpa = std.testing.allocator;
+    // 合并后这些成为一个 nonascii_word 词元、内含 ASCII 数字：不应被判非法。
+    const src = "常数 变量1: i64 = 甲1;";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    try std.testing.expectEqual(@as(usize, 0), vs.len);
+}
+
+test "CJK 名里夹全角数字（甲\u{FF11}）仍被兜底拦下（词元合并未漏放全角）" {
+    const gpa = std.testing.allocator;
+    // 甲 + 全角 １（U+FF11）：合并后为一个词元，全角数字仍应命中兜底提示。
+    const src = "常数 甲\u{FF11}: i64 = 1;";
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    try std.testing.expect(vs.len >= 1);
+    var got = false;
+    for (vs) |v| {
+        if (v.danger != null and std.mem.eql(u8, v.hint, "全角数字")) got = true;
+    }
+    try std.testing.expect(got);
+}

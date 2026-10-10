@@ -1,0 +1,11 @@
+错误: 局部变量从未被修改
+  --> src/main.zz:1:26
+  | pub fn main() void { var s: []const u8 = ""; const q = s.lenn; _ = q; }
+  💡 Zig 要求只读绑定用 `常数`（const）；若确需修改，请保留 `变量`（var）并至少重新赋值一次。
+说明: 建议改用不可变常量
+  --> src/main.zz:1:26
+  | pub fn main() void { var s: []const u8 = ""; const q = s.lenn; _ = q; }
+  💡 该变量从未重新赋值，改用 `常数`（const）声明即可。
+错误: no member named 'lenn' in '[]const u8'
+  --> src/main.zz:1:58
+  | pub fn main() void { var s: []const u8 = ""; const q = s.lenn; _ = q; }

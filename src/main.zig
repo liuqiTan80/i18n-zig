@@ -1,0 +1,977 @@
+//! zzc —— 用母语编写真正的 Zig。
+//!
+//! 子命令：
+//!   zzc init <项目名>       生成母语工程骨架
+//!   zzc check [文件.zz]     翻译 + 词法/编译检查（母语报错）
+//!   zzc build [文件.zz]     翻译 -> zig build-exe（其余参数透传 zig）
+//!   zzc run   [文件.zz]     编译并运行，`--` 之后为程序参数
+//!   zzc test  [文件.zz]     翻译 -> zig test
+//!   zzc eject [目录]        导出标准 Zig 工程（毕业路径）
+//!   zzc lang                列出内置语言包
+//!   zzc version             版本信息
+//!
+//! 语法骨架保持 ASCII（() {} !T ?T @builtin），仅词法单元母语化；
+//! 错误标签（FileNotFound 等）与 std 路径在方言里原样可用。
+
+const std = @import("std");
+const builtin = @import("builtin");
+const Io = std.Io;
+const translate = @import("transpiler/translate.zig");
+const Mangle = @import("transpiler/mangle.zig");
+const ColumnMap = @import("transpiler/column_map.zig");
+const Pack = @import("lang/pack.zig");
+const diag = @import("diag/translate.zig");
+const cli = @import("cli/args.zig");
+
+const version_str = "0.1.0";
+const zh_pack = @embedFile("lang/packs/中文.txt");
+
+const Exit = error{ Usage, Failed };
+
+var gpa_: std.mem.Allocator = undefined; // arena，进程级
+var io_: Io = undefined;
+var out_w: *Io.Writer = undefined;
+var werr_file: Io.File.Writer = undefined;
+var werr: *Io.Writer = undefined;
+
+// ---------------------------------------------------------------- 基础 IO
+
+fn readWhole(path: []const u8) ![]const u8 {
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(io_, path, gpa_, .unlimited);
+    // 剔除可能的 UTF-8 BOM，避免 Windows 编辑器写入的 BOM 污染首个词元。
+    return translate.stripBom(bytes);
+}
+
+fn writeWhole(path: []const u8, data: []const u8) !void {
+    const dir = std.Io.Dir.cwd();
+    if (std.fs.path.dirname(path)) |parent| {
+        try dir.createDirPath(io_, parent);
+    }
+    var f = try dir.createFile(io_, path, .{});
+    defer f.close(io_);
+    var buf: [4096]u8 = undefined;
+    var w = Io.File.Writer.init(f, io_, &buf);
+    try w.interface.writeAll(data);
+    try w.interface.flush();
+}
+
+/// 判断相对当前工作目录的路径是否存在（仅用于避免覆盖，不区分文件/目录）。
+fn pathExists(path: []const u8) bool {
+    std.Io.Dir.cwd().access(io_, path, .{}) catch return false;
+    return true;
+}
+
+/// 原始字节读（**不**做 stripBom），用于拷贝资源文件（二进制安全）。
+fn readFileRaw(path: []const u8) ![]const u8 {
+    return std.Io.Dir.cwd().readFileAlloc(io_, path, gpa_, .unlimited);
+}
+
+/// 把某单位里 `@embedFile` 引用的资源从方言源目录原样拷到目标 .zig 所在目录（生成树或 eject dest）。
+/// zig 里 `@embedFile` 相对当前 .zig 所在目录解析：源 = dirname(native .zz)/p，目标 = dirname(dest .zig)/p。
+/// `root` 为镜像根（collect 传 `.zzc/gen`、eject 传 dest）：先做包含性守卫、目标解析 `..` 后越出 root 或 p 为绝对则直接跳过
+/// （先判后读、既不越界写也不读项目外文件），留给 zig 原生报错；仅当源文件存在才拷（二进制安全）。拷贝失败静默忽略。
+fn stageEmbedAssets(native_rel: []const u8, zig_str: []const u8, dest_zig: []const u8, root: []const u8) void {
+    var list = cli.extractEmbedPaths(gpa_, zig_str) catch return;
+    defer list.deinit(gpa_);
+    const nat_dir = std.fs.path.dirname(native_rel) orelse ".";
+    const dst_dir = std.fs.path.dirname(dest_zig) orelse ".";
+    for (list.items) |p| {
+        // 越界写守卫：解析后的目标必须仍严格处于镜像根内（否则 zig 也会拒、且不应把产物写到树外）。
+        const within = cli.embedPathStaysWithin(gpa_, root, dst_dir, p) catch false;
+        if (!within) continue;
+        const srcp = std.fs.path.join(gpa_, &.{ nat_dir, p }) catch continue;
+        std.mem.replaceScalar(u8, srcp, '\\', '/');
+        const dstp = std.fs.path.join(gpa_, &.{ dst_dir, p }) catch continue;
+        std.mem.replaceScalar(u8, dstp, '\\', '/');
+        const bytes = readFileRaw(srcp) catch continue; // 源缺失→跳过，交给 zig 自己报 `failed opening`
+        defer gpa_.free(bytes);
+        writeWhole(dstp, bytes) catch |e| {
+            printErr("zzc: 拷贝嵌入资源文件失败：{s} -> {s}（{s}）", .{ srcp, dstp, @errorName(e) });
+        };
+    }
+}
+
+fn printOut(comptime fmt: []const u8, args: anytype) void {
+    out_w.print(fmt ++ "\n", args) catch |e| {
+        printErr("zzc: 标准输出失败（{s}）", .{@errorName(e)});
+    };
+}
+
+fn printErr(comptime fmt: []const u8, args: anytype) void {
+    werr.print(fmt ++ "\n", args) catch |e| {
+        // 错误输出失败，无法记录
+        _ = e;
+    };
+}
+
+// ---------------------------------------------------------------- 符号表持久化
+
+/// 恢复历史符号表：读 `.zzc/symbols.txt` 后交给 `Mangle.parseSymbolText`（格式解析属 zzc_core 测试图、有单测）。
+fn loadSymbols(table: *Mangle) void {
+    const bytes = readWhole(".zzc/symbols.txt") catch return;
+    table.parseSymbolText(bytes);
+}
+
+fn saveSymbols(table: Mangle) void {
+    var out: std.ArrayList(u8) = .empty;
+    for (table.symbols.items) |s| {
+        out.appendSlice(gpa_, s.native) catch |e| {
+            printErr("zzc: 保存符号表失败（写入符号名）：{s}", .{@errorName(e)});
+            return;
+        };
+        out.appendSlice(gpa_, " = ") catch |e| {
+            printErr("zzc: 保存符号表失败（写入等号）：{s}", .{@errorName(e)});
+            return;
+        };
+        out.appendSlice(gpa_, s.ascii) catch |e| {
+            printErr("zzc: 保存符号表失败（写入 ASCII 名）：{s}", .{@errorName(e)});
+            return;
+        };
+        out.append(gpa_, '\n') catch |e| {
+            printErr("zzc: 保存符号表失败（写入换行）：{s}", .{@errorName(e)});
+            return;
+        };
+    }
+    writeWhole(".zzc/symbols.txt", out.items) catch |e| {
+        printErr("zzc: 保存符号表失败（写入文件）：{s}", .{@errorName(e)});
+    };
+}
+
+// ---------------------------------------------------------------- 工程收集与翻译
+
+const Unit = struct {
+    native_rel: []const u8, // src/main.zz（相对当前工作目录）
+    gen_rel: []const u8, // 生成文件相对路径，如 .zzc/gen/src/main.zig
+    nat_src: []const u8,
+    zig_str: []const u8,
+    map: ColumnMap,
+};
+
+const Project = struct {
+    units: std.ArrayList(Unit),
+};
+
+/// 生成文件相对路径：src/main.zz -> .zzc/gen/src/main.zig（保留子目录，如 src/sub/mod.zz）。
+fn genPathFor(gpa: std.mem.Allocator, rel: []const u8) ![]const u8 {
+    const dir_of = std.fs.path.dirname(rel) orelse ".";
+    const base = std.fs.path.basename(rel);
+    return std.fmt.allocPrint(gpa, ".zzc/gen/{s}/{s}.zig", .{ dir_of, std.fs.path.stem(base) });
+}
+
+/// 语言包中 `@embedFile` 的全部词形：ASCII 直通形 + 映射值恰为 @embedFile 的方言词（如 `嵌入文件`）。
+/// 供原文预扫描用（台账 D2：方言词尚未翻译，extractEmbedPaths 只认 ASCII 形不够）。
+fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
+    return keywordFormsFor(gpa, lang, "@embedFile");
+}
+
+/// 语言包中映射值恰为 `want` 的全部词形 + ASCII 直通形 `want` 本身（如 const → `const` + `常数`）。
+/// 供原文单跳变量实参解析（台账 D3：`常数 名字 = "…"; 嵌入文件(名字)` 的原文预扫描）。
+fn keywordFormsFor(gpa: std.mem.Allocator, lang: Pack, want: []const u8) ![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty; // 元素是字节切片；.items 即 []const []const u8
+    try list.append(gpa, want);
+    var it = lang.keywords.iterator();
+    while (it.next()) |e| {
+        if (std.mem.eql(u8, e.value_ptr.*, want)) try list.append(gpa, e.key_ptr.*);
+    }
+    return list.items;
+}
+
+/// 收集 entry 同目录（递归）全部 .zz 一并翻译（保证 @import 可达）。
+fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
+    const entry_dir = std.fs.path.dirname(entry) orelse ".";
+
+    var files: std.ArrayList([]const u8) = .empty;
+    // 目录不存在/不可读是常见用户情形（在错误目录运行），须给母语可操作提示，
+    // 不能让原始 FileNotFound 经 bail 的兜底分支泄漏成英文“内部错误”。
+    var dir = std.Io.Dir.cwd().openDir(io_, entry_dir, .{ .iterate = true }) catch {
+        printErr("zzc: 找不到可读取的工程目录 `{s}`；请在方言工程根目录（含 `src/*.zz`）运行，或先用 `zzc init <名字>` 新建工程。", .{entry_dir});
+        return error.Failed;
+    };
+    defer dir.close(io_);
+    var walker = try dir.walk(gpa_);
+    defer walker.deinit();
+    while (try walker.next(io_)) |e| {
+        if (e.kind != .file) continue;
+        if (!std.mem.endsWith(u8, e.path, ".zz")) continue;
+        const joined = if (std.mem.eql(u8, entry_dir, "."))
+            try std.fs.path.join(gpa_, &.{e.path})
+        else
+            try std.fs.path.join(gpa_, &.{ entry_dir, e.path });
+        // 归一为正斜杠：dir.walk 与 join 在 Windows 下会混入反斜杠，而 entry_dir 可能沿用用户
+        // 传入的正斜杠，导致方言路径出现 `src/sub\mod.zz` 这类混合分隔符；统一为 `src/sub/mod.zz`
+        // 既与文档/用法示例一致，也让 findUnit 的精确匹配不因分隔符差异而退化到 stem 兜底。
+        std.mem.replaceScalar(u8, joined, '\\', '/');
+        try files.append(gpa_, joined);
+    }
+
+    // 目录存在但无任何 .zz 源文件（空 src/ 或跑错目录）也要尽早母语报错，
+    // 避免下游以“入口不在工程”之类的间接信息困惑用户。
+    if (files.items.len == 0) {
+        printErr("zzc: 目录 `{s}` 下未找到任何方言源文件（.zz）；若要新建工程请用 `zzc init <名字>`。", .{entry_dir});
+        return error.Failed;
+    }
+
+    // 命名空间预留（防撞名）：intern 顺序派生 `z_<n>`，若用户源码里直接写了 ASCII
+    // 标识符 `z_1`，某母语名可能被 intern 成同一个 `z_1` → 生成两个同名声明（zig 报“重复
+    // 声明”却指向看起来毫不相干的 `z_1` 与母语名、诊断误导；运气不好还会静默改变语义）。
+    // 故翻译前对所有源文件做一次全局预扫描，预留出现的每个 `z_<十进制>` 独立词元编号，intern 跳过。
+    // 必须跨全量文件先预留、再翻译（否则后读文件里的 `z_1` 来不及影响先读文件的 intern）。
+    for (files.items) |rel| {
+        const src = readWhole(rel) catch continue;
+        defer gpa_.free(src);
+        table.reserveZInText(src);
+    }
+    // 消除跨会话撞名：把从 symbols.txt 恢复的、ASCII 落在用户新写 `z_N` 预留号上的历史映射重新安置。
+    try table.relocateReservedCollisions();
+
+    // 资产豁免采集（台账 D2）：被 `嵌入文件`/`@embedFile` 字面参引用的 `.zz` 是**数据文件**而非编译单元：
+    // 它们会由引用单元的 stageEmbedAssets 原样拷进生成树/eject 目标，若再被当方言源翻译，
+    // 模板正文会被全角/字符安全拦截、整工程 EXIT=1。故先从原文预扫描出引用集（词形动态取自语言包），
+    // 主循环命中即跳过；解析越出源根/绝对/非 .zz 的回 null 不豁免（留给 zig 原生报错）。
+    const leads = try embedWordForms(gpa_, lang);
+    // 单跳变量实参解析的 const 词形（`常数`/`const`；映射值恰为 const 的方言词都算）：
+    // `嵌入文件(名字)` 的变量引用同样要命中豁免，否则资产 .zz 仍被误当编译单元（D2×D3 组合面）。
+    // 注：`变量`(var) 不列入——zig 的 @embedFile 要求 comptime 实参，var 绑定本就非法。
+    const cs_leads = try keywordFormsFor(gpa_, lang, "const");
+    var exempt = std.StringHashMap(void).init(gpa_);
+    for (files.items) |rel| {
+        const raw = readWhole(rel) catch continue;
+        defer gpa_.free(raw);
+        var list = cli.extractEmbedPathsForms(gpa_, raw, leads, cs_leads) catch continue;
+        defer list.deinit(gpa_);
+        const rdir = std.fs.path.dirname(rel) orelse ".";
+        for (list.items) |p| {
+            // 注意：StringHashMap 存的是 slice 指针+长度、不拷贝内容，故 asset 不释放
+            //（gpa_ 随进程结束回收，与 files/joined 同风格）。
+            if (try cli.resolveEmbedZzRel(gpa_, rdir, p)) |asset| try exempt.put(asset, {});
+        }
+    }
+
+    // D4 编译单元优先：若 embed 豁免的 .zz 同时也是 import 目标（被真实编译单元 @import/导入），
+    // 则取消豁免——它是编译单元（需生成 .zig），其 embed 引用由 stageEmbedAssets 原样镜像 .zz，
+    // 同名 .zz 与 .zig 不同后缀可共存。单趟扫描：仅从当前非豁免文件中识别导入（级联场景下
+    // 被取消豁免的文件若有自己的 import 指向其他 exempt 文件，需再次构建收敛——P3 可接受）。
+    const imp_leads = try keywordFormsFor(gpa_, lang, "@import");
+    const no_const: []const []const u8 = &.{};
+    for (files.items) |rel| {
+        if (exempt.contains(rel)) continue; // 数据资产正文中的"导入"字串不视为真实 import
+        const raw = readWhole(rel) catch continue;
+        defer gpa_.free(raw);
+        var list = cli.extractEmbedPathsForms(gpa_, raw, imp_leads, no_const) catch continue;
+        defer list.deinit(gpa_);
+        const rdir = std.fs.path.dirname(rel) orelse ".";
+        for (list.items) |p| {
+            if (try cli.resolveEmbedZzRel(gpa_, rdir, p)) |target| {
+                if (exempt.contains(target)) _ = exempt.remove(target);
+            }
+        }
+    }
+
+    var proj = Project{ .units = .empty };
+    for (files.items) |rel| {
+        if (exempt.contains(rel)) continue; // 被当数据嵌入的 .zz 资产：不翻译、不入编译单元
+        const nat_src = try readWhole(rel);
+        // 先过全角/字符安全关
+        const vs = translate.preCheck(gpa_, nat_src) catch return error.Failed;
+        if (vs.len > 0) {
+            for (vs) |v| {
+                const lc = ColumnMap.lineColOf(nat_src, v.off);
+                if (v.ascii.len > 0) {
+                    if (v.ascii[0] == ' ') {
+                        // 全角空格：半角替换字面不可见，改用文字描述而非反引号包裹。
+                        printErr("{s}:{d}:{d}: 词法: {s}，请改用半角空格作缩进/分隔", .{ rel, lc.line, lc.col, v.hint });
+                    } else {
+                        printErr("{s}:{d}:{d}: 词法: {s}，请改用半角 `{s}`（Zig 语法符号不翻译）", .{ rel, lc.line, lc.col, v.hint, v.ascii });
+                    }
+                } else {
+                    printErr("{s}:{d}:{d}: 词法: {s}（`{s}`）", .{ rel, lc.line, lc.col, v.hint, v.word });
+                }
+            }
+            return error.Failed;
+        }
+        const res = try translate.translate(gpa_, nat_src, lang, table);
+        const gen = try genPathFor(gpa_, rel);
+        // .zzc 内容缓存：生成结果与磁盘上已有产物逐字节一致时跳过写盘，
+        // 避免无谓的磁盘刷新与下游 zig 重新编译触发。
+        if (readWhole(gen)) |old| {
+            if (!std.mem.eql(u8, old, res.zig_str)) try writeWhole(gen, res.zig_str);
+        } else |_| {
+            try writeWhole(gen, res.zig_str);
+        }
+        // 把本单位 @embedFile 引用的资源镜像进生成树（zig 相对 .zig 所在目录解析、需与生成文件同层）；镜像根 `.zzc/gen` 做越界写守卫。
+        stageEmbedAssets(rel, res.zig_str, gen, ".zzc/gen");
+        try proj.units.append(gpa_, .{
+            .native_rel = rel,
+            .gen_rel = gen,
+            .nat_src = nat_src,
+            .zig_str = res.zig_str,
+            .map = res.map,
+        });
+    }
+    return proj;
+}
+
+/// 分隔符无关的路径比较（`/` 与 `\` 视为等价）：采集侧已将 native_rel 归一为 `/`，
+/// 但用户传入的 entry 在 Windows 下可能带 `\`，故精确匹配需容忍分隔符差异。
+fn samePathRel(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        const sa = if (ca == '\\') '/' else ca;
+        const sb = if (cb == '\\') '/' else cb;
+        if (sa != sb) return false;
+    }
+    return true;
+}
+
+fn findUnit(proj: Project, entry: []const u8) ?Unit {
+    for (proj.units.items) |u| {
+        if (samePathRel(u.native_rel, entry)) return u;
+    }
+    // 宽松：按 stem 匹配（用户可能输入 src/main 或 main.zz）
+    const want = std.fs.path.stem(entry);
+    for (proj.units.items) |u| {
+        if (std.mem.eql(u8, std.fs.path.stem(u.native_rel), want)) return u;
+    }
+    return null;
+}
+
+// ---------------------------------------------------------------- zig 子进程与报错回译
+
+/// 执行一次编译；失败时把 stderr 回译成母语打印，返回 error.Failed。
+/// `seen` 不为 null 时跨多次调用去重诊断（`zzc check` 传入）。
+fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8, seen: ?*std.StringHashMap(void)) !void {
+    const res = std.process.run(gpa_, io_, .{
+        .argv = argv,
+        .create_no_window = true,
+    }) catch {
+        printErr("zzc: 无法启动 zig，请确认已安装 Zig 0.17+（PATH 中可找到 zig）", .{});
+        return error.Failed;
+    };
+    defer gpa_.free(res.stdout);
+    defer gpa_.free(res.stderr);
+
+    if (res.term.success()) return;
+
+    var units: std.ArrayList(diag.Unit) = .empty;
+    for (proj.units.items) |u| {
+        try units.append(gpa_, .{
+            .native_path = u.native_rel,
+            .gen_path = u.gen_rel,
+            .gen_src = u.zig_str,
+            .nat_src = u.nat_src,
+            .map = u.map,
+        });
+    }
+    const native_errs = diag.translateStderr(gpa_, lang, table, units.items, res.stderr, seen) catch res.stderr;
+    werr.writeAll(native_errs) catch |e| {
+        printErr("zzc: 写入错误信息失败：{s}", .{@errorName(e)});
+    };
+    try werr.flush();
+    return error.Failed;
+}
+
+// ---------------------------------------------------------------- 子命令
+
+fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
+    const entry = cli.pickEntry(args).entry;
+    const proj = try collectAndTranslate(entry, lang, table);
+    // 目标须确属工程（据此定位采集目录并给出母语提示）；但语义编译根取自“含 main 的文件”、
+    // 不一定等于用户点名的文件——若点名的是库模块（无 main），直接 `build-exe` 会被 zig 误报
+    // `root source file struct 'X' has no member named 'main'`，回译成费解的“成员不存在/查拼写”。
+    _ = findUnit(proj, entry) orelse {
+        printErr("zzc: {s} 不在工程目录中（收集自 {s}）", .{ entry, std.fs.path.dirname(entry) orelse "." });
+        return error.Failed;
+    };
+    // 在收集到的模块里找语义编译根：按“生成 Zig 里**真正含顶层 `pub fn main(`**”判定
+    // （而非仅按文件名 stem=="main"）。修复：入口被改名/写作 app.zz 等（含主函数）时，
+    // 旧按 stem 判定会找不到 main、退化成只做浅层 ast-check，令 `u8=300` 这类类型错被静默
+    // 放过（check 通过、build/run 却失败）。现按“是否真有 main”选根：① 常规 main.zz 仍深检；
+    // ② app.zz（含 main）也被 build-exe；③ 无 main 的纯库工程（含用户点名库文件）不 build-exe、
+    // 只 ast-check，不误报“无 main”（库直接 build-exe 会被 zig 报 root has no member named 'main'）。
+    var any_fail = false;
+    // 跨多次 zig 调用去重：入口 build-exe 会传递性检查导入链上的子模块，
+    // 随后的逐模块 ast-check 会对同一错重复报（zig ast-check 会做名字解析）。
+    var seen = std.StringHashMap(void).init(gpa_);
+    defer seen.deinit();
+    // ① 对每个含 main 的根做 build-exe 传递性语义深检（沿 @import 覆盖被导入的库模块，
+    // 含用户点名的那个）。临时产物固定同名、串行覆盖即可（用后即弃）。
+    for (proj.units.items) |u| {
+        if (!cli.zigHasMainFn(u.zig_str)) continue;
+        const bin = "-femit-bin=.zzc/tmp_check_root";
+        const argv: []const []const u8 = &.{ "zig", "build-exe", u.gen_rel, bin };
+        zigCompile(lang, table.*, proj, argv, &seen) catch |e| {
+            if (e == error.Failed) {
+                any_fail = true;
+            } else return e;
+        };
+    }
+    // ② 其余模块（不含 main 者）：仅做 ast-check（源码级语法 + 名字解析，不需要 main）。
+    for (proj.units.items) |u| {
+        if (cli.zigHasMainFn(u.zig_str)) continue; // 已作为语义根 build-exe
+        const chk: []const []const u8 = &.{ "zig", "ast-check", u.gen_rel };
+        zigCompile(lang, table.*, proj, chk, &seen) catch |e| {
+            if (e == error.Failed) {
+                any_fail = true;
+                continue; // 继续检查其余文件，汇总所有报错
+            }
+            return e;
+        };
+    }
+    if (any_fail) return error.Failed;
+    printOut("✔ 检查通过：{d} 个方言文件已翻译为合法 Zig", .{proj.units.items.len});
+}
+
+const BuildMode = enum { build, run, test_ };
+
+fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u8) !void {
+    // 拆 `--`：后半为程序参数
+    var zig_args = args;
+    var prog_args: []const []const u8 = &.{};
+    for (args, 0..) |a, idx| {
+        if (std.mem.eql(u8, a, "--")) {
+            zig_args = args[0..idx];
+            prog_args = args[idx + 1 ..];
+            break;
+        }
+    }
+
+    const pick = cli.pickEntry(zig_args);
+    const entry = pick.entry;
+    const proj = try collectAndTranslate(entry, lang, table);
+    const unit = findUnit(proj, entry) orelse {
+        printErr("zzc: {s} 不在工程目录中（收集自 {s}）", .{ entry, std.fs.path.dirname(entry) orelse "." });
+        return error.Failed;
+    };
+
+    const stem = std.fs.path.stem(unit.native_rel);
+    const ext_bin = if (builtin.os.tag == .windows) ".exe" else "";
+    const bin_full = try std.fmt.allocPrint(gpa_, ".zzc/bin/{s}{s}", .{ stem, ext_bin });
+    // zig -femit-bin 不会自建目录，需先创建产物目录
+    try std.Io.Dir.cwd().createDirPath(io_, ".zzc/bin");
+
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.append(gpa_, "zig");
+    try argv.append(gpa_, if (mode == .test_) "test" else "build-exe");
+    try argv.append(gpa_, unit.gen_rel);
+    if (mode != .test_) {
+        try argv.append(gpa_, try std.fmt.allocPrint(gpa_, "-femit-bin={s}", .{bin_full}));
+    }
+    // 透传除入口文件外的其余参数（含各种 zig 旗标及其值）：入口可能在任意位置，
+    // 故按 pickEntry 命中的下标剔除，而非假设入口总在首位。
+    for (zig_args, 0..) |a, i| {
+        if (pick.idx != null and i == pick.idx.?) continue;
+        try argv.append(gpa_, a);
+    }
+
+    try zigCompile(lang, table.*, proj, argv.items, null);
+
+    switch (mode) {
+        .test_ => printOut("✔ zig test 通过", .{}),
+        .build => printOut("✔ 产物：{s}", .{bin_full}),
+        .run => {
+            var run_argv: std.ArrayList([]const u8) = .empty;
+            try run_argv.append(gpa_, bin_full);
+            try run_argv.appendSlice(gpa_, prog_args);
+            var child = try std.process.spawn(io_, .{
+                .argv = run_argv.items,
+                .stdin = .inherit,
+                .stdout = .inherit,
+                .stderr = .inherit,
+            });
+            defer std.process.Child.kill(&child, io_);
+            const term = try child.wait(io_);
+            // 编译已成功：用户程序的退出码应忠实回传（脚本契约），而非被压成 1。
+            // 正常退出码非 0 → 以其原码结束；异常终止（信号/停止/未知）→ 无可靠码，回落失败。
+            const code: ?u8 = switch (term) {
+                .exited => |c| c,
+                else => null,
+            };
+            if (cli.runPropagateExitCode(code)) |c| {
+                out_w.flush() catch |e| {
+                    printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+                };
+                werr.flush() catch |e| {
+                    printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+                };
+                std.process.exit(c);
+            } else if (code == null) {
+                return error.Failed;
+            }
+        },
+    }
+}
+
+fn cmdInit(name: []const u8) !void {
+    // 先验工程名：空/`.`/`..`/上溯/绝对名会在预期外的位置建目录写文件（实测 `zzc init ..`
+    // 静默把工程建到父目录）。拒绝在任何 createDirPath/writeWhole 副作用之前。给出精确消息+exit 2
+    // （与无名字 init 的 error.Usage 退出码一致）；std.process.exit 跳过 defer 刷写，故先显式 flush。
+    if (cli.initNameIsUnsafe(name)) {
+        printErr("zzc: 工程名 `{s}` 不安全（不能为空、`.`/`..`、上溯路径或绝对路径）；请用相对当前目录的子目录名（如 `zzc init myapp`）。", .{name});
+        out_w.flush() catch |e| {
+            printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+        };
+        werr.flush() catch |e| {
+            printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+        };
+        std.process.exit(2);
+    }
+    const main_zz = try std.fmt.allocPrint(gpa_, "{s}/src/main.zz", .{name});
+    // 防覆盖：入口文件已存在则不写盘，避免清空用户已有工程的劳动成果（幂等、非破坏）。
+    if (pathExists(main_zz)) {
+        printOut("zzc: 工程 {s} 的入口 {s} 已存在，未覆盖；如需重新初始化请先删除该文件。进入目录后运行：zzc run", .{ name, main_zz });
+        return;
+    }
+    try std.Io.Dir.cwd().createDirPath(io_, name);
+    const proj_zz =
+        \\// zzc 母语工程模板 —— 在本目录运行 `zzc run` 即可
+        \\常数 标准库 = 导入("std");
+        \\
+        \\公开 函数 主函数() !void {
+        \\    变量 数量: 整数 = 10;
+        \\    数量 = 数量 + 1;
+        \\    标准库.打印("数量是：{d}\n", .{数量});
+        \\}
+        \\
+    ;
+    try writeWhole(main_zz, proj_zz);
+    printOut("已创建工程 {s}（src/main.zz）。进入目录后运行：zzc run", .{name});
+}
+
+/// 判断 eject 目标是否会与源码树重叠的纯谓词已移到 cli.ejectDestHitsSourceTree（属
+/// zzc_core 测试图，才能真跑单测）；下方 cmdEject 直接调用它。
+fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
+    const dest = if (args.len > 0) args[0] else "standard";
+    // 防毁源：在做任何工作（采集/翻译/写盘/清空）前先拒绝与源码树重叠的目标。
+    if (cli.ejectDestHitsSourceTree(dest)) {
+        printErr("zzc: eject 目标 `{s}` 会与方言源码目录 `src` 重叠或越出工程根，可能误删源码；请导出到一个独立的子目录（如 `zzc eject standard`）。", .{dest});
+        return error.Failed;
+    }
+    const proj = try collectAndTranslate("src/main.zz", lang, table);
+
+    // eject 产出的是可独立 `zig build` 的可执行程序，须有 `main` 入口；纯库工程无从毕业，
+    // 提前母语拒绝，避免写出指向缺失 src/main.zig 的坏 build.zig 再报“验证未通过”的误导。
+    // 选入口的判据与 cmdCheck 同构：按“生成 Zig 真含顶层 main”而非文件名 stem=="main"（后者与
+    // 第二十三轮修 check 前同病——入口改名 app.zz 含合法 main 时误射“未找到 main”假拒、无法 eject）。
+    var main_unit_idx: ?usize = null;
+    for (proj.units.items, 0..) |u, i| {
+        if (cli.zigHasMainFn(u.zig_str)) {
+            main_unit_idx = i;
+            break;
+        }
+    }
+    const mu = if (main_unit_idx) |i| proj.units.items[i] else {
+        printErr("zzc: 未找到 `main` 入口模块，无法 eject 为可执行程序；eject 需要一个含 `主函数`（main）的工程（纯库模块请用 `zzc check <文件>` 校验）。", .{});
+        return error.Failed;
+    };
+
+    // 陈旧文件清理：`dest/src` 是完全由方言工程派生的输出目录。若上次 eject 后有模块
+    // 被改名/删除（如 `sub/mod.zz`→`sub/core.zz`），仅靠逐文件覆写会残留已无方言对应的
+    // 孤儿 `.zig`——它仍随 `.paths = "src"` 打进毕业包、误导使用者。故先整体清空 `dest/src`
+    // 再重写，保证导出树与当前工程一一对应（`writeWhole` 会自动重建所需子目录）。
+    const dest_src = try std.fmt.allocPrint(gpa_, "{s}/src", .{dest});
+    if (pathExists(dest_src)) {
+        std.Io.Dir.cwd().deleteTree(io_, dest_src) catch |e| {
+            printErr("zzc: 清理旧导出目录 `{s}/src` 失败（{s}）；请手动删除后重试 eject。", .{ dest, @errorName(e) });
+            return error.Failed;
+        };
+    }
+
+    for (proj.units.items) |u| {
+        var content: std.ArrayList(u8) = .empty;
+        try content.appendSlice(gpa_, "// 由 zzc eject 导出的标准 Zig。母语符号对照表：\n");
+        for (table.symbols.items) |s| {
+            try content.appendSlice(gpa_, "//   ");
+            try content.appendSlice(gpa_, s.native);
+            try content.appendSlice(gpa_, " -> ");
+            try content.appendSlice(gpa_, s.ascii);
+            try content.append(gpa_, '\n');
+        }
+        try content.appendSlice(gpa_, "\n");
+        try content.appendSlice(gpa_, u.zig_str);
+        // 保留子目录结构：gen_rel 形如 `.zzc/gen/src/sub/mod.zig`，去掉 `.zzc/gen/` 前缀
+        // 得到 `src/sub/mod.zig`，据此写入导出根；若只取 basename 会拉平子目录，
+        // 导致导出后的 main.zig 中 `@import("sub/mod.zig")` 找不到文件、`zig build` 失败。
+        const gen_rel = u.gen_rel;
+        const rel = if (std.mem.startsWith(u8, gen_rel, ".zzc/gen/"))
+            gen_rel[".zzc/gen/".len..]
+        else
+            std.fs.path.basename(gen_rel);
+        const out_zig = try std.fmt.allocPrint(gpa_, "{s}/{s}", .{ dest, rel });
+        try writeWhole(out_zig, content.items);
+        // 随毕业一并把 @embedFile 引用的资源从 src/ 拷进 dest（dest 下的 .zig 位置与生成树同构）；
+        // 不搬则毕业后独立 `zig build` 会因 `@embedFile` 打不开目标而失败。镜像根 dest 做越界写守卫。
+        stageEmbedAssets(u.native_rel, u.zig_str, out_zig, dest);
+    }
+
+    // 自动迁移：写一份可直接 `zig build` 的 build.zig + build.zig.zon，作为毕业路径。
+    // 入口选取与 build.zig 的 root_source_file 都按 mu（含 main 的单元）而非硬编码 src/main.zig：
+    // - app_name：main.zz→"app"（历史约定、demos 依赖）；其他入口取自身 stem 自然反映名字（app.zz→app）；
+    // - entry_rel：导出后入口在 dest 下的相对路径（与 writeWhole 使用的同一变换），build.zig 据此定位。
+    const entry_stem = std.fs.path.stem(mu.native_rel);
+    const app_name: []const u8 = if (std.mem.eql(u8, entry_stem, "main")) "app" else entry_stem;
+    const entry_rel = if (std.mem.startsWith(u8, mu.gen_rel, ".zzc/gen/"))
+        mu.gen_rel[".zzc/gen/".len..]
+    else
+        std.fs.path.basename(mu.gen_rel);
+    const build_zig = try std.fmt.allocPrint(gpa_,
+        \\const std = @import("std");
+        \\
+        \\pub fn build(b: *std.Build) void {{
+        \\    const target = b.standardTargetOptions(.{{}});
+        \\    const optimize = b.standardOptimizeOption(.{{}});
+        \\    const exe = b.addExecutable(.{{
+        \\        .name = "{s}",
+        \\        .root_module = b.createModule(.{{
+        \\            .root_source_file = b.path("{s}"),
+        \\            .target = target,
+        \\            .optimize = optimize,
+        \\        }}),
+        \\    }});
+        \\    b.installArtifact(exe);
+        \\}}
+        \\
+    , .{ app_name, entry_rel });
+    try writeWhole(try std.fmt.allocPrint(gpa_, "{s}/build.zig", .{dest}), build_zig);
+
+    // Zig 0.17 的 `zig build` 要求 build.zig.zon 含顶层 fingerprint（u64）。
+    // 其高 32 位由包名派生、不可自行伪造（伪造会被判为 invalid），低 32 位是随机盐（由 zig 每次
+    // `zig build` 的随机 --seed 派生）。因此首次导出先写一份不带 fingerprint 的 zon，让本机 zig
+    // 告诉我们一个合法值，再回写。
+    // 幂等：但重复 eject 到同一目标时，若沿用“每次重新探测”会因低半随机而让 build.zig.zon
+    // 逐次产生无谓差异、破坏“字节级可复现”。故先读目标既有 zon 里的 fingerprint，命中则复用（跳过探测）。
+    const zon_path = try std.fmt.allocPrint(gpa_, "{s}/build.zig.zon", .{dest});
+    const existing_fp = readExistingFingerprint(dest, app_name);
+    try writeWhole(zon_path, try ejectZoneText(app_name, null));
+    const fp = existing_fp orelse probeFingerprint(dest);
+    if (fp) |t| {
+        try writeWhole(zon_path, try ejectZoneText(app_name, t));
+    } else {
+        printErr("zzc: 未能向 zig 查询包 fingerprint（zig 不可用？）；zon 暂缺该字段，首次 `zig build` 会提示合法值。", .{});
+    }
+
+    // 验证“毕业路径”：进入导出目录直接 `zig build`，确认可独立构建。
+    switch (verifyBuild(dest)) {
+        .ok => printOut("已导出标准 Zig 到 {s}/（含 build.zig + build.zig.zon）；`zig build` 验证通过，产物：{s}/zig-out/bin/{s}。", .{ dest, dest, app_name }),
+        .fail => {
+            printErr("zzc: 导出完成，但 `zig build` 验证未通过，请进入 {s}/ 手动排查。", .{dest});
+            return error.Failed;
+        },
+        .no_zig => printOut("已导出标准 Zig 到 {s}/（含 build.zig）；未检测到 zig，无法自动验证构建。", .{dest}),
+    }
+}
+
+/// 生成 eject 的 build.zig.zon 文本；fp 为工具链建议的 `0x....` 十六进制串（可为 null）。
+fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
+    var z: std.ArrayList(u8) = .empty;
+    try z.appendSlice(gpa_, "// 由 zzc eject 生成；可独立 `zig build` 构建。\n.{\n");
+    try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .name = .{s},\n", .{app_name}));
+    try z.appendSlice(gpa_, "    .version = \"0.1.0\",\n");
+    if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    .fingerprint = {s},\n", .{t}));
+    try z.appendSlice(gpa_, "    .minimum_zig_version = \"0.17.0\",\n");
+    try z.appendSlice(gpa_, "    .dependencies = .{},\n");
+    try z.appendSlice(gpa_, "    .paths = .{\n        \"build.zig\",\n        \"build.zig.zon\",\n        \"src\",\n    },\n}\n");
+    return z.toOwnedSlice(gpa_);
+}
+
+/// 在 dest 目录跑一次 `zig build`，从报错中抽取工具链建议的 fingerprint（形如 `0x....`）。
+/// 取 `value: 0x` 之后的十六进制串；missing 与 invalid 两种措辞都含此子串。
+fn probeFingerprint(dest: []const u8) ?[]const u8 {
+    const res = std.process.run(gpa_, io_, .{
+        .argv = &.{ "zig", "build" },
+        .cwd = .{ .path = dest },
+        .create_no_window = true,
+    }) catch return null;
+    defer gpa_.free(res.stdout);
+    defer gpa_.free(res.stderr);
+
+    const marker = "value: 0x";
+    const idx = std.mem.indexOf(u8, res.stderr, marker) orelse return null;
+    const digits_start = idx + marker.len; // 指向第一个十六进制位（0x 之后）
+    var end = digits_start;
+    while (end < res.stderr.len and std.ascii.isHex(res.stderr[end])) end += 1;
+    if (end == digits_start) return null;
+    // 连同前缀 `0x` 一并返回。
+    const zero_x = idx + (marker.len - 2); // "0x" 起始位置
+    return gpa_.dupe(u8, res.stderr[zero_x..end]) catch null;
+}
+
+/// 读目标目录既有 `build.zig.zon` 中的 fingerprint（`0x` 十六进制串，含前缀，gpa_ 拥有）；
+/// 不存在文件/无该字段时返回 null。解析逻辑在测试图内的 cli.parseFingerprintFromZone（可真跑单测）。
+fn readExistingFingerprint(dest: []const u8, app_name: []const u8) ?[]const u8 {
+    const zon_path = std.fmt.allocPrint(gpa_, "{s}/build.zig.zon", .{dest}) catch return null;
+    defer gpa_.free(zon_path);
+    const text = readWhole(zon_path) catch return null;
+    defer gpa_.free(text);
+    const found = cli.parseFingerprintFromZone(text, app_name) orelse return null;
+    return gpa_.dupe(u8, found) catch null;
+}
+
+const BuildVerify = enum { ok, fail, no_zig };
+
+/// 跑 `zig build` 验证毕业构建可独立成功。
+fn verifyBuild(dest: []const u8) BuildVerify {
+    const res = std.process.run(gpa_, io_, .{
+        .argv = &.{ "zig", "build" },
+        .cwd = .{ .path = dest },
+        .create_no_window = true,
+    }) catch return .no_zig;
+    defer gpa_.free(res.stdout);
+    defer gpa_.free(res.stderr);
+    return if (res.term.success()) .ok else .fail;
+}
+
+fn constTable(t: *const Mangle) *Mangle {
+    return @constCast(t);
+}
+
+/// 统一失败退出：把已缓冲的输出刷出后静默退出，
+/// 避免把 zzc 自身的 Zig 错误返回跟踪（stderr 栈帧）暴露给方言用户。
+fn bail(e: anyerror) noreturn {
+    switch (e) {
+        error.Usage => printErr("zzc: 未知或不完整的子命令；运行不带参数的 zzc 查看用法。", .{}),
+        error.Failed => {}, // 母语报错已在编译阶段打印，无需重复
+        // 常见文件系统/内存错误给纯母语可操作提示（避免把 `NotDir`/`AccessDenied` 等
+        // Zig 内部英文标识符直接泄给方言用户）；未收录错误保留中文句式、仅附一个诊断码。
+        else => {
+            if (cli.localizeFsErr(e)) |zh| {
+                printErr("zzc: {s}", .{zh});
+            } else {
+                printErr("zzc: 操作未能完成（诊断码 {s}）；请重试，若持续失败请携此码反馈。", .{@errorName(e)});
+            }
+        },
+    }
+    out_w.flush() catch |e| {
+        printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+    };
+    werr.flush() catch |e| {
+        printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+    };
+    std.process.exit(if (e == error.Usage) 2 else 1);
+}
+
+// ---------------------------------------------------------------- 入口
+
+pub fn main(init: std.process.Init) !void {
+    gpa_ = init.arena.allocator();
+    io_ = init.io;
+
+    var stdout_buf: [4096]u8 = undefined;
+    var stdout_file = Io.File.Writer.init(.stdout(), io_, &stdout_buf);
+    out_w = &stdout_file.interface;
+    defer out_w.flush() catch |e| {
+        printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
+    };
+
+    var wbuf: [4096]u8 = undefined;
+    var werr_file = Io.File.Writer.init(.stderr(), io_, &wbuf);
+    werr = &werr_file.interface;
+    defer werr.flush() catch |e| {
+        printErr("zzc: 刷新错误输出失败：{s}", .{@errorName(e)});
+    };
+
+    // all_args[0] 是可执行文件自身路径，子命令从 [1] 开始
+    const all_args = try init.minimal.args.toSlice(gpa_);
+    if (all_args.len < 2) {
+        printOut("{s}", .{cli.usage_text});
+        return;
+    }
+    const cmd = all_args[1];
+    const args = all_args[2..];
+
+    // 惯例帮助旗标：`--help`/`-h`/`-?`/`help` 都应打印用法并成功退出（而非当未知子命令报 EXIT=2）。
+    // 放在解析语言包之前：用法文本静态、不依赖 lang。
+    if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or
+        std.mem.eql(u8, cmd, "-?") or std.mem.eql(u8, cmd, "help"))
+    {
+        printOut("{s}", .{cli.usage_text});
+        return;
+    }
+
+    var lang = try Pack.parse(gpa_, zh_pack);
+    defer lang.deinit();
+
+    if (std.mem.eql(u8, cmd, "version")) {
+        printOut("zzc {s}（语言包：{s}）", .{ version_str, lang.name });
+        return;
+    }
+    if (std.mem.eql(u8, cmd, "lang")) {
+        printOut("内置语言包：{s}(zh) —— 关键字 {d} 条 / 路径别名 {d} 条 / 报错模式 {d} 条", .{
+            lang.name, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
+        });
+        return;
+    }
+    if (std.mem.eql(u8, cmd, "init")) {
+        if (args.len < 1) bail(error.Usage);
+        cmdInit(args[0]) catch |e| bail(e);
+        return;
+    }
+
+    var table = Mangle.init(gpa_);
+    defer table.deinit();
+    loadSymbols(&table);
+
+    if (std.mem.eql(u8, cmd, "check")) {
+        cmdCheck(lang, &table, args) catch |e| bail(e);
+    } else if (std.mem.eql(u8, cmd, "build")) {
+        cmdBuild(lang, &table, .build, args) catch |e| bail(e);
+    } else if (std.mem.eql(u8, cmd, "run")) {
+        cmdBuild(lang, &table, .run, args) catch |e| bail(e);
+    } else if (std.mem.eql(u8, cmd, "test")) {
+        cmdBuild(lang, &table, .test_, args) catch |e| bail(e);
+    } else if (std.mem.eql(u8, cmd, "eject")) {
+        cmdEject(lang, &table, args) catch |e| bail(e);
+    } else {
+        // 显式给出未知/拼错的子命令（如 `zzc runn`）必须以非零码失败：旧行为只把用法打到
+        // stdout 并 return→exit 0，会让 CI/脚本把拼错的命令误判为成功。走 error.Usage 统一提示并 exit 2。
+        bail(error.Usage);
+    }
+    saveSymbols(table);
+}
+// ---------------------------------------------------------------- 单元测试
+
+test "readWhole - 读取文件内容" {
+    const gpa = std.testing.allocator;
+
+    // 创建临时测试文件
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const test_file = try tmp_dir.realpathAlloc(gpa, "test.txt");
+    const content = "测试内容";
+    try std.fs.createFileAbsolute(test_file, .{});
+    var f = try std.fs.openFileAbsolute(test_file, .{ .mode = .write_only });
+    defer f.close();
+    try f.writeAll(content);
+
+    // 测试 readWhole
+    const result = try readWhole(test_file);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(content, result);
+}
+
+test "writeWhole - 写入文件内容" {
+    const gpa = std.testing.allocator;
+
+    // 创建临时目录
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const test_file = try tmp_dir.realpathAlloc(gpa, "subdir/test.txt");
+    const content = "测试写入内容";
+
+    // 测试 writeWhole
+    try writeWhole(test_file, content);
+
+    // 验证文件内容
+    const f = try std.fs.openFileAbsolute(test_file, .{ .mode = .read_only });
+    defer f.close();
+    var buf: [1024]u8 = undefined;
+    const bytes_read = try f.readAll(&buf);
+    try std.testing.expectEqualStrings(content, buf[0..bytes_read]);
+}
+
+test "pathExists - 路径存在性检查" {
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const gpa = std.testing.allocator;
+    const test_file = try tmp_dir.realpathAlloc(gpa, "test.txt");
+
+    // 不存在的路径
+    try std.testing.expect(!pathExists(test_file));
+
+    // 创建文件后存在
+    try std.fs.createFileAbsolute(test_file, .{});
+    try std.testing.expect(pathExists(test_file));
+}
+
+test "readFileRaw - 原始字节读取（不strip BOM）" {
+    const gpa = std.testing.allocator;
+
+    // 创建临时文件
+    const tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    const test_file = try tmp_dir.realpathAlloc(gpa, "test.bin");
+    const content = "\xEF\xBB\xBF测试内容"; // 含 UTF-8 BOM
+    try std.fs.createFileAbsolute(test_file, .{});
+    var f = try std.fs.openFileAbsolute(test_file, .{ .mode = .write_only });
+    defer f.close();
+    try f.writeAll(content);
+
+    // 测试 readFileRaw 不剥离 BOM
+    const result = try readFileRaw(test_file);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(content, result);
+}
+
+test "genPathFor - 生成文件路径" {
+    const gpa = std.testing.allocator;
+
+    // 测试根目录文件
+    const path1 = try genPathFor(gpa, "main.zz");
+    defer gpa.free(path1);
+    try std.testing.expectEqualStrings(".zzc/gen/main.zig", path1);
+
+    // 测试子目录文件
+    const path2 = try genPathFor(gpa, "src/sub/mod.zz");
+    defer gpa.free(path2);
+    try std.testing.expectEqualStrings(".zzc/gen/src/sub/mod.zig", path2);
+}
+
+test "samePathRel - 分隔符无关路径比较" {
+    // 相同路径
+    try std.testing.expect(samePathRel("src/main.zz", "src/main.zz"));
+
+    // 分隔符不同但等价
+    try std.testing.expect(samePathRel("src/main.zz", "src\\main.zz"));
+
+    // 不同路径
+    try std.testing.expect(!samePathRel("src/main.zz", "src/lib.zz"));
+}
+
+test "stripBom - UTF-8 BOM 剥离" {
+    const gpa = std.testing.allocator;
+
+    // 带 BOM 的内容
+    const with_bom = "\xEF\xBB\xBF测试内容";
+    const result = try translate.stripBom(gpa, with_bom);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings("测试内容", result);
+
+    // 不带 BOM 的内容
+    const without_bom = "测试内容";
+    const result2 = try translate.stripBom(gpa, without_bom);
+    defer gpa.free(result2);
+    try std.testing.expectEqualStrings("测试内容", result2);
+}
+
+test "keywordFormsFor - 获取关键字词形" {
+    const gpa = std.testing.allocator;
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 测试获取 @embedFile 的词形
+    const forms = try keywordFormsFor(gpa, lang, "@embedFile");
+    defer gpa.free(forms);
+
+    // 至少包含 ASCII 直通形
+    try std.testing.expect(forms.len > 0);
+    try std.testing.expect(std.mem.eql(u8, forms[0], "@embedFile"));
+}
+
+test "embedWordForms - 获取嵌入文件词形" {
+    const gpa = std.testing.allocator;
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 测试获取嵌入文件词形
+    const forms = try embedWordForms(gpa, lang);
+    defer gpa.free(forms);
+
+    // 至少包含 ASCII 直通形
+    try std.testing.expect(forms.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, forms[0], "@embedFile") != null);
+}

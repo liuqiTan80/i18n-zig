@@ -1,0 +1,4 @@
+错误: 引用了不存在的内建函数（@ 开头）
+  --> src/main.zz:1:32
+  | pub fn main() void { const q = @importt("std"); _ = q; }
+  💡 `@` 开头的内建函数须用标准 Zig 原名（如 `@import`、`@embedFile`、`@as`、`@min`）；部分内建有母语别名，见关键字对照表。请核对拼写。

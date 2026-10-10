@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一 ref 上取消旧的在跑任务，节省 CI 配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-eject:
+    name: 构建 / 测试 / 毕业链路（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 安装 Zig 0.17
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: 构建 zzc
+        run: zig build
+
+      - name: 单元与快照测试
+        run: zig build test --summary all
+
+      - name: 端到端基线校验（zzc run ↔ eject 后纯 zig build，逐字节一致）
+        shell: pwsh
+        run: ./tools/check-demos.ps1

@@ -1,0 +1,9 @@
+错误: 不可变常量被重新赋值
+  --> src\main.zz:7:5
+  |     总数 = 20;
+  💡 Zig 的 `常数`（const）一经绑定不能修改；需要改变请改用 `变量`（var）声明。
+referenced by:
+    callMain [inlined]: C:\Users\guilt\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.17.0\lib\std\start.zig:788:64
+    WinStartup: C:\Users\guilt\AppData\Local\Microsoft\WinGet\Packages\zig.zig_Microsoft.Winget.Source_8wekyb3d8bbwe\zig-x86_64-windows-0.17.0\lib\std\start.zig:576:17
+    2 reference(s) hidden; use '-freference-trace=4' to see all references
+

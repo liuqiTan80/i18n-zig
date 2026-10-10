@@ -1,0 +1,11 @@
+# Zig 构建产物与缓存
+/.zig-cache/
+/zig-out/
+**/.zig-cache/
+**/zig-out/
+
+# zzc 翻译缓存（.zzc/gen、符号表、产物）
+**/.zzc/
+
+# zzc eject 毕业输出目录（可由 `zzc eject` 再生）
+**/standard/

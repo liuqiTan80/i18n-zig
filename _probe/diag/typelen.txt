@@ -1,0 +1,11 @@
+错误: 局部变量从未被修改
+  --> src/main.zz:1:23
+  | 公开 函数 主函数() void { 变量 s: []const u8 = ""; 常数 q = s.lenn; _ = q; }
+  💡 Zig 要求只读绑定用 `常数`（const）；若确需修改，请保留 `变量`（var）并至少重新赋值一次。
+说明: 建议改用不可变常量
+  --> src/main.zz:1:23
+  | 公开 函数 主函数() void { 变量 s: []const u8 = ""; 常数 q = s.lenn; _ = q; }
+  💡 该变量从未重新赋值，改用 `常数`（const）声明即可。
+错误: no member named 'lenn' in '[]const u8'
+  --> src/main.zz:1:52
+  | 公开 函数 主函数() void { 变量 s: []const u8 = ""; 常数 q = s.lenn; _ = q; }

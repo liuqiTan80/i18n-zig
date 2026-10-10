@@ -1,0 +1,10 @@
+// zzc 中文方言示例：嵌套子目录模块 —— 演示 导入("sub/mod.zz") 跨子目录引用
+// 在 demo/nested 目录内运行 `zzc run`；`zzc eject` 后会保留 src/sub/ 目录结构，
+// 使导出后的 @import("sub/mod.zig") 在独立 `zig build` 下仍成立。
+常数 模块 = 导入("sub/mod.zz");
+常数 标准库 = 导入("std");
+
+公开 函数 主函数() !void {
+    常数 结果 = 模块.加一(41);
+    标准库.打印("结果={d}\n", .{结果});
+}
