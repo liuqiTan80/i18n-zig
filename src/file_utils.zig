@@ -5,6 +5,59 @@ const std = @import("std");
 /// 默认最大文件大小：100MB
 pub const DEFAULT_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
 
+/// 错误类型
+pub const Error = error{
+    FileTooLarge,
+    SymlinkDetected,
+    PathTraversal,
+    Unexpected,
+};
+
+/// 检查路径是否为符号链接
+pub fn isSymlink(path: []const u8) !bool {
+    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer file.close();
+
+    const stat = try file.stat();
+    return stat.kind == .sym_link;
+}
+
+/// 解析路径，确保不会遍历到预期目录之外
+/// 返回解析后的绝对路径，如果遍历到 root 之外则返回 error.PathTraversal
+pub fn resolvePath(gpa: std.mem.Allocator, path: []const u8, root: []const u8) ![]const u8 {
+    // 获取绝对路径
+    const abs_path = try std.fs.path.join(gpa, &.{ root, path });
+    defer gpa.free(abs_path);
+
+    // 规范化路径（移除 .. 和 .）
+    const normalized = try std.fs.path.join(gpa, &.{ ".", std.fs.path.relativePath(gpa, abs_path) catch abs_path });
+    defer gpa.free(normalized);
+
+    // 检查是否仍在 root 内
+    if (!std.mem.startsWith(u8, normalized, root)) {
+        return error.PathTraversal;
+    }
+
+    return gpa.dupe(u8, normalized);
+}
+
+/// 检查路径是否安全（不是符号链接，且在预期目录内）
+pub fn isPathSafe(gpa: std.mem.Allocator, path: []const u8, root: []const u8) !bool {
+    // 检查是否为符号链接
+    if (try isSymlink(path)) {
+        return false;
+    }
+
+    // 检查路径遍历
+    const resolved = resolvePath(gpa, path, root) catch |e| {
+        if (e == error.PathTraversal) return false;
+        return e;
+    };
+    defer gpa.free(resolved);
+
+    return true;
+}
+
 /// 读取整个文件内容到内存（带大小限制）
 pub fn readWhole(path: []const u8) ![]const u8 {
     return readWholeWithLimit(path, DEFAULT_MAX_FILE_SIZE);
@@ -12,6 +65,11 @@ pub fn readWhole(path: []const u8) ![]const u8 {
 
 /// 读取整个文件内容到内存（带自定义大小限制）
 pub fn readWholeWithLimit(path: []const u8, max_size: usize) ![]const u8 {
+    // 检查是否为符号链接
+    if (isSymlink(path) catch false) {
+        return error.SymlinkDetected;
+    }
+
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
 
