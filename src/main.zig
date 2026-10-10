@@ -75,12 +75,12 @@ fn pathExists(path: []const u8) bool {
 
 /// 原始字节读（**不**做 stripBom），用于拷贝资源文件（二进制安全）。
 fn readFileRaw(path: []const u8) ![]const u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io_, path, gpa_, .unlimited);
+    return file_utils.readWhole(path);
 }
 
 /// 读取整个文件内容到内存（带 BOM 剥离）
 fn readWhole(path: []const u8) ![]const u8 {
-    const bytes = try std.Io.Dir.cwd().readFileAlloc(io_, path, gpa_, .unlimited);
+    const bytes = try file_utils.readWhole(path);
     return translate.stripBom(bytes);
 }
 

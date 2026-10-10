@@ -2,12 +2,22 @@
 
 const std = @import("std");
 
-/// 读取整个文件内容到内存
+/// 默认最大文件大小：100MB
+pub const DEFAULT_MAX_FILE_SIZE: usize = 100 * 1024 * 1024;
+
+/// 读取整个文件内容到内存（带大小限制）
 pub fn readWhole(path: []const u8) ![]const u8 {
+    return readWholeWithLimit(path, DEFAULT_MAX_FILE_SIZE);
+}
+
+/// 读取整个文件内容到内存（带自定义大小限制）
+pub fn readWholeWithLimit(path: []const u8, max_size: usize) ![]const u8 {
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
 
     const size = try file.getEndPos();
+    if (size > max_size) return error.FileTooLarge;
+
     const buf = try std.heap.page_allocator.alloc(u8, size);
     errdefer std.heap.page_allocator.free(buf);
 
