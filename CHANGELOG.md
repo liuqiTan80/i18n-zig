@@ -182,6 +182,8 @@ zzc 首个可用版本：用母语（首发中文）编写真实 Zig 的方言�
 
 - 改（fix(build/pack-orphan-overlay-guard)，新登并消 D19）：第五十九轮。继 D18 后继续审自动发现生成器，发现同族第二类静默失败：`generatePackRegistry` 仅在“基包 key 匹配”处收集补充层（build.zig 142 行），从不校验补充层 `# @overlay-of` 是否指向真实基包；写错则该层被**静默丢弃**、不报错也不进注册表，叠加关键字无声失效（现有测仅在恰为 zh 且已写对时能捕获）。修复：发射基包前新增孤儿补充层校验（`overlay_of` 不命中任何基包 key 即 `std.process.fatal`）。**验证**：正向既有包 `zig build` 0 错/`test` **116/116**/`check-demos` **4/4**；**负向探针**（本轮有真实可验性）临时造 `_坏叠加探针.txt`（`# @overlay-of 不存在的基包键`）→ 强制重跑后 `zig build` **EXIT=1** 且报确切 fatal，删探针后回归三绿（产物均已清）。**新坐实守则 R9f**：构建脚本命令式扫 `packs/`、包文件非声明依赖→仅新增 .txt 不触发脚本重跑，需改 build.zig/干净构建才重扫。互引 docs/消缺台账.md 第 59 轮记录（随第五十九轮消缺提交入库）。
 
+- 改（fix(cli/genpath-root-dot) + test(coverage)，新登并消 D20、新登 D21）：第六十轮。转向覆盖薄弱面：核实 `root.zig`（zzc_core 测试图）不导入 `main.zig`，而 main.zig 有 9 个 `test` 块**从不执行**（D7 同根、仅部分消）。按 D7 纯逻辑下沉路径，将自包含纯函数 `genPathFor`/`samePathRel` 从 main.zig 逐字平移至 `cli/args.zig`（已在测试图），main 端加 `const X = cli.X;` 别名使调用点零改动，两测随之进图真跑。**坐实真缺陷 D20**：`genPathFor` 测一旦真跑即红——旧实现对根目录文件（`main.zz`）因 `dirname orelse "."` 产出 `.zzc/gen/./main.zig` 的 `.` 段噪声（带子目录文件正常）；因测从不运行、此瑕长期被掩盖。按测意图修正：无目录成分时直接 `.zzc/gen/<stem>.zig`。**新登 D21（待办）**：main.zig 仍剩 7 个死测（IO 类依赖进程全局、keyword/embed 需 Pack）本轮未下沉。**验证**：`zig build` 0；`zig build test --summary all` **118/118**（+2：genPathFor 从红→修后转绿）；`check-demos` **4/4**（demos 走带目录路、不受 `./` 修正影响）。互引 docs/消缺台账.md 第 60 轮记录（随第六十轮消缺提交入库）。
+
 ### 依赖
 
 - 需要本机安装 Zig 0.17.0+（`zzc` 通过进程调用 `zig`，不链接 libzig）。

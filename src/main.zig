@@ -212,12 +212,8 @@ const Project = struct {
     units: std.ArrayList(Unit),
 };
 
-/// 生成文件相对路径：src/main.zz -> .zzc/gen/src/main.zig（保留子目录，如 src/sub/mod.zz）。
-fn genPathFor(gpa: std.mem.Allocator, rel: []const u8) ![]const u8 {
-    const dir_of = std.fs.path.dirname(rel) orelse ".";
-    const base = std.fs.path.basename(rel);
-    return std.fmt.allocPrint(gpa, ".zzc/gen/{s}/{s}.zig", .{ dir_of, std.fs.path.stem(base) });
-}
+/// 生成文件相对路径：src/main.zz -> .zzc/gen/src/main.zig（保留子目录）。第 60 轮纯逻辑下沉 cli 并进测试图。
+const genPathFor = cli.genPathFor;
 
 /// 语言包中 `@embedFile` 的全部词形：ASCII 直通形 + 映射值恰为 @embedFile 的方言词（如 `嵌入文件`）。
 /// 供原文预扫描用（台账 D2：方言词尚未翻译，extractEmbedPaths 只认 ASCII 形不够）。
@@ -363,16 +359,8 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
 }
 
 /// 分隔符无关的路径比较（`/` 与 `\` 视为等价）：采集侧已将 native_rel 归一为 `/`，
-/// 但用户传入的 entry 在 Windows 下可能带 `\`，故精确匹配需容忍分隔符差异。
-fn samePathRel(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        const sa = if (ca == '\\') '/' else ca;
-        const sb = if (cb == '\\') '/' else cb;
-        if (sa != sb) return false;
-    }
-    return true;
-}
+/// 但用户传入的 entry 在 Windows 下可能带 `\`，故精确匹配需容忍分隔符差异。第 60 轮下沉 cli 并进测试图。
+const samePathRel = cli.samePathRel;
 
 fn findUnit(proj: Project, entry: []const u8) ?Unit {
     for (proj.units.items) |u| {
@@ -1020,31 +1008,6 @@ test "readFileRaw - 原始字节读取（不strip BOM）" {
     const result = try readFileRaw(test_file);
     defer gpa.free(result);
     try std.testing.expectEqualStrings(content, result);
-}
-
-test "genPathFor - 生成文件路径" {
-    const gpa = std.testing.allocator;
-
-    // 测试根目录文件
-    const path1 = try genPathFor(gpa, "main.zz");
-    defer gpa.free(path1);
-    try std.testing.expectEqualStrings(".zzc/gen/main.zig", path1);
-
-    // 测试子目录文件
-    const path2 = try genPathFor(gpa, "src/sub/mod.zz");
-    defer gpa.free(path2);
-    try std.testing.expectEqualStrings(".zzc/gen/src/sub/mod.zig", path2);
-}
-
-test "samePathRel - 分隔符无关路径比较" {
-    // 相同路径
-    try std.testing.expect(samePathRel("src/main.zz", "src/main.zz"));
-
-    // 分隔符不同但等价
-    try std.testing.expect(samePathRel("src/main.zz", "src\\main.zz"));
-
-    // 不同路径
-    try std.testing.expect(!samePathRel("src/main.zz", "src/lib.zz"));
 }
 
 test "stripBom - UTF-8 BOM 剥离" {

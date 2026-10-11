@@ -21,6 +21,54 @@ pub fn pickEntry(args: []const []const u8) EntryPick {
     return .{ .entry = "src/main.zz", .idx = null };
 }
 
+/// 方言入口相对路径 → 生成树内 .zig 落点。
+/// 根目录文件直接 `.zzc/gen/<stem>.zig`；带子目录则保留层级 `.zzc/gen/<dir>/<stem>.zig`。
+/// 第 60 轮自 main.zig 下沉至测试图（D7：main.zig 的 test 块从不执行、此纯函数此前零有效覆盖）；
+/// 激活测时发现旧实现对根目录文件会因 `dirname orelse "."` 产出 `.zzc/gen/./main.zig` 的 `.` 段噪声，按测意图修正。
+pub fn genPathFor(gpa: std.mem.Allocator, rel: []const u8) ![]const u8 {
+    const stem = std.fs.path.stem(std.fs.path.basename(rel));
+    if (std.fs.path.dirname(rel)) |dir_of| {
+        return std.fmt.allocPrint(gpa, ".zzc/gen/{s}/{s}.zig", .{ dir_of, stem });
+    }
+    return std.fmt.allocPrint(gpa, ".zzc/gen/{s}.zig", .{stem});
+}
+
+/// 分隔符无关的相对路径比较（`/` 与 `\` 视为同）。第 60 轮自 main.zig 下沉至测试图。
+pub fn samePathRel(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        const sa = if (ca == '\\') '/' else ca;
+        const sb = if (cb == '\\') '/' else cb;
+        if (sa != sb) return false;
+    }
+    return true;
+}
+
+test "genPathFor - 生成文件路径" {
+    const gpa = std.testing.allocator;
+
+    // 测试根目录文件
+    const path1 = try genPathFor(gpa, "main.zz");
+    defer gpa.free(path1);
+    try std.testing.expectEqualStrings(".zzc/gen/main.zig", path1);
+
+    // 测试子目录文件
+    const path2 = try genPathFor(gpa, "src/sub/mod.zz");
+    defer gpa.free(path2);
+    try std.testing.expectEqualStrings(".zzc/gen/src/sub/mod.zig", path2);
+}
+
+test "samePathRel - 分隔符无关路径比较" {
+    // 相同路径
+    try std.testing.expect(samePathRel("src/main.zz", "src/main.zz"));
+
+    // 分隔符不同但等价
+    try std.testing.expect(samePathRel("src/main.zz", "src\\main.zz"));
+
+    // 不同路径
+    try std.testing.expect(!samePathRel("src/main.zz", "src/lib.zz"));
+}
+
 test "pickEntry：带值旗标不被误当入口，仅 .zz 作为文件" {
     // 纯旗标带空格值：`-O ReleaseFast` 都不该被当入口，入口回落默认。
     const a = [_][]const u8{ "-O", "ReleaseFast" };
