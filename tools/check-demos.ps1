@@ -86,5 +86,48 @@ foreach ($d in $demos) {
 }
 
 Set-Location $root
-if ($fail -gt 0) { throw ("$fail demo(s) failed the baseline check") }
+
+# --- D38 e2e guard (round 86 defect): `zzc run` whose user program exits with a
+# NON-ZERO code takes the third exit path (std.process.exit) which historically
+# skipped the dispatch-tail saveSymbols -> newly interned native mappings were
+# silently lost. main.zig is outside the unit-test graph, so this behavioral
+# contract is pinned end-to-end: faithful exit code 7 AND symbols.txt persisted.
+# NOTE: this script must stay pure ASCII (PowerShell 5.1 -File misreads BOM-less
+# UTF-8 as GBK); the native identifier is built from code points instead.
+Write-Output "== d38 symbols-persistence guard =="
+$g = Join-Path $root ".zig-cache/d38_guard"
+if (Test-Path $g) { Remove-Item -Recurse -Force $g }
+New-Item -ItemType Directory -Force -Path (Join-Path $g "src") | Out-Null
+$natName = [string][char]0x6D4B + [string][char]0x8BD5 + [string][char]0x7B26 + [string][char]0x53F7 # cjk native identifier built from code points
+$gsrc = @"
+const std = @import("std");
+
+pub fn main() !void {
+    const $natName = 7;
+    std.debug.print("{d}\n", .{$natName});
+    std.process.exit(7);
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $g "src\main.zz"), $gsrc, (New-Object System.Text.UTF8Encoding($false)))
+$go = Join-Path $g "o.txt"; $ge = Join-Path $g "e.txt"
+$gp = Start-Process -FilePath $zzc -ArgumentList "run" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $g -RedirectStandardOutput $go -RedirectStandardError $ge
+$guardOk = $true
+if ($gp.ExitCode -ne 7) { Write-Output ("  [FAIL] d38 guard: expected faithful exit code 7, got " + $gp.ExitCode); $guardOk = $false }
+$symFile = Join-Path $g ".zzc\symbols.txt"
+if (-not (Test-Path $symFile)) {
+    Write-Output "  [FAIL] d38 guard: symbols.txt missing after run with non-zero user exit (third exit path swallowed saveSymbols)"
+    $guardOk = $false
+} else {
+    $symTxt = [System.Text.Encoding]::UTF8.GetString((Read-B $symFile))
+    if ($symTxt -notmatch '=\s*z_\d+') {
+        Write-Output "  [FAIL] d38 guard: symbols.txt present but no persisted native->z_N mapping"
+        $guardOk = $false
+    }
+}
+if ($guardOk) { Write-Output "  [PASS] d38 guard: non-zero-exit run persisted symbol mapping; exit code 7 propagated faithfully" }
+else { $fail = $fail + 1 }
+Remove-Item -Recurse -Force $g -ErrorAction SilentlyContinue
+
+if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
