@@ -415,3 +415,30 @@ test "空值条目拒绝（D30）：keywords/aliases/$code/diagnostics 空 patte
     try std.testing.expectEqual(@as(usize, 1), ok.diagnostics.items.len);
     try std.testing.expectEqualStrings("", ok.diagnostics.items[0].tip);
 }
+
+test "parseInto 对抗/畸形段头与诊断元数不足：一律 InvalidLangPack 干净拒绝、不 panic（包文件系外部可编辑面）" {
+    // 现有测（D30/R11/B6）只喂合法段头与三足诊断行；对抗/畸形形零覆盖。本测钉住各
+    // `indexOfScalar(...) orelse return` 守卫兵实拦下越界、日后重构删任一 orelse 即红。
+    const gpa = std.testing.allocator;
+
+    // 段名畸形：未知段名 / 缺右方括号 / 空段名——均须拒而非 panic（不拿缺括号行去切片）。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[unknown]\n常数 = const\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[keywords\n常数 = const\n")); // 缺 ]
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[]\n常数 = const\n")); // 空段名
+
+    // 诊断元数不足：零竖线（p1 orelse）/ 仅一竖线缺第三段（p2 orelse）——须拒、不得越界切 rest。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[diagnostics]\nd = 无竖线\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[diagnostics]\nd = 模式|译文\n"));
+
+    // keywords/aliases 段行缺 `=`：indexOfScalar '=' 的 orelse 须命中拒错。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[keywords]\n常数 const\n"));
+
+    // 白名单行仅备注（`|` 前为空）：rule.len==0 须拒。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[whitelist]\n|只有备注\n"));
+
+    // 对照：行内 `#`/`//` 不剔离（注释系整行首字符，见文件头），值按原样保留——钉住“无行内注释”这一
+    // by-design（真包 中文.txt 值行零行内注释），防未来“善意”加行内注释剔离而改坏含 # 的合法值。
+    var okp = try parse(gpa, "$code = te\n[keywords]\n常数 = a#b//c\n");
+    defer okp.deinit();
+    try std.testing.expectEqualStrings("a#b//c", okp.keywords.get("常数").?);
+}
