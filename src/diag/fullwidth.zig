@@ -1,11 +1,15 @@
 //! 非 ASCII 词法安全审查（合并 fullwidth 与 unicode_confusion 两个关注点）：
 //!
-//!   - 方言只允许「母语字母词」与 ASCII Zig 语法。全角标点（；（）＝）、
-//!     同形异体字符（如西里尔字母冒充拉丁字母）都会在这里被拦截，
+//!   - 方言只允许「母语文字」与 ASCII Zig 语法。全角标点（；（）＝）、不可见字符、
+//!     以及**文字区间白名单之外**的同形字符（如希腊 α 冒充拉丁）会在这里被泛拦截，
 //!     而不是透传给 zig 产生费解报错。
-//!   - 白名单策略：词元的每个码点必须满足
-//!       字母（Unicode Letter 属性）∪ CJK 表意文字 ∪ 半角下划线 ∪ 常见文字组合符，
-//!     或命中「危险字符表」给出针对性的更正提示。
+//!   - 白名单策略（显式码点区间表，**非** Unicode Letter 属性）：词元的每个码点必须落在
+//!     假名/CJK 各扩展/谚文/西里尔/阿拉伯/泰文等列示区间 ∪ ASCII 字母数字下划线，
+//!     否则泛拒绝；另命中「危险字符表」者给针对性更正提示。
+//!     注意：组合符（U+0300 段）与拉丁扩展字母（é 等）**不在**白名单——旧注曾误称放行，
+//!     实为泛拒绝拦截（见守卫测钉住；若未来要支持越南文等叠加符号方言须正式登记消缺）。
+//!   - 文字混排（如西里尔 р+拉丁 rint 冒充 print）本模块**不专门处理**：西里尔等整段系
+//!     俄文等方言的合法母语文字，从未建「同形冲突表」；同形防线仅对白名单外字符生效。
 
 const std = @import("std");
 const lexer = @import("../transpiler/lexer.zig");
@@ -93,7 +97,7 @@ fn isAllowedScalar(cp: u21) bool {
     if (cp >= 0xAC00 and cp <= 0xD7AF) return true; // 谚文音节
     if (cp >= 0x1100 and cp <= 0x11FF) return true; // 谚文字母
     if (cp >= 0x20000 and cp <= 0x2FA1F) return true; // CJK 扩展 B-F / 兼容
-    if (cp >= 0x0400 and cp <= 0x04FF) return true; // 西里尔字母（俄文方言合法，同形风险由冲突表拦）
+    if (cp >= 0x0400 and cp <= 0x04FF) return true; // 西里尔字母（俄文等方言合法母语文字；同形冲突表未建，与拉丁混排不专拦，见文件头）
     if (cp >= 0x0600 and cp <= 0x06FF) return true; // 阿拉伯字母
     if (cp >= 0x0E00 and cp <= 0x0E7F) return true; // 泰文
     if (cp >= 0xFF10 and cp <= 0xFF19) return false; // 全角数字（显式拦截）
@@ -554,4 +558,51 @@ test "R7：首字节位图快跳——只跳专门扫描、绝不跳白名单（
         if (v.danger == null and std.mem.indexOf(u8, v.hint, "不允许出现在母语标识符中") != null) got_homoglyph = true;
     }
     try std.testing.expect(got_homoglyph);
+}
+
+test "区间白名单真边界：纯西里尔/与拉丁混排作方言文字放行，组合符与拉丁扩展泛拒（D35 失实注释更正后钉住现行语义）" {
+    // 旧头注曾宣称「Unicode Letter 字母+组合符放行」「同形字符（含西里尔冒充）都会在此拦截」
+    // 且引用不存在的「冲突表」——本测钉住更正后的真实防线：
+    // ① 纯西里尔词元（р）∈ 0x400..0x4FF → 合法方言文字，无违规；
+    const gpa = std.testing.allocator;
+    const src_cyr = "常数 \u{0440} = 1;"; // р（Cyrillic）单独作标识符
+    const toks_cyr = try lexer.scan(gpa, src_cyr);
+    defer gpa.free(toks_cyr);
+    const vs_cyr = try check(gpa, src_cyr, toks_cyr);
+    defer gpa.free(vs_cyr);
+    try std.testing.expectEqual(@as(usize, 0), vs_cyr.len);
+
+    // ② 西里尔+拉丁混排（рrint）：冲突表未建、逐码点均合法 → 放行（by-design 缝隙正式建档；
+    //    若未来真建冲突表，应作为新的消缺/特性同步改此测，而非静默翻转语义）。
+    const src_mix = "常数 \u{0440}rint = 1;";
+    const toks_mix = try lexer.scan(gpa, src_mix);
+    defer gpa.free(toks_mix);
+    const vs_mix = try check(gpa, src_mix, toks_mix);
+    defer gpa.free(vs_mix);
+    try std.testing.expectEqual(@as(usize, 0), vs_mix.len);
+
+    // ③ 组合符 U+0301（旧注误称放行）：实落白名单外 → 泛拒（danger=null）；首字节 0xCC 不在
+    //    R7 位图 → 走快路径仍被白名单拦住，与 α 同形防线同理。
+    const src_comb = "常数 名\u{0301} = 1;";
+    const toks_comb = try lexer.scan(gpa, src_comb);
+    defer gpa.free(toks_comb);
+    const vs_comb = try check(gpa, src_comb, toks_comb);
+    defer gpa.free(vs_comb);
+    var got_comb = false;
+    for (vs_comb) |v| {
+        if (v.danger == null and std.mem.indexOf(u8, v.hint, "不允许出现在母语标识符中") != null) got_comb = true;
+    }
+    try std.testing.expect(got_comb);
+
+    // ④ 拉丁扩展 é（U+00E9，非 Unicode Letter 全放而系显式区间表）：同被泛拒。
+    const src_e = "常数 caf\u{00e9} = 1;";
+    const toks_e = try lexer.scan(gpa, src_e);
+    defer gpa.free(toks_e);
+    const vs_e = try check(gpa, src_e, toks_e);
+    defer gpa.free(vs_e);
+    var got_e = false;
+    for (vs_e) |v| {
+        if (v.danger == null) got_e = true;
+    }
+    try std.testing.expect(got_e);
 }
