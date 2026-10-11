@@ -253,3 +253,38 @@ test "未闭合字面量以反斜杠结尾不得越出 src 尾（词元边界不
     try std.testing.expectEqual(@as(usize, 1), toks.len);
     try std.testing.expectEqualStrings(closed, toks[0].text(closed));
 }
+
+test "词元边界不变量：任意源在任意字节处截断，scan 皆不 panic、每词元 off+len <= 源长（D33 不变量向全词类与 EOF 截断点扩展）" {
+    // 现有测仅钉特定完整词元、D33 测仅覆盖三种「末字节反斜杠」形；而任意源在任意偏移
+    // 截断（EOF 可切在词元中段、源文件截断可达）对全体词类零覆盖。本测逐 probe 逐截断点
+    // 扫一遍，钩住「词元必落在源内、不重叠、t.text 不 panic」不变量——日后任一分支删守卫即红。
+    const gpa = std.testing.allocator;
+    const probes = [_][]const u8{
+        "// 注释到行尾没有换行",
+        "\\\\ 多行串原样复制",
+        "\"字符串里的 常数 不译\"",
+        "'字'",
+        "@\"符号 整体\"",
+        "@",
+        "变量1 = 甲10 ;",
+        "std.debug.print",
+        "嵌入文件(\"路径\") 到 EOF",
+        "x = \"未闭合串",
+        "@\"半闭合尾反斜杠\\",
+    };
+    for (probes) |probe| {
+        var cut: usize = 0;
+        while (cut <= probe.len) : (cut += 1) {
+            const truncated = probe[0..cut];
+            const toks = try scan(gpa, truncated);
+            defer gpa.free(toks);
+            var prev_end: usize = 0;
+            for (toks) |t| {
+                try std.testing.expect(t.off + t.len <= truncated.len); // 绝不越尾
+                _ = t.text(truncated); // 切片不 panic 即边界安全
+                try std.testing.expect(t.off >= prev_end); // 词元不重叠、按序
+                prev_end = t.off + t.len;
+            }
+        }
+    }
+}
