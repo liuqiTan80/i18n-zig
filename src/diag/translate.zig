@@ -541,16 +541,20 @@ pub fn translateStderr(
                 owned = try localizeRunner(gpa, m.message);
                 shown = owned.?;
             }
-            // 纯母语过滤器：对依赖循环错误消息进行最终检查
+            // 纯母语过滤器：对依赖循环错误消息进行最终检查。
+            // 释放须置于本 dep-loop 块作用域、shown 全部使用之后（同 renderDiag 的 owned_filtered 形制）；
+            // 若误写进内层 `if (!whitelist.check)` 块尾，则 filtered 在块一结束即释放、而 shown 在块外
+            // 才被下方 appendPrintF 读取 → 悬垂读（use-after-free，第 70 轮 D28）。
+            var owned_filtered: ?[]const u8 = null;
             if (filter) |f| {
                 if (f.*.detectEnglish(shown)) {
                     if (!f.*.whitelist.check(shown)) {
-                        const filtered = try f.*.filterMessage(gpa, shown, "dependency loop", nowEpochS(io_));
-                        defer gpa.free(filtered);
-                        shown = filtered;
+                        owned_filtered = try f.*.filterMessage(gpa, shown, "dependency loop", nowEpochS(io_));
+                        shown = owned_filtered.?;
                     }
                 }
             }
+            defer if (owned_filtered) |o| gpa.free(o);
             const kind_cn = kind_zh.get("error") orelse "error";
             try appendPrintF(&out, gpa, "{s}: {s}\n", .{ kind_cn, shown });
             if (m.tip.len != 0) {
@@ -1997,6 +2001,69 @@ test "renderDiag 用精确计数分配器时不泄漏 allocPrint 临时串（D27
     const rendered = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "cannot assign to constant", null);
     defer gpa.free(rendered);
     try hasSub(rendered, "不可变常量被重新赋值");
+}
+
+/// 测试专用：把每次 `free` 前的内存填成哨兵字节 `0xDD` 再交回底层分配器。
+/// 用于确定性坐实「某串在真正使用前就被释放、随后仍被读取」的悬垂读（use-after-free）：
+/// 若释放发生在读取之前，其字节会全变 0xDD、出现在输出里即铁证。底层接 `std.testing.allocator`、
+/// 保留其泄漏检测（本测只测悬垂读、不测泄漏，二者互补）。
+/// 0.17 vtable 形制：alloc/resize/remap/free 分别经 rawAlloc/rawResize/rawRemap/rawFree 委托底层。
+const PoisonAlloc = struct {
+    backing: std.mem.Allocator,
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *PoisonAlloc = @ptrCast(@alignCast(ctx));
+        return self.backing.rawAlloc(len, alignment, ra);
+    }
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *PoisonAlloc = @ptrCast(@alignCast(ctx));
+        return self.backing.rawResize(memory, alignment, new_len, ra);
+    }
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *PoisonAlloc = @ptrCast(@alignCast(ctx));
+        return self.backing.rawRemap(memory, alignment, new_len, ra);
+    }
+    fn free(ctx: *anyopaque, old_mem: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *PoisonAlloc = @ptrCast(@alignCast(ctx));
+        @memset(old_mem, 0xDD); // 释放前投毒
+        self.backing.rawFree(old_mem, alignment, ra);
+    }
+    fn allocator(self: *PoisonAlloc) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+    }
+};
+
+test "translateStderr 依赖循环分支：filterMessage 临时串不得在渲染前被释放（D28 坐实·悬垂读）" {
+    // 依赖循环分支把 `shown = filtered`（filterMessage 的 owned 结果）却在**内层 if 块尾**就
+    // `defer gpa.free(filtered)`——块一结束即释放，而 shown 在块外第 555 行才被 appendPrintF 读取
+    // → 读已释放内存（UB）。孪生的 renderDiag 用 `var owned_filtered + 函数作用域 defer`（用后才
+    // free）是正确形制，本分支系复制时把 defer 误写进了内层块。产品 gpa_=arena（逐块 free 为 no-op）
+    // 故不现形、既有测清一色 arena 包裹亦不暴（与 D27 同一 arena 系统性盲区、惟此为 P1 悬垂读）。
+    var p = PoisonAlloc{ .backing = std.testing.allocator };
+    const gpa = p.allocator();
+
+    // 最小包（无 [diagnostics]）→ matchDiag 不命中依赖循环消息 → shown 留英 → detectEnglish 真
+    // → 非白名单 → filterMessage 被调用（分配 owned 临时串）。若用 zh_pack，`循环依赖` 条目会命中、
+    // 译文为中文、detectEnglish 假、走不到 filterMessage，故必须用不含该诊断项的最小包才能达本分支。
+    const min_pack =
+        \\# 最小包（无诊断表）\n
+        \\[keywords]\n
+        \\常数 = const\n
+    ;
+    var lang = try Pack.parse(gpa, min_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    var f = try PureFilter.init(gpa, .{}, null);
+    defer f.deinit();
+
+    const res = try translateStderr(gpa, lang, table, &.{}, "error: dependency loop with length 3", null, &f);
+    defer gpa.free(res);
+
+    // 红→绿判据：修复前 filtered 在内层块尾提前释放、渲染时读到 0xDD 哨兵；修复后用后才释放、无哨兵。
+    try std.testing.expect(std.mem.indexOfScalar(u8, res, 0xDD) == null);
+    // 确证该分支真被执行（走了 filterMessage 兑底、含"原文"字样），非误接其他路径。
+    try std.testing.expect(std.mem.indexOf(u8, res, "原文") != null);
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {
