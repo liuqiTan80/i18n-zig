@@ -326,71 +326,6 @@ pub const PureFilter = struct {
     }
 };
 
-/// 短语本地化兜底（复用 translate.zig 中的逻辑）
-pub fn localizeFallback(gpa: std.mem.Allocator, text: []const u8) ![]const u8 {
-    const pairs = [_][2][]const u8{
-        .{ "expected ", "期望 " },
-        .{ ", found ", "，实得 " },
-        .{ "; found ", "；实得 " },
-        .{ " passed", " 通过" },
-        .{ " skipped", " 跳过" },
-        .{ " failed", " 失败" },
-        .{ "FAIL ", "失败 " },
-        .{ "error: ", "错误: " },
-        .{ "warning: ", "警告: " },
-        .{ "note: ", "说明: " },
-        .{ "unrecognized parameter", "无法识别的参数" },
-        .{ "argument(s)", "参数" },
-        .{ "arguments", "参数" },
-        .{ "argument", "参数" },
-        .{ "array elements", "数组元素" },
-        .{ "an identifier", "标识符" },
-        .{ "missing struct field", "结构体缺少字段" },
-        .{ "cannot represent integer value", "无法表示整数值" },
-        .{ "outside array of length ", "超出数组长度 " },
-        .{ "index ", "下标 " },
-        .{ "invalid format string ", "无效格式串 " },
-        .{ " for type '", " 对类型 '" },
-        .{ "type '", "类型 '" },
-        .{ "unhandled enumeration value", "未处理的枚举取值" },
-        .{ "missing closing ", "缺少闭合的 " },
-        .{ "variable of type ", "变量（类型 " },
-        .{ " must be const or comptime", "）必须是 `常数`（const）或 `计期`（comptime）" },
-        .{ "error union type", "错误联合类型" },
-        .{ "optional type", "可选类型" },
-        .{ "does not support", "不支持" },
-        .{ "field access", "字段访问" },
-        .{ "not a function", "不是函数" },
-        .{ "cannot dereference non-pointer", "不能解引用非指针" },
-        .{ "invalid escape character", "非法转义字符" },
-        .{ " is invalid", " 无效" },
-        .{ "length ", "长度 " },
-        .{ " here", " 在此处" },
-    };
-
-    var out = std.ArrayList(u8).empty;
-    errdefer out.deinit(gpa);
-
-    var i: usize = 0;
-    while (i < text.len) {
-        var matched = false;
-        for (pairs) |p| {
-            if (std.mem.startsWith(u8, text[i..], p[0])) {
-                try out.appendSlice(gpa, p[1]);
-                i += p[0].len;
-                matched = true;
-                break;
-            }
-        }
-        if (!matched) {
-            try out.append(gpa, text[i]);
-            i += 1;
-        }
-    }
-
-    return out.toOwnedSlice(gpa);
-}
-
 test "纯母语过滤器初始化" {
     const gpa = std.testing.allocator;
     var filter = try PureFilter.init(gpa, .{}, null);
@@ -573,15 +508,6 @@ test "F3 - JSON 渲染：合法可解析、中文原样、特殊字符转义、�
     const want_suggested = try std.fmt.allocPrint(gpa, "[待翻译] {s}", .{items[0].phrase});
     defer gpa.free(want_suggested);
     try std.testing.expectEqualStrings(want_suggested, parsed.value.phrases[0].suggested_translation);
-}
-
-test "localizeFallback - 短语替换" {
-    const gpa = std.testing.allocator;
-    const result = try localizeFallback(gpa, "expected type, found 'i64'");
-    defer gpa.free(result);
-
-    try std.testing.expect(std.mem.indexOf(u8, result, "期望 ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "，实得 ") != null);
 }
 
 test "renderUntranslatedJson - mid-loop OOM 不得泄漏已分配字符串（D22 坐实）" {

@@ -950,6 +950,30 @@ test "诊断回译：参数个数/缺字段/匹配不穷尽/整数越界/除零�
     try noSub(red, "redundant");
 }
 
+test "localizeRunner 最长超串优先：裸复数 arguments 整体替换不残留 s（第 75 轮·活路径护栏）" {
+    // pairs 采用「逐字符贪心 + 数组序首个前缀命中」，要求最长超串在前：`argument(s)`/`arguments`
+    // 必须排在 `argument` 之前。若有人把 `argument` 上移（如按字母序重排），裸复数 "arguments"
+    // 会被 `argument` 抢先命中、残留 "s" 于「参数」与「，实得」之间→静默错译。本测钉死该不变量
+    // （既有测仅覆盖 `argument(s)`/单数 `argument`，独缺裸复数这一能证伪顺序的唯一形）。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    const out = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 14, "error", "expected 2 arguments, found 3", &filter);
+    defer gpa.free(out);
+    try hasSub(out, "期望");
+    try hasSub(out, "参数，实得"); // 复数被整体替换、无残 "s"（若顺序被破坏则成「参数s，实得」）
+    try hasSub(out, "2");
+    try hasSub(out, "3");
+    try noSub(out, "argument");
+}
+
 test "诊断回译：未使用循环标签/语句结束符缺失/'an identifier' 描述符不泄漏英文" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
