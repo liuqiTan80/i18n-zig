@@ -3,7 +3,8 @@
 //! 文件格式：
 //!   - `#` 或 `//` 开头为注释行；空行跳过
 //!   - `[段名]` 切换当前段：keywords / aliases / diagnostics / whitelist
-//!   - `键 = 值`：键值均去除首尾空白；值保留内部空白
+//!   - `键 = 值`：键值均去除首尾空白；值保留内部空白；**空值一律拒绝**（D30：空值会被转译端
+//!     把词元抹成空串／绕过 `$code` 校验／使空 pattern 吞掉全部诊断；唯 diagnostics 第三段 tip 可空）
 //!   - diagnostics 段的值以 `|` 分隔三段：`匹配前缀|译文模板|教学提示`
 //!   - whitelist 段每行即一条白名单规则（整行精确匹配、无需 `=`），供纯母语过滤器豁免（台账 F2）
 //!
@@ -170,6 +171,10 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 const key = std.mem.trim(u8, line[0..eq], " \t");
                 const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
                 if (key.len == 0) return error.InvalidLangPack;
+                // 空值条目一律拒（D30 源头治理）：keywords/aliases 空值命中转译端会把词元抹成
+                // 空串产碎码；`$code =` 置空串恰绕过 validate 首关（只查 `== "??"`）；守卫置于
+                // $name/$code 分支之前，三条路径一并封口，转译端无从见到空值。
+                if (value.len == 0) return error.InvalidLangPack;
                 const map = if (section == .keywords) &self.keywords else &self.aliases;
                 if (std.mem.eql(u8, key, "$name")) {
                     self.name = value;
@@ -188,9 +193,15 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 const p1 = std.mem.indexOfScalar(u8, value, '|') orelse return error.InvalidLangPack;
                 const rest = value[p1 + 1 ..];
                 const p2 = std.mem.indexOfScalar(u8, rest, '|') orelse return error.InvalidLangPack;
+                const pattern = std.mem.trim(u8, value[0..p1], " ");
+                const message = std.mem.trim(u8, rest[0..p2], " ");
+                // 空 pattern 使 matchDiag 的 `indexOf(msg, "")` 恒真、吞掉全部报错转成同一译文
+                // （全局静默错译）；空 message 命中后输出空诊断。唯 tip 可空（`tip.len != 0`
+                // 才渲染提示行是既有契约，见 D30）。
+                if (pattern.len == 0 or message.len == 0) return error.InvalidLangPack;
                 try self.upsertDiagnostic(gpa, .{
-                    .pattern = std.mem.trim(u8, value[0..p1], " "),
-                    .message = std.mem.trim(u8, rest[0..p2], " "),
+                    .pattern = pattern,
+                    .message = message,
                     .tip = std.mem.trim(u8, rest[p2 + 1 ..], " "),
                 });
             },
@@ -379,4 +390,28 @@ test "R11 空补充层等价单包 parse（loadWithOverlays 不退化现有行�
     try std.testing.expectEqualStrings(a.code, b.code);
     try std.testing.expectEqual(a.keywords.count(), b.keywords.count());
     try std.testing.expectEqualStrings("const", b.keywords.get("常数").?);
+}
+
+test "空值条目拒绝（D30）：keywords/aliases/$code/diagnostics 空 pattern・空 message 均 InvalidLangPack" {
+    // 缺陷面：parseInto 各分支只查键非空、值空串放行——①keywords/aliases 空值命中转译端
+    // emitReplacement 把词元抹成空串（产碎码）；②`$code =` 置空串恰绕过 validate 首关
+    // （`code == "??"`），B6 防的静默降级被空值开门；③diagnostics 空 pattern 使 matchDiag
+    // 的 `indexOf(msg, "")` 恒真、吞掉全部报错转成空译文（全局静默错译）。修法源头治理：
+    // parse 即拒，转译端无从见到空值。唯 tip 维持可空（`tip.len != 0` 才渲染提示行是既有契约）。
+    const gpa = std.testing.allocator;
+
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[keywords]\n常数 =\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[keywords]\n常数 = \n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[aliases]\n标准库.打印 =\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code =\n[keywords]\n常数 = const\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[diagnostics]\nd = |译文|提示\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[diagnostics]\nd = 模式||提示\n"));
+
+    // 对照：合法包照过；diagnostics 空 tip 仍合法（不渲染提示行、非缺陷面）。
+    // 不对残包调 validate——它只验 parse 封口面，契约完整性由 B6 测以真实包把关。
+    var ok = try parse(gpa, "$code = te\n[keywords]\n常数 = const\n[diagnostics]\nd = 模式|译文|\n");
+    defer ok.deinit();
+    try std.testing.expectEqualStrings("const", ok.keywords.get("常数").?);
+    try std.testing.expectEqual(@as(usize, 1), ok.diagnostics.items.len);
+    try std.testing.expectEqualStrings("", ok.diagnostics.items[0].tip);
 }
