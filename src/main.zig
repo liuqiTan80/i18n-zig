@@ -554,6 +554,11 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
                 else => null,
             };
             if (cli.runPropagateExitCode(code)) |c| {
+                // D38（第 86 轮）：本 exit 是继「正常返回」「bail」之后的第三条退出路径，同样不跑
+                // main 帧 defer、永不回分派末尾的 saveSymbols——新 intern 的母语名映射被吞（实测：
+                // 用户程序非零退出的 run 后 symbols.txt 缺失，同工程 check 则落盘）。补位持久化；
+                // F3 未翻译清单在本路径必空（只由 zigCompile 失败分支注入），无需也补 flush。
+                saveSymbols(table.*);
                 out_w.flush() catch |e| {
                     printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(e)});
                 };
