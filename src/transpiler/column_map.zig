@@ -171,3 +171,27 @@ test "R6：真二分与线性基准差分等价（长行 CJK 混排映射链、�
         try std.testing.expectEqual(toStdLinear(items, off), map.toStd(off));
     }
 }
+
+test "lineColOf/lineText 防御边界：越尾夹取、截于多字节字符中段列退化 1、行切分各形均不 panic（e2e 只盖常规路径）" {
+    // e2e「报错列映射」测只经全管线覆盖常规字符列；本模块两展示函数的三道防御边界零直覆盖：
+    // ① `@min(off, src.len)` 夹越尾 off（删则 src[0..off] 越尾 panic）；② utf8CountCodepoints
+    // 对截在多字节字符中段的切片报错 → catch 0 退化列 1（删则错误无处去了）；③ lineText 行切分
+    // start≤end 恒成立（尾换行后空行/越尾/空源）。本测钉住「任意 off 不 panic、切片恒合法」。
+    // 越尾：@min 夹到 src.len，按全源计、不 panic。
+    try std.testing.expectEqual(@as(usize, 1), lineColOf("abc", 10).line);
+    try std.testing.expectEqual(@as(usize, 4), lineColOf("abc", 10).col);
+    // 空源：(1,1)；换行后行号进、列重新起算。
+    try std.testing.expectEqual(@as(usize, 1), lineColOf("", 0).col);
+    try std.testing.expectEqual(@as(usize, 2), lineColOf("a\nbb", 2).line);
+    try std.testing.expectEqual(@as(usize, 1), lineColOf("a\nbb", 2).col);
+    // 字符列：CJK 一个汉字算一列（单元面直测，与 e2e 同据）。
+    try std.testing.expectEqual(@as(usize, 3), lineColOf("你好", 6).col);
+    // 截在多字节字符中段：计数报错 → catch 0 → 列退化 1、不 panic。
+    try std.testing.expectEqual(@as(usize, 1), lineColOf("你好", 1).col);
+    // lineText：越尾/空源/行中/末行越尾/尾换行后空行——切片恒合法。
+    try std.testing.expectEqualStrings("abc", lineText("abc", 10));
+    try std.testing.expectEqualStrings("", lineText("", 0));
+    try std.testing.expectEqualStrings("bb", lineText("a\nbb\nccc", 2));
+    try std.testing.expectEqualStrings("ccc", lineText("a\nbb\nccc", 100));
+    try std.testing.expectEqualStrings("", lineText("a\n", 2));
+}
