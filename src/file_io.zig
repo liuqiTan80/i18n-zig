@@ -23,7 +23,12 @@ pub fn readWhole(io: Io, gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
     // 用户拿到与真因无关的误导性语法错。UTF-16 BOM（FF FE/FE FF）与 GBK 实字节皆非法 UTF-8 序列，
     // 单个 utf8ValidateSlice 一并封口；合法含 BOM 的 UTF-8 照过、交 stripBom。二进制安全面在
     // readFileRaw（资源拷贝）不受本封口影响。
-    if (!std.unicode.utf8ValidateSlice(bytes)) return error.InvalidEncoding;
+    // D37（第 85 轮）：拒绝前必须回收 gpa 所有权缓冲——错误以值返回、调用方拿不到指针，
+    // 不 free 即每拒一块坏编码文件泄一块（产品主链走 arena 被末段回收掩盖、直调方必泄）。
+    if (!std.unicode.utf8ValidateSlice(bytes)) {
+        gpa.free(bytes);
+        return error.InvalidEncoding;
+    }
     // 剔除可能的 UTF-8 BOM，避免 Windows 编辑器写入的 BOM 污染首个词元。
     return translate.stripBom(bytes);
 }
@@ -142,4 +147,27 @@ test "pathIsSymlink：普通文件与不存在路径均回 false（R8 守卫假�
     // 不存在路径保守回 false（交后续 readFileRaw catch-continue 处理）。
     try std.testing.expect(!pathIsSymlink(io, ".zig-cache/zzc_no_such_link_xyz"));
     // 边界：真符号链接→true 分支需 POSIX/管理员权限造链接，Windows 环内不可靠、不在此测（同台账 R8 真链接面待验）。
+}
+
+test "D37：readWhole 编码封口错误路径不泄已分配缓冲（裸 testing.allocator 直调·不 arena 包裹）" {
+    // 缺陷面：readFileAlloc 成功后、封口失败前无任何登记释放——gpa 所有权缓冲对调用方不可达，
+    // 每次被拒的坏编码文件泄一块（D22/D27/D29 泄漏族·错误路径形）。历轮测 gpa 皆 arena-over-
+    // testing 包裹、leak 被 arena 吞掉——同 D27 先例「产品走 arena、测清一色 arena 包裹致漏未暴」。
+    // 本测 gpa 直喂裸 testing.allocator：错误路径未 free 即报 leaked（先红）、free 后转绿。
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const probe = ".zig-cache/zzc_fileio_leak_probe.txt";
+    try writeWhole(io, probe, "\xB3\xA3"); // GBK 实字节、非法 UTF-8
+    defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
+
+    // ① 错误路径：拒绝必须自行回收缓冲（leak 检查在测试结束自动触发）。
+    try std.testing.expectError(error.InvalidEncoding, readWhole(io, std.testing.allocator, probe));
+
+    // ② 成功路径对照：所有权交调用方、显式 free 不泄——封口修复不得误改成双重释放。
+    try writeWhole(io, probe, "合法 utf8 内容");
+    const ok = try readWhole(io, std.testing.allocator, probe);
+    defer std.testing.allocator.free(ok);
+    try std.testing.expectEqualStrings("合法 utf8 内容", ok);
 }
