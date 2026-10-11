@@ -196,7 +196,11 @@ fn nativeLoc(units: []const Unit, file_path: []const u8, line: usize, col: usize
             const nl = std.mem.indexOfScalarPos(u8, u.gen_src, goff, '\n') orelse break;
             goff = nl + 1;
         }
-        const std_off = goff + (col - 1); // zig 报的是**字节列**（1 基），故 col-1 恒等于行内字节增量
+        // zig 报的是**字节列**（1 基），故 col-1 恒等于行内字节增量。
+        // 74 轮已裁定 col=0 生产不可达（zig 输出恒 1 基、run 路用户 stderr 不经本链、B1）；
+        // 但本函数属 pub 回译链入口、不对未来调用方留缺口：@max 钳制消 usize 下溢（88 轮探针
+        // 坐实旧形 `col - 1` 喂 0 即 panic: integer overflow），0 列退化为行首（同 splitLoc 缺列形）。
+        const std_off = goff + (@max(col, 1) - 1);
         // ——与该行是否含 CJK 无关：字符串/注释逐字节原样保留，在方言端与生成端字节数相同，不扰动映射。
         const nat_off = u.map.toNative(std_off);
         const lc = ColumnMap.lineColOf(u.nat_src, nat_off);
@@ -2251,6 +2255,34 @@ test "CRLF 源位置回映防回归：混坐标自洽闭合（第 74 轮勘察�
     try hasSub(o2, "src/main.zz:4:23");
     // 片段行同文（行尾 \r 不在行本体、不上屏）
     try hasSub(o2, "|     标准库.打印(\"你好世界\", .{ 甲 });");
+}
+
+// 护栏（第 88 轮、第 74 轮证伪面续）：zig 正常坐标域之外的对抗形坐标（col=0 / 行号越界）
+// 在生产链上不可达（zig 输出恒 1 基、run 路用户 stderr 不经本链），但回译链 pub 入口不对
+// 未来调用方留缺口：旧形 nativeLoc `col - 1` 喂 0 即 panic: integer overflow（本轮探针对
+// 原始码实锤 crashed），钳制修复后钉两形不崩且退化为与 splitLoc 缺列形一致的合法坐标。
+test "护栏：对抗坐标 col=0/行越界回译不崩、退化形合法" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const tr = @import("../transpiler/translate.zig");
+    const src = "常数 甲 = 1;\n常数 乙 = 2;\n";
+    const res = try tr.translate(gpa, src, lang, &table);
+    const units = [_]Unit{.{ .native_path = "src/main.zz", .gen_path = "gen/main.zig", .gen_src = res.zig_str, .nat_src = src, .map = res.map }};
+
+    // ① col=0：不崩，退化到行首 1:1（实测形）。
+    const out0 = try renderDiag(gpa, lang, table, &units, "gen/main.zig", 1, 0, "error", "unused variable 'z_1'", null);
+    defer gpa.free(out0);
+    try hasSub(out0, "src/main.zz:1:1");
+
+    // ② 行号越界（999 远超真行数）：不崩，尾夹取后报 EOF 退化行（2 行源 → 3:1，实测形）。
+    const out999 = try renderDiag(gpa, lang, table, &units, "gen/main.zig", 999, 1, "error", "unused variable 'z_1'", null);
+    defer gpa.free(out999);
+    try hasSub(out999, "src/main.zz:3:1");
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {
