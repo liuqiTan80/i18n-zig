@@ -597,7 +597,13 @@ pub fn translateStderr(
                     drop_display = true;
                     continue;
                 }
-                try sm.put(try gpa.dupe(u8, key), {});
+                // dupe 接住、在 put **之前**登记 errdefer（D29，D26 同族源头治理）：0.17 hash_map 空表首
+                // put 走一次 alignedAlloc 分配“桶+键值对”合体块；该块失败时 dupe 尚未被表接管，
+                // 旧 inline 形 `put(try dupe(...))` 无人回滚 → 泄 dupe 键（新测杀该合体分配坐实红）；
+                // 成功路径 errdefer 不触发、表接管键，行为不变（main 端由 arena 整体回收）。
+                const owned_key = try gpa.dupe(u8, key);
+                errdefer gpa.free(owned_key);
+                try sm.put(owned_key, {});
             }
             try out.appendSlice(gpa, rendered);
             drop_display = true;
@@ -2064,6 +2070,84 @@ test "translateStderr 依赖循环分支：filterMessage 临时串不得在渲�
     try std.testing.expect(std.mem.indexOfScalar(u8, res, 0xDD) == null);
     // 确证该分支真被执行（走了 filterMessage 兑底、含"原文"字样），非误接其他路径。
     try std.testing.expect(std.mem.indexOf(u8, res, "原文") != null);
+}
+
+/// 测试专用：计数分配器包装——每次 rawAlloc 计数后透传底层。
+/// 用于运行期精确校准 `FailingAllocator.fail_index` 的注入槽位（免魔法数）；仅 alloc 计数，
+/// resize/remap/free 透传不计数。
+const CountAlloc = struct {
+    backing: std.mem.Allocator,
+    count: usize = 0,
+
+    fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ra: usize) ?[*]u8 {
+        const self: *CountAlloc = @ptrCast(@alignCast(ctx));
+        self.count += 1;
+        return self.backing.rawAlloc(len, alignment, ra);
+    }
+    fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) bool {
+        const self: *CountAlloc = @ptrCast(@alignCast(ctx));
+        return self.backing.rawResize(memory, alignment, new_len, ra);
+    }
+    fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ra: usize) ?[*]u8 {
+        const self: *CountAlloc = @ptrCast(@alignCast(ctx));
+        return self.backing.rawRemap(memory, alignment, new_len, ra);
+    }
+    fn free(ctx: *anyopaque, old_mem: []u8, alignment: std.mem.Alignment, ra: usize) void {
+        const self: *CountAlloc = @ptrCast(@alignCast(ctx));
+        self.backing.rawFree(old_mem, alignment, ra);
+    }
+    fn allocator(self: *CountAlloc) std.mem.Allocator {
+        return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+    }
+};
+
+test "translateStderr seen 的 dupe→put：空表桶分配失败不得泄漏 dupe 键（D29 坐实·D26 同族·可确定性注入红）" {
+    // 旧形 `try sm.put(try gpa.dupe(u8, key), {})`：dupe 成功后、空表首次 put 需新分配桶——
+    // 若该分配失败，try 即返回、dupe 键串无人回收（D26 同族错误路径泄漏；生产 arena 掩盖）。
+    // 与 dupe→append 的“批量预留容量”不同，put 的桶分配是干净 alloc、R10f 属可注入族——
+    // 本测把注入槽位运行期校准、不用魔法数：同输入同 CountAlloc 双跑 translateStderr（首轮走到 put、
+    // 次轮 get 命中短路），次轮额外分配数 c2 即“全新轮”截至 get 前的分配数；全新轮里 dupe 排在第 c2
+    // 次 alloc（0 基）、桶分配紧随其后第 c2+1 次 → 杀后者。
+    const back = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(back);
+    defer arena.deinit();
+    const setup = arena.allocator();
+    var lang = try Pack.parse(setup, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(setup);
+    defer table.deinit();
+    // 不带尾换行：命中轮（get 短路）在 get 之后零分配（含尾部 '\n' 会使 out.append('\n') 混入计数、校准偏 1）。
+    const stderr = "gen/main.zig:4:40: error: use of undeclared identifier";
+
+    // 校准跑：两轮同用一个 CountAlloc（同一分配行为、确定性同序）。
+    var ca = CountAlloc{ .backing = back };
+    const cgpa = ca.allocator();
+    var seen_c = std.StringHashMap(void).init(cgpa);
+    defer {
+        // dupe 键为 map 外拥有（deinit 不释键字节），须逐个回交——本测的卫生契约，同 main 端 arena 回收对等。
+        var kit = seen_c.keyIterator();
+        while (kit.next()) |k| cgpa.free(k.*);
+        seen_c.deinit();
+    }
+    ca.count = 0;
+    const o1 = try translateStderr(cgpa, lang, table, &.{}, stderr, &seen_c, null);
+    const n1 = ca.count;
+    defer cgpa.free(o1);
+    try hasSub(o1, "错误"); // 首轮正常渲染（已走 dupe→put）
+    ca.count = 0;
+    const o2 = try translateStderr(cgpa, lang, table, &.{}, stderr, &seen_c, null);
+    const c2 = ca.count;
+    defer cgpa.free(o2);
+    try std.testing.expect(o2.len == 0); // 去重短路成立 ✓（本轮分配全部发生在 get 之前）
+    try std.testing.expect(n1 > c2); // 全新轮多出 dupe/桶/out 尾项，严格更多
+
+    // 失败注入跑：杀桶分配（槽 c2+1，0 基）。
+    var failing = std.testing.FailingAllocator.init(back, .{ .fail_index = c2 + 1 });
+    const fgpa = failing.allocator();
+    var seen_f = std.StringHashMap(void).init(fgpa); // put 失败→桶从未分配、map 不持资源、无需 deinit
+    // 旧实现：dupe（槽 c2）成功、桶失败 → dupe 键泄漏（testing.allocator 测毕报红）；
+    // 新实现（errdefer 回滚）：无泄漏。
+    try std.testing.expectError(error.OutOfMemory, translateStderr(fgpa, lang, table, &.{}, stderr, &seen_f, null));
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {
