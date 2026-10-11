@@ -79,7 +79,8 @@ pub fn scan(gpa: std.mem.Allocator, src: []const u8) ![]Token {
             i += 2; // 跳过 @"
             while (i < src.len) : (i += 1) {
                 if (src[i] == '\\') {
-                    i += 1;
+                    i += 1; // 反斜杠吞掉下一个字节（转义对）
+                    if (i >= src.len) break; // 转义对恰落在末字节 → 未闭合字面量止于 EOF，勿把游标推过尾（否则下游 t.text 切片越界 panic）
                     continue;
                 }
                 if (src[i] == '"' or src[i] == '\n') {
@@ -95,7 +96,8 @@ pub fn scan(gpa: std.mem.Allocator, src: []const u8) ![]Token {
             i += 1;
             while (i < src.len) : (i += 1) {
                 if (src[i] == '\\') {
-                    i += 1;
+                    i += 1; // 反斜杠吞掉下一个字节（转义对）
+                    if (i >= src.len) break; // 转义对恰落在末字节 → 未闭合字面量止于 EOF，勿把游标推过尾（否则下游 t.text 切片越界 panic）
                     continue;
                 }
                 if (src[i] == '"' or src[i] == '\n') {
@@ -111,7 +113,8 @@ pub fn scan(gpa: std.mem.Allocator, src: []const u8) ![]Token {
             i += 1;
             while (i < src.len) : (i += 1) {
                 if (src[i] == '\\') {
-                    i += 1;
+                    i += 1; // 反斜杠吞掉下一个字节（转义对）
+                    if (i >= src.len) break; // 转义对恰落在末字节 → 未闭合字面量止于 EOF，勿把游标推过尾（否则下游 t.text 切片越界 panic）
                     continue;
                 }
                 if (src[i] == '\'' or src[i] == '\n') {
@@ -220,4 +223,33 @@ test "ASCII 开头的词元不被合并（12甲 仍拆为 ascii_word + 非 ASCII
     try std.testing.expectEqualStrings("12", toks[0].text(src));
     try std.testing.expectEqual(Kind.nonascii_word, toks[1].kind);
     try std.testing.expectEqualStrings("甲", toks[1].text(src));
+}
+
+test "未闭合字面量以反斜杠结尾不得越出 src 尾（词元边界不变量）" {
+    const gpa = std.testing.allocator;
+    // 三种字面量各以「开引号 … 末字节反斜杠」结尾（模拟 Windows 路径串漏收尾引号 `p = "C:\Users\`）：
+    // 转义分支曾把游标推至 src.len+1，使词元 off+len 越出缓冲 1 字节 → 下游 t.text(src) 的
+    // src[off..][0..len] 切片越界 panic（ReleaseFast 更成越界读）。本测钉死「词元必落在 src 内」不变量。
+    const malformed = [_][]const u8{
+        "\"A\\", // 未闭合字符串
+        "'A\\", // 未闭合字符
+        "@\"A\\", // 未闭合符号
+    };
+    for (malformed) |src| {
+        const toks = try scan(gpa, src);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 1), toks.len);
+        for (toks) |t| {
+            try std.testing.expect(t.off + t.len <= src.len); // 绝不越尾
+            _ = t.text(src); // 不 panic 即证边界安全
+        }
+        try std.testing.expectEqual(src.len, toks[0].len); // 未闭合字面量吞至 EOF、整段成一词元
+    }
+
+    // 正常闭合的转义字面量不受影响：`"a\""`（内含被转义的闭引号）仍是单个串词元、含真实尾引号。
+    const closed = "\"a\\\"\""; // 源码字节： " a \ " "（5 字节）
+    const toks = try scan(gpa, closed);
+    defer gpa.free(toks);
+    try std.testing.expectEqual(@as(usize, 1), toks.len);
+    try std.testing.expectEqualStrings(closed, toks[0].text(closed));
 }
