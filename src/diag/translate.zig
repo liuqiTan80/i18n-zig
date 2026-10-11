@@ -19,7 +19,9 @@ const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
 /// 产品时间源（F3）：主层启动时经 `setIo` 注入；单测图不注入保持默认 null → 取时回 0，
 /// 诊断纯函数测试图不被 Io 污染（D7 可测性守则）。
 var io_: ?std.Io = null;
-pub fn setIo(io: std.Io) void { io_ = io; }
+pub fn setIo(io: std.Io) void {
+    io_ = io;
+}
 
 /// 当前 epoch 秒（F3 记录面）：取时在产品边界（本层有 Io），不下沉进 pure_filter——
 /// 过滤器本体保持纯函数可单测（D7）。单测等无产品时间语境传 io=null → 回 0（不致命）。
@@ -94,6 +96,16 @@ fn matchDiag(lang: Pack, msg: []const u8) struct { message: []const u8, tip: []c
     return .{ .message = msg, .tip = "", .matched = false };
 }
 
+/// 把一段 allocPrint 格式化的临时串追加进 `out`，追加后即刻释放临时串。
+/// 旧写法 `out.appendSlice(gpa, try allocPrint(gpa, …))` 把临时串字节拷入 out 后从不 free，
+/// 非 arena 分配器下每调用泄 1 块（第 69 轮 D27，与 D23 renderReport 同族反模式）；
+/// arena 生产路径不体现、但既有测均以 arena 包裹而从未暴露（本文件新测直接喂 testing.allocator 坐实）。
+fn appendPrintF(out: *std.ArrayList(u8), gpa: std.mem.Allocator, comptime fmt: []const u8, args: anytype) !void {
+    const s = try std.fmt.allocPrint(gpa, fmt, args);
+    defer gpa.free(s);
+    try out.appendSlice(gpa, s);
+}
+
 /// 渲染单条诊断为母语文本（调用方 free）。
 pub fn renderDiag(
     gpa: std.mem.Allocator,
@@ -155,17 +167,17 @@ pub fn renderDiag(
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     if (show_loc) {
-        try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "{s}: {s}\n  --> {s}:{d}:{d}\n", .{
+        try appendPrintF(&out, gpa, "{s}: {s}\n  --> {s}:{d}:{d}\n", .{
             kind_cn, filtered_msg, loc_native, native_line, native_col,
-        }));
+        });
         if (snippet.len != 0) {
-            try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "  | {s}\n", .{snippet}));
+            try appendPrintF(&out, gpa, "  | {s}\n", .{snippet});
         }
     } else {
-        try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "{s}: {s}\n", .{ kind_cn, filtered_msg }));
+        try appendPrintF(&out, gpa, "{s}: {s}\n", .{ kind_cn, filtered_msg });
     }
     if (m.tip.len != 0) {
-        try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "  💡 {s}\n", .{m.tip}));
+        try appendPrintF(&out, gpa, "  \u{1f4a1} {s}\n", .{m.tip});
     }
     return out.toOwnedSlice(gpa);
 }
@@ -506,9 +518,9 @@ pub fn translateStderr(
             drop_display = true;
             if (splitLoc(loc)) |fl| {
                 if (nativeLoc(units, fl.file, fl.line, fl.col)) |L| {
-                    try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "  --> {s}:{d}:{d}\n", .{ L.path, L.line, L.col }));
+                    try appendPrintF(&out, gpa, "  --> {s}:{d}:{d}\n", .{ L.path, L.line, L.col });
                     if (L.snippet.len != 0) {
-                        try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "  | {s}\n", .{L.snippet}));
+                        try appendPrintF(&out, gpa, "  | {s}\n", .{L.snippet});
                     }
                 }
             }
@@ -540,9 +552,9 @@ pub fn translateStderr(
                 }
             }
             const kind_cn = kind_zh.get("error") orelse "error";
-            try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "{s}: {s}\n", .{ kind_cn, shown }));
+            try appendPrintF(&out, gpa, "{s}: {s}\n", .{ kind_cn, shown });
             if (m.tip.len != 0) {
-                try out.appendSlice(gpa, try std.fmt.allocPrint(gpa, "  \u{1f4a1} {s}\n", .{m.tip}));
+                try appendPrintF(&out, gpa, "  \u{1f4a1} {s}\n", .{m.tip});
             }
             skip_dep_frames = true;
             continue;
@@ -1970,6 +1982,21 @@ test "诊断回译：可选类型描述 / 错误联合转换 / 函数不能返�
     try hasSub(d, "枚举");
     try hasSub(d, "的形式"); // 防止译文里误用分隔符 `|` 导致消息被截断
     try noSub(d, "to declare a container");
+}
+
+test "renderDiag 用精确计数分配器时不泄漏 allocPrint 临时串（D27 坐实）" {
+    // 历轮既有测均以 arena 包裹 gpa，arena 退出批量回收掩盖了 renderDiag 内
+    // `appendSlice(gpa, try allocPrint(gpa, …))` 的逐次临时串泄漏（D23 同族反模式）。
+    // 本测直接喂 std.testing.allocator（精确计数、测毕自动核查泄漏）：若 renderDiag 未
+    // free 那些 allocPrint 临时串，即报 leaked——allocPrint 是干净 alloc，可确定性坐实（R10f 可注入族）。
+    const gpa = std.testing.allocator;
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const rendered = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "cannot assign to constant", null);
+    defer gpa.free(rendered);
+    try hasSub(rendered, "不可变常量被重新赋值");
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {
