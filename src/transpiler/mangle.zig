@@ -140,6 +140,10 @@ fn trailingNumber(ascii: []const u8) ?usize {
 
 fn put(self: *Mangle, native: []const u8, ascii: []const u8, owned: bool) !void {
     if (self.native_to_ascii.contains(native)) return;
+    // D36（第 84 轮）：不同母语名争一个已被占用的 ASCII 编号→源头拒（旧行为：正表双双写入、
+    // 两标识符转码后共享同一 z_N（生成码静默合并、语义改变零警告）、反表被后行覆盖）。
+    // 手工编辑错号的 symbols.txt 可达；同号但同名（幂等重加载）已由上方 contains 提前 return 吞并。
+    if (self.ascii_to_native.contains(ascii)) return error.DuplicateSymbol;
     try self.native_to_ascii.put(native, ascii);
     errdefer _ = self.native_to_ascii.remove(native);
     try self.ascii_to_native.put(ascii, native);
@@ -152,7 +156,8 @@ pub fn unmangle(self: Mangle, ascii: []const u8) ?[]const u8 {
     return self.ascii_to_native.get(ascii);
 }
 
-/// 从 `.zzc/symbols.txt` 文本恢复映射：每行 `母语名 = z_N`，跳过空行/`#`注释/`[`段头/无 `=` 行/空侧。
+/// 从 `.zzc/symbols.txt` 文本恢复映射：每行 `母语名 = z_N`，跳过空行/`#`注释/`[`段头/无 `=` 行/空侧；
+/// 不同母语名撞同一 ASCII 编号传播 `error.DuplicateSymbol`（D36·拒两标识符静默合并，调用方须给出可操作提示）。
 /// 逐条走 `putExisting`（会把 next_index 推过已恢复的最大编号）。与文件读取解耦，便于单测锁定格式契约。
 pub fn parseSymbolText(self: *Mangle, text: []const u8) !void {
     var it = std.mem.splitScalar(u8, text, '\n');
@@ -277,4 +282,26 @@ test "relocateReservedCollisions：未被撞的历史映射原样不动" {
     // 甲/乙 都不该被挪动。
     try std.testing.expectEqualStrings("z_1", try table.intern("甲"));
     try std.testing.expectEqualStrings("z_2", try table.intern("乙"));
+}
+
+test "D36：不同母语名撞同一 ASCII 编号源头拒——propagate error.DuplicateSymbol、不再静默合并两标识符" {
+    const gpa = std.testing.allocator;
+    // 手工编辑错号的 symbols.txt：甲/乙 两行同指 z_1。旧行为：正表双双写入→两标识符转码后
+    // 共享 z_1（生成码静默合并、语义改变零警告），反表被后行覆盖。新行为：源头拒、传播。
+    var table = init(gpa);
+    defer table.deinit();
+    try std.testing.expectError(error.DuplicateSymbol, table.parseSymbolText("甲 = z_1\n乙 = z_1\n"));
+    // 拒绝不留半成品状态：首行合法映射仍在，撞号行未入表；后续不同名 intern 能正常派新号。
+    try std.testing.expectEqual(@as(usize, 1), table.count());
+    try std.testing.expectEqualStrings("z_1", try table.intern("甲"));
+    try std.testing.expectEqualStrings("z_2", try table.intern("乙"));
+
+    // 同名同值的幂等重复行（两遍加载同一映射）仍合法且被正表 early-return 吞并。
+    var t2 = init(gpa);
+    defer t2.deinit();
+    try t2.parseSymbolText("甲 = z_1\n甲 = z_1\n");
+    try std.testing.expectEqual(@as(usize, 1), t2.count());
+
+    // putExisting 直调面同样拒撞号（不经 parseSymbolText 的调用方同受保护）。
+    try std.testing.expectError(error.DuplicateSymbol, t2.putExisting("乙", "z_1"));
 }

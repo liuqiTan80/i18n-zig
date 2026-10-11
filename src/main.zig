@@ -797,6 +797,9 @@ fn bail(e: anyerror) noreturn {
     switch (e) {
         error.Usage => printErr("zzc: 未知或不完整的子命令；运行不带参数的 zzc 查看用法。", .{}),
         error.Failed => {}, // 母语报错已在编译阶段打印，无需重复
+        // D36（第 84 轮）：符号表被手工编辑出同一 z_N 归两个不同母语名——若不容忍静默合并，
+        // 必须源头拒并点名文件与修法（两标识符转码后共享同名会静默改变程序语义）。
+        error.DuplicateSymbol => printErr("zzc: 符号表 .zzc/symbols.txt 撞号：同一编号被分给两个不同母语名。请删除该文件让 zzc 重建（生成码标识符编号会变、程序语义不变），或手工改正冲突行。", .{}),
         // 常见文件系统/内存错误给纯母语可操作提示（避免把 `NotDir`/`AccessDenied` 等
         // Zig 内部英文标识符直接泄给方言用户）；未收录错误保留中文句式、仅附一个诊断码。
         else => {
