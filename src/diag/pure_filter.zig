@@ -253,31 +253,6 @@ pub const PureFilter = struct {
         return false;
     }
 
-    /// 提取文本中的英文残留短语（分配失败向上传播，不静默丢短语——台账 D16）
-    pub fn extractEnglishPhrases(self: PureFilter, text: []const u8) !std.ArrayList([]const u8) {
-        var phrases = std.ArrayList([]const u8).empty;
-        var i: usize = 0;
-
-        while (i < text.len) {
-            const c = text[i];
-            if (std.ascii.isAlphabetic(c)) {
-                var j = i;
-                while (j < text.len and (std.ascii.isAlphabetic(text[j]) or text[j] == ' ')) {
-                    j += 1;
-                }
-                const phrase = std.mem.trim(u8, text[i..j], " ");
-                if (phrase.len >= self.config.min_english_length) {
-                    try phrases.append(self.gpa, phrase);
-                }
-                i = j;
-            } else {
-                i += 1;
-            }
-        }
-
-        return phrases;
-    }
-
     /// 过滤消息：含英文残留且不在白名单时生成兜底译文，并记入 `self.log_list`（F3 落盘面）。
     /// 时间戳由调用方在记录边界注入（本模块不摸 Io，保持纯可测——D7；无产品时间语境传 0）。
     /// 所有路径均返回 `gpa` 分配的**拥有权副本**（调用方可无条件 `gpa.free`）。
@@ -639,4 +614,15 @@ test "renderReport - Markdown 渲染内容正确且不泄漏行临时串（D23 �
     );
     // 兼做泄漏回归：旧实现循环内 `try out.appendSlice(gpa, try allocPrint(...))` 的行临时串从不 free
     // → 每行泄 1 块（happy path 即泄），std.testing.allocator 会在测毕报 leaked——本测同钉此回归。
+}
+
+test "fromConfig 构造默认过滤器（第 66 轮：文档面公开 API 此前从不被编译，补测钉住并防断代）" {
+    const gpa = std.testing.allocator;
+    var f = try PureFilter.fromConfig(gpa, "config/pure_filter.json"); // 当前入口不摸盘、路径被忽略（_ = config_path）
+    defer f.deinit();
+    // 钉住构造出的对象状态自洽：默认配置、未注入落盘清单、白名单空——防该未接线公开 API 静默腐坏。
+    const default_config = Config{};
+    try std.testing.expectEqual(default_config.min_english_length, f.config.min_english_length);
+    try std.testing.expect(f.log_list == null);
+    try std.testing.expectEqual(@as(usize, 0), f.whitelist.rules.items.len);
 }
