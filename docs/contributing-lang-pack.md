@@ -21,19 +21,25 @@ $code = zh              # 语言代码
 
 [diagnostics]           # 段：报错回译模式
 常量不能重新赋值 = cannot assign to constant|不可变常量被重新赋值|改用 `变量`（var）声明即可修改。
+
+[whitelist]             # 段：纯母语过滤器的白名单规则（每行一条，无需 `键 = 值`）
+@memcpy|Zig 内建拷贝，允许保留英文
+MyType                  # 驼峰类标识符；`|` 之后为人读备注、不参与匹配
 ```
 
 规则：
 - `#` 或 `//` 开头为注释行；空行跳过。
-- `[段名]` 切换当前段，仅认 `keywords` / `aliases` / `diagnostics`。
+- `[段名]` 切换当前段，仅认 `keywords` / `aliases` / `diagnostics` / `whitelist`。
 - 每行 `键 = 值`，键与值去除首尾空白；键为空报错。
-- `diagnostics` 的值用 `|` 分隔**三段**：`匹配前缀|母语译文|教学提示`。匹配前缀与 zig 英文报错消息做 `startsWith` 比较；左侧的键仅作人类可读标识，不参与匹配。
+- `diagnostics` 的值用 `|` 分隔**三段**：`匹配短语|母语译文|教学提示`。匹配短语与 zig 英文报错消息做**子串包含**（`contains`）比较（仅前缀会漏匹被引号包裹操作数在内的整句）；左侧的键仅作人类可读标识，不参与匹配。
+- `whitelist` 段每行即一条白名单规则（整行精确匹配，无需 `=`），`|` 后为人读备注、剥离后才是匹配体；供纯母语过滤器豁免英文 token（F2）。
 
-## 三个段如何生效
+## 四个段如何生效
 
 1. **keywords**：非 ASCII 单词先查别名链、再查此表、最后按用户标识符转码。放关键字（`const`/`fn`/`if`…）、类型别名（`bool`/`void`…）以及可展开为 Zig 片段的短写（如 `文本 → []const u8`）。
 2. **aliases**：点分链按**贪心最长**匹配。`标准库.打印` 会优先于 `标准库`，从而正确译成 `std.debug.print`。放常用标准库路径；未命中的路径会逐段回退（`标准库 → std`，其余段原样透传），因此表只需覆盖高频项。
-3. **diagnostics**：按顺序做 `startsWith` 匹配，命中即输出「母语译文 + 教学提示」。为每类典型错误（未声明标识符、常量重赋值、类型不符、缺 return、错误未处理、越界……）各写一条，帮助学习者知道「下一步该做什么」。
+3. **diagnostics**：按顺序做子串包含匹配，命中即输出「母语译文 + 教学提示」。为每类典型错误（未声明标识符、常量重赋值、类型不符、缺 return、错误未处理、越界……）各写一条，帮助学习者知道「下一步该做什么」。
+4. **whitelist**：纯母语过滤器拿报错里残留的英文 token 逐条比对本段规则，命中即保留不报 `[未翻译]`。引擎不硬编码任何豁免规则，全由包供给（F2）。
 
 ## 编写要点
 
@@ -46,9 +52,36 @@ $code = zh              # 语言代码
 
 1. 复制 `src/lang/packs/中文.txt`，改 `$name`/`$code`，逐段替换键为你的母语词。
 2. 放到 `src/lang/packs/` 下。
-3. 参照 `src/main.zig` 里 `@embedFile("lang/packs/中文.txt")` 的接入方式，把新包挂到 `zzc lang` 列表与加载路径。
-4. 造一个 demo 工程（`demo/<语言>/src/main.zz`），跑通 `zzc run` 与 `zzc eject && zig build`。
-5. 补翻译快照测试（见 `src/transpiler/translate.zig` 的 `test`），锁定关键映射不回归。
+3. **在 `src/lang/registry.zig` 的 `entries` 里登记一行**（选包名 `key`、别名、`code`、显示名、`bytes = @embedFile("packs/<新包>.txt")`）。`code` 须与包内 `$code` 一致（有单测锁定不漂移）。这就是多包加载的全部接线（R9）。
+4. 用 `zzc lang`（应列出新包）与 `zzc <子命令> --lang <新名> ...` 验证选包生效（注：子命令恒在最前，`--lang` 需置于子命令**之后**，如 `zzc check --lang 日本語 src/main.zz`）。
+5. 造一个 demo 工程（`demo/<语言>/src/main.zz`），跑通 `zzc run` 与 `zzc eject && zig build`。
+6. 补翻译快照测试（见 `src/transpiler/translate.zig` 的 `test`），锁定关键映射不回归。
+
+## 叠加层 / 补充包（适配层，R9 组合半面）
+
+一个逻辑包可由「基包（base）+ 若干有序补充层（overlays）」拼成，无需复制整包就能方言适配或领域覆盖（如 `湖南.txt` 盖在通用中文上、`en` 回退基包）。在 `registry.zig` 的 `Entry` 里除 `bytes`（基包）外，再给 `overlays` 填若内嵌层字节（按生效序）：
+
+```
+.{
+    .key = "zh-hunan", .code = "zh-hn", .display = "湖南话",
+    .bytes = @embedFile("packs/中文.txt"),                        // 基包
+    .overlays = &.{ @embedFile("packs/补充包-湖南.txt") },  // 补充层（可多、按序）
+}
+```
+
+`Pack.loadWithOverlays` 逐层 `parseInto`，**合并语义**如下：
+
+| 段 | 层间行为 | 用途 |
+|---|---|---|
+| `keywords` / `aliases` | 同键**后写覆盖** | 补充层重定义某关键字/别名 |
+| `$name` / `$code` | 后写覆盖 | 适配层重品牌 |
+| `diagnostics` | 按 **pattern** 后写覆盖（原地替换、不新增条目） | 改写某条报错的译文/提示 |
+| `whitelist` | **并集**（幂等去重） | 逐层累加允许保留的英文 token |
+
+要点：
+- `overlays` 为空时等价于单包 `parse`，无补充层的包（如当前 zh）行为不变。
+- **`validate`（B6 契约）应在所有层合并后跑一次**：补充层可补齐基包缺的契约值（基包单独不必自含）。
+- diagnostics 的“按 pattern 覆盖”以 pattern 为键：若基包与补充层写了**完全相同**的 pattern，后者胜出且不产生重复；要新增一类报错回译则用**不同的 pattern**。
 
 ## 校验命令
 

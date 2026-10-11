@@ -4,6 +4,9 @@
 **/.zig-cache/
 **/zig-out/
 
+# F3 未翻译短语落盘面（CI 产物，不入库）
+logs/
+
 # zzc 翻译缓存（.zzc/gen、符号表、产物）
 **/.zzc/
 

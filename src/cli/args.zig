@@ -47,6 +47,74 @@ test "pickEntry：带值旗标不被误当入口，仅 .zz 作为文件" {
     try std.testing.expectEqual(@as(?usize, null), pd.idx);
 }
 
+/// R9：从 zzc 层参数里取 `--lang <name>` 或 `--lang=<name>` 的语言名（纯查询、不改入参；无则 null）。
+/// 语言名缺值（`--lang` 处于末尾且无后继）视为 null（由调用方按未选包处理）。
+pub fn findLangFlag(args: []const []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--lang")) {
+            return if (i + 1 < args.len) args[i + 1] else null;
+        }
+        if (std.mem.startsWith(u8, a, "--lang=")) return a["--lang=".len..];
+    }
+    return null;
+}
+
+/// 从参数列表剔离 `--lang <name>`（两参形）/`--lang=<name>`（一参形），返回新 ArrayList（元素借用自 args、仅本体分配）。
+/// 目的：`--lang` 是 zzc 层旗标，不能透传给 zig。缺值的裸 `--lang`（末尾）一并剔离。无旗标时返回逐元素等长的原样副本。
+pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(gpa);
+    var i: usize = 0;
+    while (i < args.len) {
+        const a = args[i];
+        if (std.mem.eql(u8, a, "--lang")) {
+            i += 2; // 连同其值一起剔离
+            continue;
+        }
+        if (std.mem.startsWith(u8, a, "--lang=")) {
+            i += 1;
+            continue;
+        }
+        try out.append(gpa, a);
+        i += 1;
+    }
+    return out;
+}
+
+test "findLangFlag / stripLangFlag：两参与等号形都识别，剔离后不透传 zig" {
+    const gpa = std.testing.allocator;
+    const a = [_][]const u8{ "check", "src/main.zz", "--lang", "zh", "-O", "Debug" };
+    try std.testing.expectEqualStrings("zh", findLangFlag(&a).?);
+    var s = try stripLangFlag(gpa, &a);
+    defer s.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 4), s.items.len);
+    try std.testing.expectEqualStrings("src/main.zz", s.items[1]);
+    try std.testing.expectEqualStrings("-O", s.items[2]);
+
+    const e = [_][]const u8{ "--lang=中文", "src/main.zz" };
+    try std.testing.expectEqualStrings("中文", findLangFlag(&e).?);
+    var s2 = try stripLangFlag(gpa, &e);
+    defer s2.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), s2.items.len);
+    try std.testing.expectEqualStrings("src/main.zz", s2.items[0]);
+
+    // 无旗标：null + 原样副本。
+    const n = [_][]const u8{ "build", "-Doptimize=Release" };
+    try std.testing.expectEqual(@as(?[]const u8, null), findLangFlag(&n));
+    var s3 = try stripLangFlag(gpa, &n);
+    defer s3.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), s3.items.len);
+
+    // 缺值裸 --lang（末尾）：findLangFlag null、仍剔离。
+    const d = [_][]const u8{ "run", "--lang" };
+    try std.testing.expectEqual(@as(?[]const u8, null), findLangFlag(&d));
+    var s4 = try stripLangFlag(gpa, &d);
+    defer s4.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), s4.items.len);
+}
+
 /// 判断 `eject` 目标 `dest` 是否会与方言源码树 `src` 重叠、或越出当前工程根——
 /// 命中即危险：`eject` 重写前会先清空 `dest/src`，若该路径就是真实 `src`（或包含它），
 /// 会直接删除用户的 `.zz` 源文件（数据丢失）。按分隔符分段比较（避免 `src2` 误判为 `src` 之下）、
@@ -188,8 +256,10 @@ pub const usage_text =
     \\  zzc run    [文件.zz]   编译并运行；`--` 之后传给程序
     \\  zzc test   [文件.zz]   翻译 -> zig test
     \\  zzc eject  [目录]      导出标准 Zig 工程（默认 standard/）
-    \\  zzc lang               列出内置语言包
-    \\
+    \\  zzc lang               列出当前语言包与可注册包
+    \\  zzc version            版本与当前语言包
+    \\选项：
+    \\  --lang <名>            选择语言包（如 zh / 中文；缺省为中文；该旗标不透传 zig）
     \\方言文件默认取 src/main.zz；错误标签与 std 错误名保持 ASCII 原样。
 ;
 
@@ -582,6 +652,42 @@ pub fn normalizeRelPath(gpa: std.mem.Allocator, raw: []const u8) ![]const u8 {
     return std.mem.join(gpa, "/", segs.items);
 }
 
+/// 拼接相对路径并归一分隔符（台账 D9：采集侧/walker 与 stage 侧四处同形 `join`+`replaceScalar` 的单一真值）：
+/// `base` 为空或 `.` 时直取 `sub`；结果恒为正斜杠形（与文档/用法示例一致，也保证 findUnit
+/// 的精确匹配不因 Windows 反斜杠而退化到 stem 兜底）。返回 `gpa` 所有权。
+pub fn joinRelNorm(gpa: std.mem.Allocator, base: []const u8, sub: []const u8) ![]const u8 {
+    if (base.len == 0 or std.mem.eql(u8, base, ".")) return gpa.dupe(u8, sub);
+    const joined = try std.fs.path.join(gpa, &.{ base, sub });
+    std.mem.replaceScalar(u8, joined, '\\', '/');
+    return joined;
+}
+
+/// 扫描一段源码里的引用词形（`leads` 函数词 + `const_leads` 单跳变量绑定词形，D2/D3 同一识别面），
+/// 逐个按 `resolveEmbedZzRel` 解析为归一化的工程内 `.zz` 相对路径。台账 D9/D10：
+/// 采集阶段“资产豁免预扫描”与“D4 编译单元优先”两趟同形循环的单一真值；纯函数（不碰磁盘），
+/// 进 zzc_core 测试图可单测（D7：原逻辑困在 exe 图内从未被单元级覆盖）。
+/// 列表元素与本体均为 `gpa` 所有权，由调用方逐个释放。
+pub fn findReferencedRels(
+    gpa: std.mem.Allocator,
+    src: []const u8,
+    src_dir: []const u8,
+    leads: []const []const u8,
+    const_leads: []const []const u8,
+) !std.ArrayList([]const u8) {
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer {
+        for (out.items) |it| gpa.free(it);
+        out.deinit(gpa);
+    }
+    var list = try extractEmbedPathsForms(gpa, src, leads, const_leads);
+    // list 元素是 src 子串（借用、非 gpa 分配），只 deinit 本体、不逐项 free。
+    defer list.deinit(gpa);
+    for (list.items) |p| {
+        if (try resolveEmbedZzRel(gpa, src_dir, p)) |rel| try out.append(gpa, rel);
+    }
+    return out;
+}
+
 /// 判断“将嵌入资浅相对路径 p 拼到 base_dir 后、词法解析 `..` 结果仍严格处于镜像根 root 之内”。
 /// 用于 stageEmbedAssets 的越界写守卫：若 p 为绝对（前导 `/` `\` 或盘符 `X:`）或解析后越出 root → 返回 false（不 stage）。
 pub fn embedPathStaysWithin(gpa: std.mem.Allocator, root: []const u8, base_dir: []const u8, p: []const u8) !bool {
@@ -620,4 +726,38 @@ test "embedPathStaysWithin：同目录/子目录/包内 ../ 允许，越出镜�
     try std.testing.expect(!(try embedPathStaysWithin(gpa, ".zzc/gen", ".zzc/gen/src", "/etc/passwd"))); // 绝对
     try std.testing.expect(!(try embedPathStaysWithin(gpa, ".zzc/gen", ".zzc/gen/src", "C:/Windows/x"))); // 盘符
     try std.testing.expect(!(try embedPathStaysWithin(gpa, ".zzc/gen", ".zzc/gen/src", ""))); // 空
+}
+
+test "joinRelNorm：拼接归一正斜杠、`.` 基座直取子路" {
+    const gpa = std.testing.allocator;
+    const a = try joinRelNorm(gpa, "src", "sub\\mod.zz"); // Windows 混入反斜杠→归一
+    defer gpa.free(a);
+    try std.testing.expectEqualStrings("src/sub/mod.zz", a);
+    const b = try joinRelNorm(gpa, ".", "main.zz"); // 当前目录基座：不prepend `./`
+    defer gpa.free(b);
+    try std.testing.expectEqualStrings("main.zz", b);
+    const c = try joinRelNorm(gpa, "", "x/y.zz");
+    defer gpa.free(c);
+    try std.testing.expectEqualStrings("x/y.zz", c);
+}
+
+test "findReferencedRels：方言/ASCII 两形都解、非 .zz 与越根跳过、单跳变量实参命中" {
+    const gpa = std.testing.allocator;
+    const leads = [_][]const u8{ "嵌入文件", "@embedFile" };
+    const cs = [_][]const u8{ "常数", "const" };
+    const src =
+        \\常数 模板名 = "共享/模板.zz";
+        \\常数 a = 嵌入文件(模板名); // 单跳变量实参
+        \\const b = @embedFile("note.txt"); // 非 .zz：不碰采集
+        \\常数 c = 嵌入文件("../../外.zz"); // 从 src 上溯两段→越出源根（归一后带前导 ..）
+        \\常数 d = 嵌入文件("正文.zz");
+    ;
+    var list = try findReferencedRels(gpa, src, "src", &leads, &cs);
+    defer {
+        for (list.items) |it| gpa.free(it);
+        list.deinit(gpa);
+    }
+    try std.testing.expectEqual(@as(usize, 2), list.items.len);
+    try std.testing.expectEqualStrings("src/共享/模板.zz", list.items[0]);
+    try std.testing.expectEqualStrings("src/正文.zz", list.items[1]);
 }

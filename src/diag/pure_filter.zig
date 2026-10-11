@@ -6,6 +6,9 @@
 //! - 硬性约束优先级：当性能、功能与纯母语原则冲突时，纯母语原则优先级最高
 
 const std = @import("std");
+const Pack = @import("../lang/pack.zig").Pack;
+
+const zh_pack = @embedFile("../lang/packs/中文.txt");
 
 /// 白名单规则：允许某些英文内容（如标识符、类型名）
 pub const Whitelist = struct {
@@ -47,67 +50,190 @@ pub const Config = struct {
     strict_mode: bool = false, // true = 严格模式，任何英文都拦截
 };
 
-/// 未翻译短语记录
+/// 未翻译短语记录（F3 落盘模型的单一真值形）。
+/// 记录**不随过滤器实例走**：一个进程内 `zigCompile` 可能被调用多次（check 多根），每次新建
+/// 过滤器，未翻译清单须跨调用累积、进程出口统一落盘——由调用方持有、经 `filterMessage`
+/// 的 `log_list` 参数传入（所有权在调用方，本模块只写入其引用）。
 pub const UntranslatedPhrase = struct {
     phrase: []const u8,
     location: []const u8,
-    timestamp: i64,
-    suggested_translation: []const u8,
+    timestamp: i64, // epoch 秒；0 = 时间源不可用
 };
+
+/// 未翻译短语收集清单：去重（phrase+location 复合键）与 JSON 渲染均为**纯函数**
+/// （不依赖 Io/全局状态，进测试图——台账 D7 可测性守则），落盘由 main 层在进程出口执行。
+pub const UntranslatedList = struct {
+    items: std.ArrayList(UntranslatedPhrase) = .empty,
+
+    /// 记入一条；同 (phrase, location) 已存在则跳过（check 多根/多路会重复报同一错，防爆盘）。
+    /// 字符串以 `gpa` dupe 自持。确定性时间戳由调用方注入（纯函数不摸时钟）。
+    pub fn log(self: *UntranslatedList, gpa: std.mem.Allocator, phrase: []const u8, location: []const u8, timestamp: i64) !void {
+        for (self.items.items) |have| {
+            if (std.mem.eql(u8, have.phrase, phrase) and std.mem.eql(u8, have.location, location)) return;
+        }
+        const owned_phrase = try gpa.dupe(u8, phrase);
+        errdefer gpa.free(owned_phrase);
+        const owned_loc = try gpa.dupe(u8, location);
+        errdefer gpa.free(owned_loc);
+        try self.items.append(gpa, .{ .phrase = owned_phrase, .location = owned_loc, .timestamp = timestamp });
+    }
+};
+
+/// JSON 条目形：字段名以 `_` 标在 comptime 层、值经匿名结构体给出（jsonStringify 约定）。
+const JsonEntry = struct {
+    phrase: []const u8 = "",
+    location: []const u8 = "",
+    timestamp: i64 = 0,
+    suggested_translation: []const u8 = "",
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("phrase");
+        try jw.write(self.phrase);
+        try jw.objectField("location");
+        try jw.write(self.location);
+        try jw.objectField("timestamp");
+        try jw.write(self.timestamp);
+        try jw.objectField("suggested_translation");
+        try jw.write(self.suggested_translation);
+        try jw.endObject();
+    }
+};
+
+const JsonDoc = struct {
+    generated_at: i64 = 0,
+    phrases: []const JsonEntry = &.{},
+
+    pub fn jsonStringify(self: @This(), jw: anytype) !void {
+        try jw.beginObject();
+        try jw.objectField("generated_at");
+        try jw.write(self.generated_at);
+        try jw.objectField("phrases");
+        try jw.write(self.phrases);
+        try jw.endObject();
+    }
+};
+
+/// 渲染未翻译清单为 JSON 文本（UTF-8 字符串按原样写出、控制字符/引号/反斜杠由 stringify
+/// 标准转义——CI 消费面必须产生合法 JSON，禁止手写拼接）。返回 `gpa` 所有权。
+pub fn renderUntranslatedJson(gpa: std.mem.Allocator, items: []const UntranslatedPhrase, generated_at: i64) ![]u8 {
+    const entries = try gpa.alloc(JsonEntry, items.len);
+    defer gpa.free(entries);
+    for (items, entries) |it, *e| {
+        e.* = .{
+            .phrase = it.phrase,
+            .location = it.location,
+            .timestamp = it.timestamp,
+            .suggested_translation = try std.fmt.allocPrint(gpa, "[待翻译] {s}", .{it.phrase}),
+        };
+    }
+    defer for (entries) |e| gpa.free(e.suggested_translation);
+    const doc = JsonDoc{ .generated_at = generated_at, .phrases = entries };
+    // 0.17 Stringify.Options 断代：旧 `pretty` 改 `whitespace` 枚举（D12 同族）；
+    // `escape_unicode` 留默认 false——CJK 原文直接写出，人读/机读面都直观。
+    return std.json.Stringify.valueAlloc(gpa, doc, .{ .whitespace = .indent_2 });
+}
 
 /// 纯母语过滤器
 pub const PureFilter = struct {
     gpa: std.mem.Allocator,
     config: Config,
     whitelist: Whitelist,
-    untranslated_phrases: std.ArrayList(UntranslatedPhrase),
+    /// F3 落盘收集清单（可 null：只拦不记）：由调用方在 init 时注入、跨过滤器实例存活——
+    /// 一个进程内 `zigCompile` 可能多次新建过滤器（check 多根），清单须跨调用累积、进程出口统一落盘。
+    log_list: ?*UntranslatedList = null,
 
-    pub fn init(gpa: std.mem.Allocator, config: Config) !PureFilter {
+    pub fn init(gpa: std.mem.Allocator, config: Config, log_list: ?*UntranslatedList) !PureFilter {
         var whitelist = Whitelist.init(gpa);
         errdefer whitelist.deinit();
 
-        // 添加默认白名单规则
-        try whitelist.add("MyType");
-        try whitelist.add("MyVariable");
-        try whitelist.add("my_variable");
-        try whitelist.add("_private_var");
-        try whitelist.add("@import");
-        try whitelist.add("@memcpy");
-        try whitelist.add("@typeInfo");
-
+        // 白名单零硬编码（台账 F2，51 轮）：规则属语言包领土，由包 `[whitelist]` 段供给、
+        // 经 `applyPackRules` 加载；工具层不再内置任何 token。
         return .{
             .gpa = gpa,
             .config = config,
             .whitelist = whitelist,
-            .untranslated_phrases = std.ArrayList(UntranslatedPhrase).empty,
+            .log_list = log_list,
         };
+    }
+
+    /// 从语言包 `[whitelist]` 段加载豁免规则（调用方传包内切片，本函数 dupe 自持）。
+    /// 重复规则跳过：多次调用幂等，不会爆规则表。
+    pub fn applyPackRules(self: *PureFilter, rules: []const []const u8) !void {
+        for (rules) |rule| {
+            var dup = false;
+            for (self.whitelist.rules.items) |have| {
+                if (std.mem.eql(u8, have, rule)) dup = true;
+            }
+            if (!dup) try self.whitelist.add(rule);
+        }
     }
 
     pub fn deinit(self: *PureFilter) void {
         self.whitelist.deinit();
-        for (self.untranslated_phrases.items) |phrase| {
-            self.gpa.free(phrase.phrase);
-            self.gpa.free(phrase.location);
-            self.gpa.free(phrase.suggested_translation);
-        }
-        self.untranslated_phrases.deinit(self.gpa);
     }
 
-    /// 检测文本中是否包含英文残留
+    /// 检测文本中是否包含英文残留。
+    /// 默认（非严格）模式为**词链启发式**：仅当两个及以上“长词”（≥min_english_length 连续字母）
+    /// 相邻——中间只隔空白/短虚词/数字/标点、无母语文字或标识符内部符号（-_.@/= 等）——才判英文句残留；
+    /// 引号区（'...' / `...` / "..."）为操作数领土整体跳过。
+    /// 与台账 B2（操作数保留）边界对称：孤立 ASCII 词（类型签名 'comptime_int'、参数名
+    /// --release=fast、标识符 MyType、内建 @constCast）是诊断实体、不拦截；真实英文句子
+    /// （"expected return type of main"、"not a function"）必含相邻长词对、被拦截。
+    /// 严格模式（config.strict_mode）保留旧规则：任意 ≥3 连续字母即英文（CI 零英文扫描用）。
     pub fn detectEnglish(self: *PureFilter, text: []const u8) bool {
         if (!self.config.enabled) return false;
+        if (self.config.strict_mode) return self.detectAnyRun(text);
 
+        var i: usize = 0;
+        var chain = false; // 已有长词在前且链未断：后续相邻长词即成英文句
+        while (i < text.len) {
+            const c = text[i];
+            if (std.ascii.isAlphabetic(c)) {
+                var j = i;
+                while (j < text.len and std.ascii.isAlphabetic(text[j])) j += 1;
+                if (j - i >= self.config.min_english_length) {
+                    if (chain) return true;
+                    chain = true;
+                }
+                // 短词（1-2 字母，如 not a function 的 a / value of 的 of）不另起链也不断链。
+                i = j;
+                continue;
+            }
+            // 空白/数字/句读标点：链保持（英文句里常夹数字与逗号）。
+            if (c == ' ' or c == '\t' or std.ascii.isDigit(c) or
+                c == ',' or c == ';' or c == ':' or c == '.' or c == '!' or c == '?' or
+                c == '(' or c == ')' or c == '[' or c == ']' or c == '{' or c == '}')
+            {
+                i += 1;
+                continue;
+            }
+            // 引号区（操作数领土）：整段跳到闭引号，链保持（夹带操作数的英文句仍要被拦）；
+            // 未闭合则按普通字符断链处理。
+            if (c == '\'' or c == '`' or c == '"') {
+                if (std.mem.indexOfScalarPos(u8, text, i + 1, c)) |close| {
+                    i = close + 1;
+                    continue;
+                }
+            }
+            // 其余（标识符内部符号 -_.@/=\、路径、母语文字的非 ASCII 字节）：断链。
+            chain = false;
+            i += 1;
+        }
+        return false;
+    }
+
+    /// 旧规则（严格模式）：任意 ≥min 连续字母即判英文。
+    fn detectAnyRun(self: *PureFilter, text: []const u8) bool {
         var i: usize = 0;
         while (i < text.len) {
             const c = text[i];
             if (std.ascii.isAlphabetic(c)) {
-                // 计算连续英文字母长度
                 var j = i;
                 while (j < text.len and std.ascii.isAlphabetic(text[j])) {
                     j += 1;
                 }
-                const length = j - i;
-                if (length >= self.config.min_english_length) {
+                if (j - i >= self.config.min_english_length) {
                     return true;
                 }
                 i = j;
@@ -118,8 +244,8 @@ pub const PureFilter = struct {
         return false;
     }
 
-    /// 提取文本中的英文残留短语
-    pub fn extractEnglishPhrases(self: PureFilter, text: []const u8) std.ArrayList([]const u8) {
+    /// 提取文本中的英文残留短语（分配失败向上传播，不静默丢短语——台账 D16）
+    pub fn extractEnglishPhrases(self: PureFilter, text: []const u8) !std.ArrayList([]const u8) {
         var phrases = std.ArrayList([]const u8).empty;
         var i: usize = 0;
 
@@ -132,7 +258,7 @@ pub const PureFilter = struct {
                 }
                 const phrase = std.mem.trim(u8, text[i..j], " ");
                 if (phrase.len >= self.config.min_english_length) {
-                    phrases.append(self.gpa, phrase) catch {};
+                    try phrases.append(self.gpa, phrase);
                 }
                 i = j;
             } else {
@@ -143,24 +269,29 @@ pub const PureFilter = struct {
         return phrases;
     }
 
-    /// 过滤英文残留，返回中文提示
+    /// 过滤消息：含英文残留且不在白名单时生成兜底译文，并记入 `self.log_list`（F3 落盘面）。
+    /// 时间戳由调用方在记录边界注入（本模块不摸 Io，保持纯可测——D7；无产品时间语境传 0）。
+    /// 所有路径均返回 `gpa` 分配的**拥有权副本**（调用方可无条件 `gpa.free`）。
     pub fn filterMessage(
         self: *PureFilter,
         gpa: std.mem.Allocator,
         text: []const u8,
         location: []const u8,
+        timestamp_epoch_s: i64,
     ) ![]const u8 {
         if (!detectEnglish(self, text)) {
-            return text;
+            return try gpa.dupe(u8, text); // 统一拥有权：旧版直返借用、调用方 free 非自有内存即崩溃
         }
 
         // 检查是否在白名单中
         if (self.whitelist.check(text)) {
-            return text;
+            return try gpa.dupe(u8, text);
         }
 
-        // 记录未翻译短语
-        try self.logUntranslated(text, location);
+        // 记录未翻译短语（去重与自持在清单纯函数内；时间戳来自调用方）
+        if (self.log_list) |list| {
+            try list.log(gpa, text, location, timestamp_epoch_s);
+        }
 
         // 生成兜底中文提示
         var out = std.ArrayList(u8).empty;
@@ -173,50 +304,33 @@ pub const PureFilter = struct {
         return out.toOwnedSlice(gpa);
     }
 
-    /// 记录未翻译短语
-    pub fn logUntranslated(
-        self: *PureFilter,
-        phrase: []const u8,
-        location: []const u8,
-    ) !void {
-        const suggested = try std.fmt.allocPrint(self.gpa, "[待翻译] {s}", .{phrase});
-        errdefer self.gpa.free(suggested);
-
-        try self.untranslated_phrases.append(self.gpa, .{
-            .phrase = try self.gpa.dupe(u8, phrase),
-            .location = try self.gpa.dupe(u8, location),
-            .timestamp = 0,
-            .suggested_translation = suggested,
-        });
-    }
-
-    /// 生成未翻译短语报告
-    pub fn generateReport(self: PureFilter, gpa: std.mem.Allocator) ![]const u8 {
+    /// 生成未翻译短语报告（Markdown 人类阅读面；CI 机读面走 `renderUntranslatedJson` 落盘）。
+    /// 无 self 方法：渲染只吃清单、不需要过滤器状态（避免 unused-self）。
+    pub fn renderReport(gpa: std.mem.Allocator, items: []const UntranslatedPhrase) ![]const u8 {
         var out = std.ArrayList(u8).empty;
         errdefer out.deinit(gpa);
 
         try out.appendSlice(gpa, "# 未翻译短语报告\n\n");
-        try out.appendSlice(gpa, "生成时间: unknown\n\n");
 
         try out.appendSlice(gpa, "| 序号 | 短语 | 位置 | 建议翻译 |\n");
         try out.appendSlice(gpa, "|------|------|------|----------|\n");
 
-        for (self.untranslated_phrases.items, 1..) |phrase, idx| {
+        for (items, 1..) |phrase, idx| {
             try out.appendSlice(gpa, try std.fmt.allocPrint(
                 gpa,
-                "| {d} | {s} | {s} | {s} |\n",
-                .{ idx, phrase.phrase, phrase.location, phrase.suggested_translation },
+                "| {d} | {s} | {s} | [待翻译] {s} |\n",
+                .{ idx, phrase.phrase, phrase.location, phrase.phrase },
             ));
         }
 
         return out.toOwnedSlice(gpa);
     }
 
-    /// 从配置加载过滤器
+    /// 从配置加载过滤器（落盘清单由调用方后续注入；本入口暂无配置盘面）
     pub fn fromConfig(gpa: std.mem.Allocator, config_path: []const u8) !PureFilter {
         _ = config_path; // 未来可扩展从文件加载配置
         const config = Config{};
-        return try PureFilter.init(gpa, config);
+        return try PureFilter.init(gpa, config, null);
     }
 };
 
@@ -288,13 +402,13 @@ pub fn localizeFallback(gpa: std.mem.Allocator, text: []const u8) ![]const u8 {
 
 test "纯母语过滤器初始化" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 }
 
 test "detectEnglish - 无英文残留" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     try std.testing.expect(!filter.detectEnglish("错误: 类型不匹配"));
@@ -304,27 +418,68 @@ test "detectEnglish - 无英文残留" {
 
 test "detectEnglish - 有英文残留" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     try std.testing.expect(filter.detectEnglish("错误: expected type, found 'i64'"));
     try std.testing.expect(filter.detectEnglish("警告: unused variable 'x'"));
     try std.testing.expect(filter.detectEnglish("说明: previous declaration here"));
+    // 长-短-长链（not a function / value of declaration）：夹短虚词的英文句同样拦截。
+    try std.testing.expect(filter.detectEnglish("类型 'i64' not a function"));
 }
 
-test "whitelist - 驼峰命名" {
+test "detectEnglish - B2 边界：孤立操作数不误拦" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
+
+    // 单个长词（类型签名/参数名/标识符/内建）是诊断实体、非英文句子，不得触发兜底。
+    try std.testing.expect(!filter.detectEnglish("无法加载仅限编译期的类型 'comptime_int'"));
+    try std.testing.expect(!filter.detectEnglish("无法识别的参数: --release=fast")); // = 断链，非相邻词
+    try std.testing.expect(!filter.detectEnglish("MyType"));
+    try std.testing.expect(!filter.detectEnglish("建议使用 @constCast 处理"));
+    try std.testing.expect(!filter.detectEnglish("错误 FileNotFound 发生"));
+    // 标识符内部符号（下划线/点号）断链：comptime_int、my_variable 各自孤立。
+    try std.testing.expect(!filter.detectEnglish("值 comptime_int 无效"));
+    try std.testing.expect(!filter.detectEnglish("字段 my_variable 缺失"));
+}
+
+test "detectEnglish - 严格模式保留旧规则" {
+    const gpa = std.testing.allocator;
+    var filter = try PureFilter.init(gpa, .{ .strict_mode = true }, null);
+    defer filter.deinit();
+
+    // 严格模式（CI 零英文扫描用）：任意 ≥3 字母即拦，含孤立操作数。
+    try std.testing.expect(filter.detectEnglish("值 comptime_int 无效"));
+    try std.testing.expect(!filter.detectEnglish("错误: 类型不匹配"));
+}
+
+test "whitelist - 驼峰命名（规则由包供给：applyPackRules 加载内置包后生效）" {
+    const gpa = std.testing.allocator;
+    var pack = try Pack.parse(gpa, zh_pack);
+    defer pack.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+    try filter.applyPackRules(pack.whitelist.items);
+
+    // 幂等：重复加载不爆表也不报错。
+    try filter.applyPackRules(pack.whitelist.items);
 
     try std.testing.expect(filter.whitelist.check("MyType"));
     try std.testing.expect(filter.whitelist.check("MyVariable"));
+    // 工具层自身不再内置任何 token：新过滤器未加载前必然 miss。
+    var bare = try PureFilter.init(gpa, .{}, null);
+    defer bare.deinit();
+    try std.testing.expect(!bare.whitelist.check("MyType"));
 }
 
 test "whitelist - 蛇形命名" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var pack = try Pack.parse(gpa, zh_pack);
+    defer pack.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
+    try filter.applyPackRules(pack.whitelist.items);
 
     try std.testing.expect(filter.whitelist.check("my_variable"));
     try std.testing.expect(filter.whitelist.check("_private_var"));
@@ -332,42 +487,98 @@ test "whitelist - 蛇形命名" {
 
 test "whitelist - Zig 内建函数" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var pack = try Pack.parse(gpa, zh_pack);
+    defer pack.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
+    try filter.applyPackRules(pack.whitelist.items);
 
     try std.testing.expect(filter.whitelist.check("@import"));
     try std.testing.expect(filter.whitelist.check("@memcpy"));
 }
 
-test "filterMessage - 兜底翻译" {
+test "filterMessage - 兜底翻译，且记入落盘清单（F3）" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var list = UntranslatedList{};
+    defer {
+        for (list.items.items) |it| { gpa.free(it.phrase); gpa.free(it.location); }
+        list.items.deinit(gpa);
+    }
+    var filter = try PureFilter.init(gpa, .{}, &list);
     defer filter.deinit();
 
     const result = try filter.filterMessage(
         gpa,
         "expected type, found 'i64'",
         "src/main.zz:5:10",
+        123,
     );
     defer gpa.free(result);
 
     try std.testing.expect(std.mem.indexOf(u8, result, "[未翻译]") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "expected type, found 'i64'") != null);
+    try std.testing.expectEqual(@as(usize, 1), list.items.items.len);
+    try std.testing.expectEqualStrings("expected type, found 'i64'", list.items.items[0].phrase);
+    try std.testing.expectEqualStrings("src/main.zz:5:10", list.items.items[0].location);
+    try std.testing.expectEqual(@as(i64, 123), list.items.items[0].timestamp);
+
+    // 同一 (phrase, location) 再记一次：去重不爆盘（check 多根/多路重复报同一错）。
+    {
+        const r2 = try filter.filterMessage(gpa, "expected type, found 'i64'", "src/main.zz:5:10", 456);
+        defer gpa.free(r2);
+    }
+    try std.testing.expectEqual(@as(usize, 1), list.items.items.len);
+    // 同短语不同位置：另记一条。
+    {
+        const r3 = try filter.filterMessage(gpa, "expected type, found 'i64'", "src/other.zz:1:2", 789);
+        defer gpa.free(r3);
+    }
+    try std.testing.expectEqual(@as(usize, 2), list.items.items.len);
 }
 
 test "filterMessage - 白名单通过" {
     const gpa = std.testing.allocator;
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     const result = try filter.filterMessage(
         gpa,
         "MyType",
         "src/main.zz:5:10",
+        0,
     );
     defer gpa.free(result);
 
     try std.testing.expect(std.mem.eql(u8, result, "MyType"));
+}
+
+test "F3 - JSON 渲染：合法可解析、中文原样、特殊字符转义、空清单也合法" {
+    const gpa = std.testing.allocator;
+
+    // 空清单：仍须产出合法 JSON（`{}` 包裹、phrases 空数组）。
+    const empty = try renderUntranslatedJson(gpa, &.{}, 0);
+    defer gpa.free(empty);
+    {
+        var parsed = try std.json.parseFromSlice(JsonDoc, gpa, empty, .{});
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(usize, 0), parsed.value.phrases.len);
+    }
+
+    // 含中文、引号/换行/反斜杠的条目：转义合法性交给 std.json 往返验证。
+    const items = [_]UntranslatedPhrase{
+        .{ .phrase = "expected \"type\", found\n'i64'\\x", .location = "src/主程序.zz:5:10", .timestamp = 1762000000 },
+    };
+    const json = try renderUntranslatedJson(gpa, &items, 1762000001);
+    defer gpa.free(json);
+    var parsed = try std.json.parseFromSlice(JsonDoc, gpa, json, .{});
+    defer parsed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), parsed.value.phrases.len);
+    try std.testing.expectEqualStrings(items[0].phrase, parsed.value.phrases[0].phrase);
+    try std.testing.expectEqualStrings("src/主程序.zz:5:10", parsed.value.phrases[0].location);
+    try std.testing.expectEqual(@as(i64, 1762000000), parsed.value.phrases[0].timestamp);
+    const want_suggested = try std.fmt.allocPrint(gpa, "[待翻译] {s}", .{items[0].phrase});
+    defer gpa.free(want_suggested);
+    try std.testing.expectEqualStrings(want_suggested, parsed.value.phrases[0].suggested_translation);
 }
 
 test "localizeFallback - 短语替换" {

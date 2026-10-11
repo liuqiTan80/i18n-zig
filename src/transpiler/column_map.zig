@@ -57,21 +57,63 @@ pub fn lineText(src: []const u8, off: usize) []const u8 {
 }
 
 /// 标准偏移 -> 方言偏移。未映射位置按前方累计漂移（可为负）线性还原。
+/// R6（第 52 轮）：真二分取代线性扫描。有序前提：翻译器按源码顺序逐词元 add，
+/// entries 按 nat_off 与 std_off 双双升序且不重叠（两端行结构同构、逐词元追加）；
+/// 此不变量由单测“差分对照线性基准”与真实工程 demos 4/4 回译全绿共同钉住。
+/// 禁止旧 9.3.1 草案的 bogoSort+constCast 模式回归（台账 R6 更正记录）。
 pub fn toNative(self: ColumnMap, std_off: usize) usize {
-    var delta: isize = 0; // 累计字节长度差（方言端 − 标准端）
-    for (self.entries.items) |e| {
+    // 不变量：k = 最后一个 std_off <= 目标的条目。若目标落在 k 的替换区间内即命中；
+    // 否则 k 就是线性版“处理完最后一个条目”时的 delta 来源（不可能被更早条目命中：
+    // 条目不重叠且升序，若 j<k 含目标则 k.std_off >= j.std_end > 目标，与 k.std_off <= 目标矛盾）。
+    const items = self.entries.items;
+    var lo: usize = 0;
+    var hi: usize = items.len; // 循环不变量：答案在 [lo, hi)
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (items[mid].std_off <= std_off) lo = mid + 1 else hi = mid;
+    }
+    if (lo == 0) return std_off; // 无任何条目在目标之前：delta 0（与线性版同形）
+    const e = items[lo - 1];
+    if (std_off < e.std_off + e.std_len) return e.nat_off; // 落在被替换的词元区间内
+    const delta = @as(isize, @intCast(e.nat_off + e.nat_len)) - @as(isize, @intCast(e.std_off + e.std_len));
+    const result = @as(isize, @intCast(std_off)) + delta;
+    return if (result < 0) 0 else @intCast(result);
+}
+
+/// 方言偏移 -> 标准偏移（eject / 正向提示用）。R6：与 toNative 对称的二分版。
+pub fn toStd(self: ColumnMap, nat_off: usize) usize {
+    const items = self.entries.items;
+    var lo: usize = 0;
+    var hi: usize = items.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (items[mid].nat_off <= nat_off) lo = mid + 1 else hi = mid;
+    }
+    if (lo == 0) return nat_off;
+    const e = items[lo - 1];
+    if (nat_off < e.nat_off + e.nat_len) return e.std_off;
+    const delta = @as(isize, @intCast(e.std_off + e.std_len)) - @as(isize, @intCast(e.nat_off + e.nat_len));
+    const result = @as(isize, @intCast(nat_off)) + delta;
+    return if (result < 0) 0 else @intCast(result);
+}
+
+/// R6 差分参照（私有）：旧线性扫描版 toNative。仅用于单测「二分 == 线性」等价性，
+/// 钉住有序不重叠前提；不进产品热路径。
+fn toNativeLinear(entries: []const Entry, std_off: usize) usize {
+    var delta: isize = 0;
+    for (entries) |e| {
         if (std_off < e.std_off) break;
-        if (std_off < e.std_off + e.std_len) return e.nat_off; // 落在被替换的词元区间内
+        if (std_off < e.std_off + e.std_len) return e.nat_off;
         delta = @as(isize, @intCast(e.nat_off + e.nat_len)) - @as(isize, @intCast(e.std_off + e.std_len));
     }
     const result = @as(isize, @intCast(std_off)) + delta;
     return if (result < 0) 0 else @intCast(result);
 }
 
-/// 方言偏移 -> 标准偏移（eject / 正向提示用）。
-pub fn toStd(self: ColumnMap, nat_off: usize) usize {
-    var delta: isize = 0; // 累计字节长度差（标准端 − 方言端）
-    for (self.entries.items) |e| {
+/// R6 差分参照（私有）：旧线性扫描版 toStd。
+fn toStdLinear(entries: []const Entry, nat_off: usize) usize {
+    var delta: isize = 0;
+    for (entries) |e| {
         if (nat_off < e.nat_off) break;
         if (nat_off < e.nat_off + e.nat_len) return e.std_off;
         delta = @as(isize, @intCast(e.std_off + e.std_len)) - @as(isize, @intCast(e.nat_off + e.nat_len));
@@ -96,4 +138,36 @@ test "往返一致" {
     // 未映射位置的往返一致：标准 16（紧跟第二个词元）<-> 方言 22
     try std.testing.expectEqual(@as(usize, 22), map.toNative(16));
     try std.testing.expectEqual(@as(usize, 16), map.toStd(22));
+}
+
+test "R6：真二分与线性基准差分等价（长行 CJK 混排映射链、有序不重叠前提钉死）" {
+    const gpa = std.testing.allocator;
+    var map = init(gpa);
+    defer map.deinit(gpa);
+    // 确定性构造一段升序、不重叠、词元有增有减的映射链（模拟长行 CJK 逐词元替换）。
+    // nat_cur / std_cur 各自独立递增，保证两端同时升序且词元间夹 >=1 字节间隙（不重叠）。
+    var nat_cur: usize = 0;
+    var std_cur: usize = 0;
+    var lcg: u32 = 0xC0FFEE;
+    const n = 64;
+    var k: usize = 0;
+    while (k < n) : (k += 1) {
+        lcg = lcg *% 1103515245 +% 12345;
+        const nlen: usize = @intCast(1 + (lcg >> 8) % 6); // 1..6 字节方言词元（含多字节 CJK）
+        lcg = lcg *% 1103515245 +% 12345;
+        const slen: usize = @intCast(1 + (lcg >> 8) % 6); // 1..6 字节标准词元（有增有减）
+        lcg = lcg *% 1103515245 +% 12345;
+        const gap: usize = @intCast(1 + (lcg >> 8) % 3); // 1..3 字节间隙
+        try map.add(gpa, .{ .nat_off = nat_cur, .nat_len = nlen, .std_off = std_cur, .std_len = slen });
+        nat_cur += nlen + gap;
+        std_cur += slen + gap;
+    }
+    const items = map.entries.items;
+    // 覆盖两端 0..max 的每个偏移（含词元内命中、间隙还原、越首/越尾、负 delta 夹 0）做差分对照。
+    const ub = @max(nat_cur, std_cur) + 3;
+    var off: usize = 0;
+    while (off <= ub) : (off += 1) {
+        try std.testing.expectEqual(toNativeLinear(items, off), map.toNative(off));
+        try std.testing.expectEqual(toStdLinear(items, off), map.toStd(off));
+    }
 }

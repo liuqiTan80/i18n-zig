@@ -230,6 +230,35 @@ const CpIter = struct {
     }
 };
 
+/// R7（第 52 轮）：「危险表 / 全角变体 / 不可见字符」三类扫描都要求词元含某个特定 UTF-8 首字节，
+/// 正常母语标识符（典型 CJK 汉字 U+4E00..U+9FFF，首字节 0xE4..0xE9）一个都不含——原实现对每个
+/// nonascii_word 都要跑 ~40 次 `indexOf` 全词扫描 + 两轮码点解码，CJK 密集文本时开销可观。
+/// 预合并三类触发前提的首字节为位图，词元不含任一则三类必然无命中，安全跳到逐码点白名单。
+/// 位图命中仍走原精确路径（判断逻辑与顺序完全不变）；仅排除「必然无命中」，无假阴故行为等价。
+const special_lead_bitmap = blk: {
+    var bm: [256]bool = undefined;
+    for (&bm) |*x| x.* = false;
+    // danger 表首字节（全角标点 U+FFxx→0xEF、。，、「、U+300x→0xE3、NBSP→0xC2、破折/零宽/省略→0xE2）。
+    for (dangers) |d| {
+        if (d.full.len > 0) bm[d.full[0]] = true;
+    }
+    // 全角 ASCII 变体区 U+FF01..FF5E（恒 0xEF）+ 不可见空格/格式类并集（0xC2/0xE1/0xE2/0xEF），
+    // 覆盖 fullwidthFormHint / invisibleFormHint 的全部触发前提。
+    bm[0xC2] = true;
+    bm[0xE1] = true;
+    bm[0xE2] = true;
+    bm[0xEF] = true;
+    break :blk bm;
+};
+
+/// 词元是否可能命中上述三类专门扫描（首字节位图快跳的判据）。
+fn mayNeedSpecialCheck(word: []const u8) bool {
+    for (word) |b| {
+        if (special_lead_bitmap[b]) return true;
+    }
+    return false;
+}
+
 /// 审查所有 nonascii_word 词元，返回违规列表（字符串/注释天然不参与）。
 pub fn check(gpa: std.mem.Allocator, src: []const u8, toks: []const lexer.Token) ![]Violation {
     var out: std.ArrayList(Violation) = .empty;
@@ -239,49 +268,53 @@ pub fn check(gpa: std.mem.Allocator, src: []const u8, toks: []const lexer.Token)
         if (t.kind != .nonascii_word) continue;
         const word = t.text(src);
 
-        // 1) 危险字符表命中：给出精确替换提示
-        var hit_danger = false;
-        for (dangers) |d| {
-            if (std.mem.indexOf(u8, word, d.full)) |at| {
-                try out.append(gpa, .{
-                    .off = t.off + at,
-                    .len = d.full.len,
-                    .word = word,
-                    .danger = d.full,
-                    .ascii = d.ascii,
-                    .hint = d.label,
-                });
-                hit_danger = true;
-                break;
+        // R7：首字节位图快跳——词元不含危险/全角/不可见任一特征首字节时，以下三类扫描必然落空，
+        // 直接跳到逐码点白名单（白名单才是判定非法字符的必要路径，不能跳）。
+        if (mayNeedSpecialCheck(word)) {
+            // 1) 危险字符表命中：给出精确替换提示
+            var hit_danger = false;
+            for (dangers) |d| {
+                if (std.mem.indexOf(u8, word, d.full)) |at| {
+                    try out.append(gpa, .{
+                        .off = t.off + at,
+                        .len = d.full.len,
+                        .word = word,
+                        .danger = d.full,
+                        .ascii = d.ascii,
+                        .hint = d.label,
+                    });
+                    hit_danger = true;
+                    break;
+                }
             }
-        }
-        // 已由危险表精确命中的字符不再走白名单，避免同一位置重复报错
-        if (hit_danger) continue;
+            // 已由危险表精确命中的字符不再走白名单，避免同一位置重复报错
+            if (hit_danger) continue;
 
-        // 2) 全角 ASCII 变体兜底：数字/拉丁字母/其余符号按类给半角替换提示（危险表未列举的）。
-        if (fullwidthFormHint(word)) |h| {
-            try out.append(gpa, .{
-                .off = t.off + h.at,
-                .len = h.len,
-                .word = word,
-                .danger = h.danger,
-                .ascii = h.ascii,
-                .hint = h.label,
-            });
-            continue;
-        }
+            // 2) 全角 ASCII 变体兜底：数字/拉丁字母/其余符号按类给半角替换提示（危险表未列举的）。
+            if (fullwidthFormHint(word)) |h| {
+                try out.append(gpa, .{
+                    .off = t.off + h.at,
+                    .len = h.len,
+                    .word = word,
+                    .danger = h.danger,
+                    .ascii = h.ascii,
+                    .hint = h.label,
+                });
+                continue;
+            }
 
-        // 2.5) 不可见字符总网：空格类→“改用半角空格”（走空格分支）；零宽/格式类→“请删除”（无可见替换、走通用分支显示所在词元定位）。
-        if (invisibleFormHint(word)) |h| {
-            try out.append(gpa, .{
-                .off = t.off + h.at,
-                .len = h.len,
-                .word = word,
-                .danger = h.danger,
-                .ascii = h.ascii,
-                .hint = h.label,
-            });
-            continue;
+            // 2.5) 不可见字符总网：空格类→“改用半角空格”（走空格分支）；零宽/格式类→“请删除”（无可见替换、走通用分支显示所在词元定位）。
+            if (invisibleFormHint(word)) |h| {
+                try out.append(gpa, .{
+                    .off = t.off + h.at,
+                    .len = h.len,
+                    .word = word,
+                    .danger = h.danger,
+                    .ascii = h.ascii,
+                    .hint = h.label,
+                });
+                continue;
+            }
         }
 
         // 3) 逐码点白名单：拦截同形异体与未知字符
@@ -499,4 +532,26 @@ test "CJK 名里夹全角数字（甲\u{FF11}）仍被兜底拦下（词元合�
         if (v.danger != null and std.mem.eql(u8, v.hint, "全角数字")) got = true;
     }
     try std.testing.expect(got);
+}
+
+test "R7：首字节位图快跳——只跳专门扫描、绝不跳白名单（同形异体仍被拦）" {
+    const gpa = std.testing.allocator;
+    // 判据本身：常见汉字标识符（首字节 0xE4..0xE9）不含特征首字节→走快路径；含全角/危险首字节→慢路径。
+    try std.testing.expect(!mayNeedSpecialCheck("变量"));
+    try std.testing.expect(mayNeedSpecialCheck("甲\u{FF11}")); // 含全角数字（0xEF）
+    try std.testing.expect(mayNeedSpecialCheck("甲\u{3000}")); // 含全角空格（0xE3）
+
+    // 关键正确性：希腊同形字母 α（U+03B1，首字节 0xCE）不在位图内→ mayNeedSpecialCheck 为假（走快路径），
+    // 但它非白名单合法字符——快路径只跳“危险/全角/不可见”三类，逐码点白名单仍必须拦下它（泛拒绝、danger 为 null）。
+    try std.testing.expect(!mayNeedSpecialCheck("\u{03B1}"));
+    const src = "常数 \u{03B1} \u{540d} = 1;"; // α名：α 非法、名 合法
+    const toks = try lexer.scan(gpa, src);
+    defer gpa.free(toks);
+    const vs = try check(gpa, src, toks);
+    defer gpa.free(vs);
+    var got_homoglyph = false;
+    for (vs) |v| {
+        if (v.danger == null and std.mem.indexOf(u8, v.hint, "不允许出现在母语标识符中") != null) got_homoglyph = true;
+    }
+    try std.testing.expect(got_homoglyph);
 }

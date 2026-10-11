@@ -59,8 +59,9 @@ pub fn intern(self: *Mangle, native: []const u8) ![]const u8 {
 }
 
 /// 预留一个编号 n，使后续 intern 不会派生 `z_<n>`。
-pub fn reserveNumber(self: *Mangle, n: usize) void {
-    self.reserved.put(n, {}) catch {};
+/// 预留失败必须传播（台账 D16）：静默吞掉会让后续 intern 派生到被占编号、生成重复声明。
+pub fn reserveNumber(self: *Mangle, n: usize) !void {
+    try self.reserved.put(n, {});
 }
 
 /// 是否为标识符字节（ASCII 字母/数字/下划线）；非此类的字节（含任意 UTF-8 多字节 CJK、标点、空白）皆为词边界。
@@ -79,7 +80,7 @@ fn parseZNumber(tok: []const u8) ?usize {
 /// 扫描源码文本，把所有独立成词的 `z_<十进制>` 标识符的编号预留下来。
 /// 按标识符字符切成极大连续段再判定，天然保证词边界：`az_1`、`z_1x`、`zz_1` 均不匹配，
 /// `x.z_1.y` 中的 `z_1` 匹配。对字符串/注释里偶然出现的 `z_1` 亦会预留（超集预留无害，仅多跳一个号）。
-pub fn reserveZInText(self: *Mangle, text: []const u8) void {
+pub fn reserveZInText(self: *Mangle, text: []const u8) !void {
     var i: usize = 0;
     while (i < text.len) {
         if (!isIdentByte(text[i])) {
@@ -88,7 +89,7 @@ pub fn reserveZInText(self: *Mangle, text: []const u8) void {
         }
         const start = i;
         while (i < text.len and isIdentByte(text[i])) i += 1;
-        if (parseZNumber(text[start..i])) |n| self.reserveNumber(n);
+        if (parseZNumber(text[start..i])) |n| try self.reserveNumber(n);
     }
 }
 
@@ -153,7 +154,7 @@ pub fn unmangle(self: Mangle, ascii: []const u8) ?[]const u8 {
 
 /// 从 `.zzc/symbols.txt` 文本恢复映射：每行 `母语名 = z_N`，跳过空行/`#`注释/`[`段头/无 `=` 行/空侧。
 /// 逐条走 `putExisting`（会把 next_index 推过已恢复的最大编号）。与文件读取解耦，便于单测锁定格式契约。
-pub fn parseSymbolText(self: *Mangle, text: []const u8) void {
+pub fn parseSymbolText(self: *Mangle, text: []const u8) !void {
     var it = std.mem.splitScalar(u8, text, '\n');
     while (it.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
@@ -162,7 +163,8 @@ pub fn parseSymbolText(self: *Mangle, text: []const u8) void {
         const native = std.mem.trim(u8, line[0..eq], " ");
         const ascii = std.mem.trim(u8, line[eq + 1 ..], " ");
         if (native.len == 0 or ascii.len == 0) continue;
-        self.putExisting(native, ascii) catch {};
+        // 恢复失败必须传播（台账 D16）：丢一条映射即破坏跨会话稳定、可能后续撞号。
+        try self.putExisting(native, ascii);
     }
 }
 
@@ -204,7 +206,7 @@ test "parseSymbolText：跳过注释/空行/段头/坏行，恢复双向映射�
     var table = init(gpa);
     defer table.deinit();
     // 混合有效行与应被忽略的行（#注释、[段头]、空行、无等号坏行）；含无空格/多空格两种写法。
-    table.parseSymbolText("# 注释行\n[符号段]\n\n模块 = z_1\n招呼=z_2\n  多余   =   z_7  \n坏行没有等号\n");
+    try table.parseSymbolText("# 注释行\n[符号段]\n\n模块 = z_1\n招呼=z_2\n  多余   =   z_7  \n坏行没有等号\n");
     // 3 条有效映射均恢复，双向可查；注释/段头/空行/坏行全忽略。
     try std.testing.expectEqual(@as(usize, 3), table.count());
     try std.testing.expectEqualStrings("模块", table.unmangle("z_1").?);
@@ -220,7 +222,7 @@ test "reserveZInText：预留用户 ASCII z_<n> 编号，intern 跳过不撞名"
     var table = init(gpa);
     defer table.deinit();
     // 源码里用户手写了 `z_1`、`x.z_3.y`（成员访问）两个独立词元，应预留编号 1 与 3。
-    table.reserveZInText("const z_1 = 5; var v = x.z_3.y; print(\"z_9\");");
+    try table.reserveZInText("const z_1 = 5; var v = x.z_3.y; print(\"z_9\");");
     // 母语名不能再得到 z_1：应跳到未预留的 z_2。
     try std.testing.expectEqualStrings("z_2", try table.intern("甲"));
     // 下一个也不能是 z_3（被预留）：应跳到 z_4。
@@ -233,7 +235,7 @@ test "reserveZInText：词边界与超集预留" {
     defer table.deinit();
     // `az_1`（前接字母）、`zz_2`（多 z）、`z_3x`（后接非数字）、`z_`（无数字）均不是 z_<纯数字> 词元，不预留。
     // 但 `z_5` 应预留（即便在字符串里，超集预留无害）。
-    table.reserveZInText("az_1 zz_2 z_3x z_ z_5");
+    try table.reserveZInText("az_1 zz_2 z_3x z_ z_5");
     // 前四个都不影响编号，首个 intern 应为 z_1（未被预留）。
     try std.testing.expectEqualStrings("z_1", try table.intern("甲"));
     // 直到碰编号 5 时跳过（z_5 被预留）。
@@ -250,7 +252,7 @@ test "relocateReservedCollisions：持久历史映射撞上用户新写 z_N 时�
     // 模拟会话A恢复：symbols.txt 里 `甲 = z_1`（文件加载、owned=false），next_index 推至 2。
     try table.putExisting("甲", "z_1");
     // 会话B：用户新写 ASCII `z_1`，预留编号 1。
-    table.reserveZInText("const z_1 = 5;");
+    try table.reserveZInText("const z_1 = 5;");
     try table.relocateReservedCollisions();
     // 甲 必须从被占的 z_1 改到空闲的 z_2（next_index 从 2 起）。
     try std.testing.expectEqualStrings("z_2", try table.intern("甲"));
@@ -270,7 +272,7 @@ test "relocateReservedCollisions：未被撞的历史映射原样不动" {
     // 恢复两个历史映射 z_1/z_2；本次用户只写了 z_9（与它们无关）。
     try table.putExisting("甲", "z_1");
     try table.putExisting("乙", "z_2");
-    table.reserveZInText("const v = z_9;");
+    try table.reserveZInText("const v = z_9;");
     try table.relocateReservedCollisions();
     // 甲/乙 都不该被挪动。
     try std.testing.expectEqualStrings("z_1", try table.intern("甲"));

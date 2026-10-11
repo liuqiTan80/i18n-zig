@@ -13,7 +13,21 @@ const std = @import("std");
 const ColumnMap = @import("../transpiler/column_map.zig");
 const Mangle = @import("../transpiler/mangle.zig");
 const Pack = @import("../lang/pack.zig");
-const PureFilter = @import("pure_filter.zig");
+const PureFilter = @import("pure_filter.zig").PureFilter; // 取嵌套 struct，非文件根命名空间
+const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
+
+/// 产品时间源（F3）：主层启动时经 `setIo` 注入；单测图不注入保持默认 null → 取时回 0，
+/// 诊断纯函数测试图不被 Io 污染（D7 可测性守则）。
+var io_: ?std.Io = null;
+pub fn setIo(io: std.Io) void { io_ = io; }
+
+/// 当前 epoch 秒（F3 记录面）：取时在产品边界（本层有 Io），不下沉进 pure_filter——
+/// 过滤器本体保持纯函数可单测（D7）。单测等无产品时间语境传 io=null → 回 0（不致命）。
+fn nowEpochS(io: ?std.Io) i64 {
+    const i = io orelse return 0;
+    const t = std.Io.Timestamp.now(i, .real); // 0.17 Clock 枚举真名是 `.real`（非 `.realtime`，D12 同族 API 断代）
+    return @intCast(@divFloor(t.nanoseconds, std.time.ns_per_s));
+}
 
 /// 一个已翻译的编译单元：方言文件 <-> 生成文件 的对照。
 pub const Unit = struct {
@@ -112,9 +126,9 @@ pub fn renderDiag(
     var filtered_msg = msg_disp;
     var owned_filtered: ?[]const u8 = null;
     if (filter) |f| {
-        if (f.detectEnglish(msg_disp)) {
-            if (!f.whitelist.check(msg_disp)) {
-                owned_filtered = try f.filterMessage(gpa, msg_disp, file_path);
+        if (f.*.detectEnglish(msg_disp)) {
+            if (!f.*.whitelist.check(msg_disp)) {
+                owned_filtered = try f.*.filterMessage(gpa, msg_disp, file_path, nowEpochS(io_));
                 filtered_msg = owned_filtered.?;
             }
         }
@@ -422,11 +436,11 @@ pub fn translateStderr(
     errdefer out.deinit(gpa);
 
     var lines: std.ArrayList([]const u8) = .empty;
+    defer lines.deinit(gpa);
     {
         var it = std.mem.splitScalar(u8, stderr, '\n');
         while (it.next()) |ln| try lines.append(gpa, ln);
     }
-    errdefer lines.deinit(gpa);
 
     // zig 报错后的“源码回显 + 波浪线”基于生成文件，与母语片段重复，渲染后丢弃。
     // “referenced by:” 回溯块指向 gen/std 内部，对学习者无意义，整块丢弃。
@@ -517,9 +531,9 @@ pub fn translateStderr(
             }
             // 纯母语过滤器：对依赖循环错误消息进行最终检查
             if (filter) |f| {
-                if (f.detectEnglish(shown)) {
-                    if (!f.whitelist.check(shown)) {
-                        const filtered = try f.filterMessage(gpa, shown, "dependency loop");
+                if (f.*.detectEnglish(shown)) {
+                    if (!f.*.whitelist.check(shown)) {
+                        const filtered = try f.*.filterMessage(gpa, shown, "dependency loop", nowEpochS(io_));
                         defer gpa.free(filtered);
                         shown = filtered;
                     }
@@ -576,6 +590,17 @@ pub fn translateStderr(
             defer gpa.free(native);
             const localized = try localizeRunner(gpa, native);
             defer gpa.free(localized);
+            // 纯母语过滤器（台账 D15）：透传行里的未译英文句子同样终拦；
+            // 词链启发式不拦孤立 ASCII 词（参数名/路径段等 B2 操作数），故保留行不会被兜底误伤。
+            if (filter) |f| {
+                if (f.*.detectEnglish(localized) and !f.*.whitelist.check(localized)) {
+                    const filtered = try f.*.filterMessage(gpa, localized, "stderr", nowEpochS(io_));
+                    defer gpa.free(filtered);
+                    try out.appendSlice(gpa, filtered);
+                    try out.append(gpa, '\n');
+                    continue;
+                }
+            }
             try out.appendSlice(gpa, localized);
             try out.append(gpa, '\n');
         }
@@ -588,92 +613,88 @@ pub fn translateStderr(
     return out.toOwnedSlice(gpa);
 }
 
-// 注：纯母语过滤器相关测试暂时禁用，因为 Zig 0.17 API 兼容性问题
-// 待 Zig 版本升级后重新启用
-// test "报错回译快照：常量重赋值 -> 母语译文 + 教学提示" {
-//     // 使用空字符串代替 @embedFile，避免 Zig 0.17 兼容性问题
-//     const zh_pack = "";
-//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-//     defer arena.deinit();
-//     const gpa = arena.allocator();
-//
-//     var lang = try Pack.parse(gpa, zh_pack);
-//     defer lang.deinit();
-//     var table = Mangle.init(gpa);
-//     defer table.deinit();
-//
-//     // 初始化纯母语过滤器
-//     var filter = try PureFilter.init(gpa, .{});
-//     defer filter.deinit();
-//
-//     const rendered = try renderDiag(
-//         gpa,
-//         lang,
-//         table,
-//         &.{},
-//         "src/main.zz",
-//         3,
-//         5,
-//         "error",
-//         "cannot assign to constant",
-//         &filter,
-//     );
-//     defer gpa.free(rendered);
-//     try std.testing.expect(std.mem.indexOf(u8, rendered, "不可变常量被重新赋值") != null);
-//     try std.testing.expect(std.mem.indexOf(u8, rendered, "src/main.zz:3:5") != null);
-//     try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{1f4a1}") != null); // 含教学提示图标
-// }
+const zh_pack = @embedFile("../lang/packs/中文.txt");
 
-// 注：纯母语过滤器相关测试暂时禁用，因为 Zig 0.17 API 兼容性问题
-// 待 Zig 版本升级后重新启用
-// test "诊断回译：短语位于句中（非前缀）也能命中并消除英文泄漏" {
-//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-//     defer arena.deinit();
-//     const gpa = arena.allocator();
-//
-//     var lang = try Pack.parse(gpa, zh_pack);
-//     defer lang.deinit();
-//     var table = Mangle.init(gpa);
-//     defer table.deinit();
-//
-//     // 初始化纯母语过滤器
-//     var filter = try PureFilter.init(gpa, .{});
-//     defer filter.deinit();
-//
-//     // zig 把“has no member”嵌在主题之后；旧的前缀匹配会漏匹、直返英文原文。
-//     const rendered = try renderDiag(
-//         gpa,
-//         lang,
-//         table,
-//         &.{},
-//         "src/lib.zz",
-//         3,
-//         20,
-//         "error",
-//         "root source file struct 'main' has no member named 'x'",
-//         &filter,
-//     );
-//     defer gpa.free(rendered);
-//     // 必须命中 packs 中的“成员不存在”模式。
-//     try hasSub(rendered, "所访问的成员不存在");
-//     try hasSub(rendered, "src/lib.zz:3:20");
-//     // 英文短语不得残留。
-//     try noSub(rendered, "has no member");
-//     try noSub(rendered, "root source file");
-// }
+test "报错回译快照：常量重赋值 -> 母语译文 + 教学提示" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
 
-// test "诊断回译：结构体字段不存在（no field named）不泄漏英文" {
-//     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-//     defer arena.deinit();
-//     const gpa = arena.allocator();
-//
-//     var lang = try Pack.parse(gpa, zh_pack);
-//     defer lang.deinit();
-//     var table = Mangle.init(gpa);
-//     defer table.deinit();
-//
-//     // 初始化纯母语过滤器
-//     var filter = try PureFilter.init(gpa, .{});
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    // 初始化纯母语过滤器
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    const rendered = try renderDiag(
+        gpa,
+        lang,
+        table,
+        &.{},
+        "src/main.zz",
+        3,
+        5,
+        "error",
+        "cannot assign to constant",
+        &filter,
+    );
+    defer gpa.free(rendered);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "不可变常量被重新赋值") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "src/main.zz:3:5") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "\u{1f4a1}") != null); // 含教学提示图标
+}
+
+test "诊断回译：短语位于句中（非前缀）也能命中并消除英文泄漏" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    // 初始化纯母语过滤器
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    // zig 把“has no member”嵌在主题之后；旧的前缀匹配会漏匹、直返英文原文。
+    const rendered = try renderDiag(
+        gpa,
+        lang,
+        table,
+        &.{},
+        "src/lib.zz",
+        3,
+        20,
+        "error",
+        "root source file struct 'main' has no member named 'x'",
+        &filter,
+    );
+    defer gpa.free(rendered);
+    // 必须命中 packs 中的“成员不存在”模式。
+    try hasSub(rendered, "所访问的成员不存在");
+    try hasSub(rendered, "src/lib.zz:3:20");
+    // 英文短语不得残留。
+    try noSub(rendered, "has no member");
+    try noSub(rendered, "root source file");
+}
+
+test "诊断回译：结构体字段不存在（no field named）不泄漏英文" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    // 初始化纯母语过滤器
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // zig 对 `p.高` 这类不存在字段的访问报 `no field named ... in struct ...`，
@@ -710,7 +731,7 @@ test "诊断回译：成员/成员函数不存在（no field or member function 
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // zig 对不存在的方法/字段调用报 `no field or member function named ... in ...`，
@@ -764,7 +785,7 @@ test "诊断回译：变量从未修改 / 建议改用 const 不泄漏英文" {
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // `变量` 声明却从不重新赋值：zig 报 error + 伴随 note，旧包均未覆盖。
@@ -792,7 +813,7 @@ test "诊断回译：顶层重复声明（duplicate struct member name / duplica
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // 顶层两个同名 `常数`：zig 报 error + note；旧包仅有 redeclaration of（局部作用域），不覆盖。
@@ -818,7 +839,7 @@ test "诊断回译：参数个数/缺字段/匹配不穷尽/整数越界/除零�
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // A 参数个数（兜底短语替换，保留具体计数）：
@@ -918,7 +939,7 @@ test "诊断回译：未使用循环标签/语句结束符缺失/'an identifier'
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // A 未使用循环标签（packs 整句，固定句无载荷）：
@@ -967,7 +988,7 @@ test "诊断回译：@import 非字面量/comptime_int 变量须 const/运行时
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // A @import 参数非字面量（packs 整句，保留 @import 实体）：
@@ -1005,7 +1026,7 @@ test "诊断回译：枚举声明位置/可选值字段访问/误用尝试不泄
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // F 枚举声明位置：靠末尾 `declared here` 通用兜底命中（struct/function 更具体者优先）。
@@ -1016,7 +1037,7 @@ test "诊断回译：枚举声明位置/可选值字段访问/误用尝试不泄
     try noSub(enumnote, "enum");
 
     // J 对可选值做字段访问（短语保留类型具体信息）：
-    const opt = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 13, "error", "type '?i64' does not support field access");
+    const opt = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 13, "error", "type '?i64' does not support field access", null);
     defer gpa.free(opt);
     try hasSub(opt, "不支持");
     try hasSub(opt, "字段访问");
@@ -1025,12 +1046,12 @@ test "诊断回译：枚举声明位置/可选值字段访问/误用尝试不泄
     try noSub(opt, "field access");
 
     // K 误用尝试：主体消息保留实得类型名、说明行走 packs 模板。
-    const trymax = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 19, "error", "expected error union type, found 'comptime_int'");
+    const trymax = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 19, "error", "expected error union type, found 'comptime_int'", null);
     defer gpa.free(trymax);
     try hasSub(trymax, "错误联合类型");
     try noSub(trymax, "error union type");
     try noSub(trymax, "expected");
-    const trynote = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 19, "note", "consider omitting 'try'");
+    const trynote = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 19, "note", "consider omitting 'try'", null);
     defer gpa.free(trynote);
     try hasSub(trynote, "建议省略");
     try noSub(trynote, "consider omitting");
@@ -1082,7 +1103,7 @@ test "诊断回译：导入漏扩展名（no module named）不泄漏英文且�
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // `导入("lib")` 漏写 .zz → zig `no module named 'lib' available within module 'main'`（旧为整句英文透传、无提示）。
@@ -1105,7 +1126,7 @@ test "诊断回译：解引用非指针/无法解析计期值不泄漏英文" {
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // P 解引用非指针（短语保留类型名）：
@@ -1138,7 +1159,7 @@ test "诊断回译：指针方法调用两重解引用限制的两条说明行�
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // 在指针上调需解引用的方法时，zig 除主错外还会打两条 note 续行；均需本地化、不留英文。
@@ -1165,7 +1186,7 @@ test "诊断回译：丢弃 const 限定说明行不泄漏英文" {
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // U 对 const 数组取地址赋给可变切片时的伴随说明行：
@@ -1188,7 +1209,7 @@ test "诊断回译：入口文件缺 main 给专门提示而非误导的拼写�
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // build/run/test 指向无 main 的库模块时 zig 报此错；更具体的 `缺主入口`（no member named 'main'）
@@ -1212,7 +1233,7 @@ test "诊断回译：入口非公开（'main' is not marked 'pub'）本地化不
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // 入口写成非公开 `函数 主函数`（无 pub）时 zig 报 `'main' is not marked 'pub'`；
@@ -1235,7 +1256,7 @@ test "诊断回译：@import 越过模块根（import of file outside module pat
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // 把 test/build/run 直接指向子目录里的 .zz，使该子目录成为模块根，`../` 导入会越过它，
@@ -1261,7 +1282,7 @@ test "诊断回译：导入不存在的文件不泄漏生成路径与 FileNotFou
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // 导入一个不存在的 .zz 时，zig 报 `unable to load "gone.zig": FileNotFound`，
@@ -1286,7 +1307,7 @@ test "诊断回译：@embedFile 指向缺失资产（failed opening）不泄漏�
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // 嵌入一个真不存在的资产时，zig 报 `failed opening "nope.txt": FileNotFound`（与 @import 缺失的 `unable to load "` 不同动词）。
@@ -1309,7 +1330,7 @@ test "诊断回译：@embedFile 路径越出模块根（embed of file outside pa
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     // embedFile 用 `../../` 越过模块根时，zig 报 `embed of file outside package path: '../../evil.txt'`（含越界路径操作数）。
@@ -1332,7 +1353,7 @@ test "诊断回译：file imported here 说明行完整本地化（不残留英�
     defer table.deinit();
 
     // 初始化纯母语过滤器
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
     const m = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 11, "note", "file imported here", &filter);
@@ -1355,8 +1376,12 @@ test "纯母语过滤器：英文残留被拦截" {
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var filter = try PureFilter.init(gpa, .{});
+    var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
+    // 白名单规则随包加载（F2，51 轮：工具层零硬编码）
+    var wlpack = try Pack.parse(gpa, zh_pack);
+    defer wlpack.deinit();
+    try filter.applyPackRules(wlpack.whitelist.items);
 
     // 测试英文检测
     try std.testing.expect(filter.detectEnglish("expected type, found 'i64'"));
@@ -1367,10 +1392,10 @@ test "纯母语过滤器：英文残留被拦截" {
     try std.testing.expect(filter.whitelist.check("my_variable"));
     try std.testing.expect(filter.whitelist.check("@import"));
 
-    // 测试过滤
-    const result = try filter.filterMessage(gpa, "expected type, found 'i64'", "src/main.zz:5:10");
+    // 测试过滤（本过滤器未注入落盘清单：只拦不记，时间传 nowEpochS(null)=0 即可）
+    const result = try filter.filterMessage(gpa, "expected type, found 'i64'", "src/main.zz:5:10", nowEpochS(null));
     defer gpa.free(result);
-    try std.testing.expect(std.mem.indexOf(u8, result, "[未翻译]"));
+    try std.testing.expect(std.mem.indexOf(u8, result, "[未翻译]") != null);
 }
 
 fn diag_parse_one(s: []const u8) DiagLine {
@@ -1416,7 +1441,7 @@ test "测试运行器栈帧回译：栈地址/绝对路径/缓存命令均不泄
         "error: the following test command failed with exit code 1:\n" ++
         "D:\\cache\\o\\abc123\\test.exe --seed=0x1234\n";
 
-    const out = try translateStderr(gpa, lang, table, &units, stderr, null);
+    const out = try translateStderr(gpa, lang, table, &units, stderr, null, null);
     defer gpa.free(out);
 
     // 泄漏必须全部消失。
@@ -1493,7 +1518,7 @@ test "顶格（第 1 列）语句报错：gen 源码回显与波浪线不泄漏"
         "const z_1: i64 = \"\u{54c0}\";\n" ++
         "                 ^~~~~~~~~~~~~~\n";
 
-    const out = try translateStderr(gpa, lang, table, &units, stderr, null);
+    const out = try translateStderr(gpa, lang, table, &units, stderr, null, null);
     defer gpa.free(out);
 
     // gen 专有语法/回显必须被丢弃：不应出现 const / i64 / 波浪线 / 转码名。
@@ -1534,7 +1559,7 @@ test "编译诊断落在 zig 标准库绝对路径：安装路径与英文说明
     const stderr = "C:\\Users\\me\\AppData\\zig-x86_64-windows-0.17.0\\lib\\std\\start.zig:787:43: error: root source file struct 'main' has no member named 'main'\n" ++
         "C:\\Users\\me\\AppData\\zig-x86_64-windows-0.17.0\\lib\\std\\start.zig:576:17: note: called inline here\n";
 
-    const out = try translateStderr(gpa, lang, table, &units, stderr, null);
+    const out = try translateStderr(gpa, lang, table, &units, stderr, null, null);
     defer gpa.free(out);
 
     // 机器相关的绝对路径必须消失；英文内部说明也不得残留。
@@ -1579,7 +1604,7 @@ test "报错列映射：CJK 字符串字面量在前时，zig 字节列正确回
 
     // zig 对生成行报的是字节列：`    std.debug.print("你好世界", .{ ` = 39 字节 -> 第 40 列。
     // 方言行中 甲 前有 22 个字符 -> 应回映为字符列 23（而非 zig 字节列 40、也非方言字节列 41）。
-    const out = try renderDiag(gpa, lang, table, &units, "gen/main.zig", 4, 40, "error", "use of undeclared identifier 'z_2'");
+    const out = try renderDiag(gpa, lang, table, &units, "gen/main.zig", 4, 40, "error", "use of undeclared identifier 'z_2'", null);
     defer gpa.free(out);
     try hasSub(out, "src/main.zz:4:23");
     try noSub(out, "4:40"); // 不得把 zig 的字节列原样透出
@@ -1618,17 +1643,17 @@ test "去重 seen：跨两次 zig 调用（同位置同消息）仅输出一次�
     const a = "gen/main.zig:4:40: error: use of undeclared identifier 'z_2'\n";
     const b = "D:\\proj\\.zzc\\gen\\main.zig:4:40: error: use of undeclared identifier 'z_2'\n";
 
-    const out_a = try translateStderr(gpa, lang, table, &units, a, &seen);
+    const out_a = try translateStderr(gpa, lang, table, &units, a, &seen, null);
     defer gpa.free(out_a);
     try hasSub(out_a, "src/main.zz:4:23"); // 首次正常渲染
 
-    const out_b = try translateStderr(gpa, lang, table, &units, b, &seen);
+    const out_b = try translateStderr(gpa, lang, table, &units, b, &seen, null);
     defer gpa.free(out_b);
     try std.testing.expect(out_b.len == 0); // 重复块被去重（空输出）
 
     // 不同位置的诊断不得被去重：仍应渲染。
     const c = "gen/main.zig:3:5: error: use of undeclared identifier 'z_9'\n";
-    const out_c = try translateStderr(gpa, lang, table, &units, c, &seen);
+    const out_c = try translateStderr(gpa, lang, table, &units, c, &seen, null);
     defer gpa.free(out_c);
     try std.testing.expect(out_c.len > 0);
 }
@@ -1643,7 +1668,7 @@ test "裸 CLI 诊断回译：unrecognized parameter 不泄漏英文、保留非�
     defer table.deinit();
 
     // 无 `file:line:col` 前缀的裸 error 行不进 parseDiagLine，只经透传；应翻前缀与关键短语。
-    const out = try translateStderr(gpa, lang, table, &.{}, "error: unrecognized parameter: --release=fast\n", null);
+    const out = try translateStderr(gpa, lang, table, &.{}, "error: unrecognized parameter: --release=fast\n", null, null);
     defer gpa.free(out);
     try hasSub(out, "无法识别的参数");
     try hasSub(out, "--release=fast"); // 引发问题的参数名必须保留（静态模板反而会丢）
@@ -1663,7 +1688,7 @@ test "定位解析错误命中 packs 模板，且波浪线装饰行无条件丢�
 
     // zig 对 EOF 类错误会先输出空行再输出 `^`；若不无条件丢弃，空行会复位态致 `^` 泄漏。
     const stderr = "gen/main.zig:3:1: error: expected statement, found 'EOF'\n\n^\n";
-    const out = try translateStderr(gpa, lang, table, &.{}, stderr, null);
+    const out = try translateStderr(gpa, lang, table, &.{}, stderr, null, null);
     defer gpa.free(out);
     try hasSub(out, "缺少语句或代码块未闭合"); // 命中 packs 模板
     try noSub(out, "expected");
@@ -1691,7 +1716,7 @@ test "报错回译：依赖循环整块本地化，不泄漏生成路径/生成�
         "    pub const z_12: i64 = a.z_1;\n" ++
         "                          ~^~~~\n" ++
         "    note: eliminate any one of these dependencies to break the loop\n";
-    const out = try translateStderr(gpa, lang, table, &.{}, stderr, null);
+    const out = try translateStderr(gpa, lang, table, &.{}, stderr, null, null);
     defer gpa.free(out);
     try hasSub(out, "循环依赖");
     try noSub(out, ".zzc");
@@ -1713,7 +1738,7 @@ test "诊断回译：unused function parameter 本地化（区别于 unused loca
     defer table.deinit();
 
     // zig 对未用参数报 `unused function parameter`（与 `unused local variable` 不同句）；旧 packs 只收录了局部变量。
-    const m = try renderDiag(gpa, lang, table, &.{}, "src/lib.zz", 1, 9, "error", "unused function parameter");
+    const m = try renderDiag(gpa, lang, table, &.{}, "src/lib.zz", 1, 9, "error", "unused function parameter", null);
     defer gpa.free(m);
     try hasSub(m, "函数参数声明后未使用");
     try noSub(m, "unused");
@@ -1729,12 +1754,12 @@ test "诊断回译：unreachable code 与其 diverted 说明行本地化" {
     var table = Mangle.init(gpa);
     defer table.deinit();
 
-    const m = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "unreachable code");
+    const m = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "unreachable code", null);
     defer gpa.free(m);
     try hasSub(m, "不可达");
     try noSub(m, "unreachable");
 
-    const n = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 5, "note", "control flow is diverted here");
+    const n = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 5, "note", "control flow is diverted here", null);
     defer gpa.free(n);
     try hasSub(n, "控制流");
     try noSub(n, "control flow");
@@ -1750,7 +1775,7 @@ test "诊断回译：incompatible types 本地化（运算符两侧类型不兼�
     var table = Mangle.init(gpa);
     defer table.deinit();
 
-    const m = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 15, "error", "incompatible types: '*const [6:0]u8' and 'comptime_int'");
+    const m = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 15, "error", "incompatible types: '*const [6:0]u8' and 'comptime_int'", null);
     defer gpa.free(m);
     try hasSub(m, "运算符两侧的类型不兼容");
     try noSub(m, "incompatible types");
@@ -1765,27 +1790,27 @@ test "诊断回译：break/continue 出环、隐式返回、控制流触底、�
     var table = Mangle.init(gpa);
     defer table.deinit();
 
-    const b = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "break expression outside loop");
+    const b = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "break expression outside loop", null);
     defer gpa.free(b);
     try hasSub(b, "只能用在循环内部");
     try noSub(b, "outside loop");
 
-    const c = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "continue expression outside loop");
+    const c = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", "continue expression outside loop", null);
     defer gpa.free(c);
     try noSub(c, "outside loop");
     try noSub(c, "implicitly");
 
-    const r = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 14, "error", "function with non-void return type 'i64' implicitly returns");
+    const r = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 14, "error", "function with non-void return type 'i64' implicitly returns", null);
     defer gpa.free(r);
     try hasSub(r, "没有返回值");
     try noSub(r, "implicitly returns");
     try noSub(r, "non-void return");
 
-    const n = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 1, "note", "control flow reaches end of body here");
+    const n = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 1, "note", "control flow reaches end of body here", null);
     defer gpa.free(n);
     try noSub(n, "reaches end of body");
 
-    const pd = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 9, "note", "previous declaration here");
+    const pd = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 9, "note", "previous declaration here", null);
     defer gpa.free(pd);
     try hasSub(pd, "更早的同名声明");
     try noSub(pd, "previous declaration");
@@ -1800,17 +1825,17 @@ test "诊断回译：unused local constant 与 cannot load comptime-only / is ru
     var table = Mangle.init(gpa);
     defer table.deinit();
 
-    const uc = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 11, "error", "unused local constant");
+    const uc = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 11, "error", "unused local constant", null);
     defer gpa.free(uc);
     try hasSub(uc, "从未使用");
     try noSub(uc, "unused local constant");
 
-    const cl = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 31, "error", "cannot load comptime-only type 'comptime_int'");
+    const cl = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 31, "error", "cannot load comptime-only type 'comptime_int'", null);
     defer gpa.free(cl);
     try hasSub(cl, "无法加载仅限编译期的类型");
     try noSub(cl, "cannot load comptime-only");
 
-    const rk = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 30, "note", "pointer of type '*const comptime_int' is runtime-known");
+    const rk = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 4, 30, "note", "pointer of type '*const comptime_int' is runtime-known", null);
     defer gpa.free(rk);
     try hasSub(rk, "运行时才可知");
     try noSub(rk, "runtime-known");
@@ -1827,7 +1852,7 @@ test "诊断回译：格式串类型不符保留操作数、入口返回类型�
     defer table.deinit();
 
     // 格式串与实参类型不符（localizeRunner 短语对）：保住格式符 'd' 与类型操作数，不留英文。
-    const fs = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 5, 25, "error", "invalid format string 'd' for type 'i64'");
+    const fs = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 5, 25, "error", "invalid format string 'd' for type 'i64'", null);
     defer gpa.free(fs);
     try hasSub(fs, "无效格式串 'd'");
     try hasSub(fs, "对类型 'i64'");
@@ -1835,7 +1860,7 @@ test "诊断回译：格式串类型不符保留操作数、入口返回类型�
     try noSub(fs, "for type");
 
     // 入口函数返回类型非法（packs 整句条目）：整句中文、允许的返回类型列于教学提示。
-    const mr = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 1, "error", "expected return type of main to be 'void', '!void', 'noreturn', 'u8', or '!u8'");
+    const mr = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 1, "error", "expected return type of main to be 'void', '!void', 'noreturn', 'u8', or '!u8'", null);
     defer gpa.free(mr);
     try hasSub(mr, "入口函数 主函数 的返回类型不受支持");
     try noSub(mr, "return type of main");
@@ -1852,14 +1877,14 @@ test "诊断回译：枚举匹配非穷尽的未处理取值说明行与格式�
     defer table.deinit();
 
     // 枚举 `匹配` 非穷尽逐条列出的说明行（localizeRunner 短语对）：保住未处理的枚举成员名、不留英文。
-    const ue = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 25, "note", "unhandled enumeration value: '关'");
+    const ue = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 25, "note", "unhandled enumeration value: '关'", null);
     defer gpa.free(ue);
     try hasSub(ue, "未处理的枚举取值");
     try hasSub(ue, "'关'");
     try noSub(ue, "unhandled enumeration value");
 
     // 格式串未闭合（localizeRunner 短语对）：译出谓语、保住实际闭合字符 `}`。
-    const mc = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 20, "error", "missing closing }");
+    const mc = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 20, "error", "missing closing }", null);
     defer gpa.free(mc);
     try hasSub(mc, "缺少闭合的 }");
     try noSub(mc, "missing closing");
@@ -1875,7 +1900,7 @@ test "兜底：未命中 packs 的解析错误消息仍做短语本地化（期�
     defer table.deinit();
 
     // “expected …, found …” 解析错族无法枚举，不命中 packs 时至少本地化脚手架词。
-    const out = try renderDiag(gpa, lang, table, &.{}, "gen/x.zig", 1, 1, "error", "expected rparen, found 'x'");
+    const out = try renderDiag(gpa, lang, table, &.{}, "gen/x.zig", 1, 1, "error", "expected rparen, found 'x'", null);
     defer gpa.free(out);
     try hasSub(out, "期望");
     try hasSub(out, "实得");
@@ -1893,19 +1918,19 @@ test "诊断回译：错误值被丢弃 / 容器声明注 / is invalid 不泄漏
     defer table.deinit();
 
     // ① `_ = 一个 !T` → `error union is discarded`（旧为整句英文透传）。
-    const a = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 5, 9, "error", "error union is discarded");
+    const a = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 5, 9, "error", "error union is discarded", null);
     defer gpa.free(a);
     try hasSub(a, "错误值");
     try noSub(a, "error union is discarded");
 
     // ② 容器声明错误的说明行 `to declare a container do 'const 点 = struct'`（旧为整句英文）。
-    const b = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 1, 8, "note", "to declare a container do 'const 点 = struct'");
+    const b = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 1, 8, "note", "to declare a container do 'const 点 = struct'", null);
     defer gpa.free(b);
     try hasSub(b, "容器");
     try noSub(b, "to declare a container");
 
     // ③ 主错 `'struct 点' is invalid`：不命中 packs → 走 localizeRunner 兜底，保留操作数、仅译谓语。
-    const c = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 1, 8, "error", "'struct 点' is invalid");
+    const c = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 1, 8, "error", "'struct 点' is invalid", null);
     defer gpa.free(c);
     try hasSub(c, "无效");
     try noSub(c, "is invalid");
@@ -1921,26 +1946,26 @@ test "诊断回译：可选类型描述 / 错误联合转换 / 函数不能返�
     defer table.deinit();
 
     // ① `expected optional type, found 'i64'`（对非可选值用 `.?`）：描述词可选类型需译、'i64' 保留。
-    const a = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 9, "error", "expected optional type, found 'i64'");
+    const a = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 9, "error", "expected optional type, found 'i64'", null);
     defer gpa.free(a);
     try hasSub(a, "可选类型");
     try noSub(a, "optional type");
     try hasSub(a, "'i64'");
 
     // ② `cannot convert error union to payload type`（说明行）。
-    const b = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 40, "note", "cannot convert error union to payload type");
+    const b = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 40, "note", "cannot convert error union to payload type", null);
     defer gpa.free(b);
     try hasSub(b, "错误联合");
     try noSub(b, "cannot convert error union");
 
     // ③ `function cannot return an error`（说明行）。
-    const c = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 10, "note", "function cannot return an error");
+    const c = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 2, 10, "note", "function cannot return an error", null);
     defer gpa.free(c);
     try hasSub(c, "不能返回错误");
     try noSub(c, "function cannot return an error");
 
     // ④ 枚举容器声明注：提示应同时提及枚举（而非只给结构例子）。
-    const d = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 1, 6, "note", "to declare a container do 'const 颜色 = enum'");
+    const d = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 1, 6, "note", "to declare a container do 'const 颜色 = enum'", null);
     defer gpa.free(d);
     try hasSub(d, "枚举");
     try hasSub(d, "的形式"); // 防止译文里误用分隔符 `|` 导致消息被截断
