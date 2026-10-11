@@ -666,6 +666,36 @@ test "extractEmbedPathsForms：原文单跳变量实参也能命中（D2×D3 组
     try std.testing.expectEqualStrings("直接.zz", list.items[1]);
 }
 
+test "三处字面串扫描器：末字节反斜杠未闭合串不越界 panic（D33 同族双自增，靠循环后置守卫兜住）" {
+    // collectConstStringBindings：`const 名 = "...\` 串体以反斜杠收尾且无右引号，
+    // while 内 `if (src[k]=='\\') k+=1; k+=1;` 双自增令 k 越至 src.len+1，
+    // 靠 473 行 `if (k >= src.len) continue;` 拦下——越界值绝不用于切片。
+    {
+        const src = "const name = \"abc\\"; // 末字节为反斜杠，字符串未闭合
+        var consts = std.StringHashMap([]const u8).init(std.testing.allocator);
+        defer consts.deinit();
+        const leads = [_][]const u8{"const"};
+        try collectConstStringBindings(&consts, src, &leads);
+        try std.testing.expectEqual(@as(usize, 0), consts.count());
+    }
+    // extractEmbedPaths：前一条合法、后一条末字节反斜杠未闭合——合法的照常收，畸形的靠 516 行 break 跳过。
+    {
+        const src = "const ok = @embedFile(\"good.txt\"); const y = @embedFile(\"abc\\";
+        var list = try extractEmbedPaths(std.testing.allocator, src);
+        defer list.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 1), list.items.len);
+        try std.testing.expectEqualStrings("good.txt", list.items[0]);
+    }
+    // extractEmbedPathsForms：方言词 lead，同样末字节反斜杠未闭合 → 靠 609 行 break 跳过、不 panic。
+    {
+        const src = "嵌入文件(\"abc\\";
+        const leads = [_][]const u8{"嵌入文件"};
+        var list = try extractEmbedPathsForms(std.testing.allocator, src, &leads, &.{});
+        defer list.deinit(std.testing.allocator);
+        try std.testing.expectEqual(@as(usize, 0), list.items.len);
+    }
+}
+
 test "resolveEmbedZzRel：同目录/子目录/包内 .. 解析，非 .zz/绝对/越根返回 null" {
     const gpa = std.testing.allocator;
     const a = try resolveEmbedZzRel(gpa, "src", "模板.zz");
