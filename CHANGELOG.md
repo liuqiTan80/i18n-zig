@@ -174,6 +174,8 @@ zzc 首个可用版本：用母语（首发中文）编写真实 Zig 的方言�
 
 - 修（docs(ledger/self-consistency)，消台账内部矛盾）：第五十五轮（纯文档、无代码变更）。沿权威矩阵顺位推进后发现无代码级本机可动项（P1/P2 全清、P3 仅剩 D5 与 R8 真链接面均为待验需 CI ubuntu），遂审台账自身，坐实并修正两处**内部矛盾**：①《待办缺陷详录（未修项）》节误将已修的 R6/R7/R9/D7/D9/D10/R10 列为待办（与汇总表自相矛盾）→ 改为仅留真正未修项（D5/R8 待验）+ 状态校正尾注；②「当前基线」节仍写 51 轮后 105/105 → 刷新为 54 轮后实测 115/115（build 0 / test 115/115 / demos 4/4）。本轮不改代码、不改行为，基线以第 54 轮已坐实三绿为准、无回归；互引 docs/消缺台账.md 第 55 轮记录。(本轮改动均未 git 提交。）
 
+- 现（chore(repo/ci-mismatch-discovery)，新登 D17）：第五十六轮（无代码变更）。将第 54–55 轮全绿/一致性改动 `git push origin main`（`51827cb..c28381b`、fast-forward）。为验证“push 能触发 ubuntu CI 以消 D5/R8”，先核 `.github/workflows/ci.yml` 与远端：发现唯一远端为 gitcode.com、而 CI 为 GitHub Actions 格式，gitcode 不原生执行（push 仅回显自有 “Git Hooks Checking [PASSED]”、无矩阵构建），仓库亦无 GitHub 远端。即长期声称的“CI 已配 ubuntu+windows 矩阵”为**不实**（从未一行 CI 真跑），是 D5/R8 待验无法闭环的真实根因。新登 **D17（P2、待办）**含两条修复方向（按 gitcode 原生格式重写 / 新增 GitHub 远端）；因修复需外部跑绿才能坐实，本轮不臆造不可验流水线产物（衔接 D11 虚假完成教训）。互引 docs/消缺台账.md 第 56 轮记录。(本轮文档改动未 git 提交。）
+
 ### 依赖
 
 - 需要本机安装 Zig 0.17.0+（`zzc` 通过进程调用 `zig`，不链接 libzig）。
