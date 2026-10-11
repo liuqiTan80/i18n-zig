@@ -118,7 +118,12 @@ const JsonDoc = struct {
 /// 标准转义——CI 消费面必须产生合法 JSON，禁止手写拼接）。返回 `gpa` 所有权。
 pub fn renderUntranslatedJson(gpa: std.mem.Allocator, items: []const UntranslatedPhrase, generated_at: i64) ![]u8 {
     const entries = try gpa.alloc(JsonEntry, items.len);
-    defer gpa.free(entries);
+    errdefer gpa.free(entries);
+    // 循环内 allocPrint 若失败，`try` 立即返回——此条 string-free 清理若在循环后才 defer 登记，
+    // 便来不及登记，前若干已分配的 suggested_translation 会泄漏（第 64 轮 D22 坐实：mid-loop OOM 漏 1 块）。
+    // 改以 filled 计数 + errdefer：只精确回滚「已填」部分；循环成功后 errdefer 仍兜住 valueAlloc 失败面。
+    var filled: usize = 0;
+    errdefer for (entries[0..filled]) |e| gpa.free(e.suggested_translation);
     for (items, entries) |it, *e| {
         e.* = .{
             .phrase = it.phrase,
@@ -126,12 +131,16 @@ pub fn renderUntranslatedJson(gpa: std.mem.Allocator, items: []const Untranslate
             .timestamp = it.timestamp,
             .suggested_translation = try std.fmt.allocPrint(gpa, "[待翻译] {s}", .{it.phrase}),
         };
+        filled += 1;
     }
-    defer for (entries) |e| gpa.free(e.suggested_translation);
     const doc = JsonDoc{ .generated_at = generated_at, .phrases = entries };
     // 0.17 Stringify.Options 断代：旧 `pretty` 改 `whitespace` 枚举（D12 同族）；
     // `escape_unicode` 留默认 false——CJK 原文直接写出，人读/机读面都直观。
-    return std.json.Stringify.valueAlloc(gpa, doc, .{ .whitespace = .indent_2 });
+    const result = try std.json.Stringify.valueAlloc(gpa, doc, .{ .whitespace = .indent_2 });
+    // valueAlloc 成功：entries 及其字符串均已读入 result，手动清理中间态（成功路径不触 errdefer，无重复释放）。
+    for (entries) |e| gpa.free(e.suggested_translation);
+    gpa.free(entries);
+    return result;
 }
 
 /// 纯母语过滤器
@@ -588,4 +597,18 @@ test "localizeFallback - 短语替换" {
 
     try std.testing.expect(std.mem.indexOf(u8, result, "期望 ") != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "，实得 ") != null);
+}
+
+test "renderUntranslatedJson - mid-loop OOM 不得泄漏已分配字符串（D22 坐实）" {
+    // fail_index=2（0 基）：entries 缓冲(第1次 alloc)成功、st[0](第2次)成功、st[1](第3次 allocPrint) 失败 → 循环内报错。
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 2 });
+    const gpa = failing.allocator();
+    const items = [_]UntranslatedPhrase{
+        .{ .phrase = "alpha", .location = "main.zz:1:1", .timestamp = 1 },
+        .{ .phrase = "beta", .location = "main.zz:2:2", .timestamp = 2 },
+    };
+    // 旧实现：string-free 清理 defer 登记在循环之后，mid-loop OOM 时 try 已返回、defer 未登记
+    // → 已分配的 entries[0].suggested_translation（"[待翻译] alpha"，17 字节）泄漏（std.testing.allocator 会报）。
+    // 期望：干净返回 OutOfMemory 且无泄漏（filled 计数 + errdefer 精确回滚已填部分）。
+    try std.testing.expectError(error.OutOfMemory, renderUntranslatedJson(gpa, &items, 123));
 }
