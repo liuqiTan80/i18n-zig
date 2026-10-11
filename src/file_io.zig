@@ -10,13 +10,20 @@ const translate = @import("transpiler/translate.zig");
 /// 超限在读取边界以 `error.SourceTooLarge` 反馈，由调用方决定如何母语提示（main 侧只打一次）。
 pub const max_source_bytes: usize = 10 * 1024 * 1024;
 
-/// 读整个文本文件并剔除起始 UTF-8 BOM；超过 `max_source_bytes` 回 `error.SourceTooLarge`。
+/// 读整个文本文件并剔除起始 UTF-8 BOM；超过 `max_source_bytes` 回 `error.SourceTooLarge`、
+/// 非 UTF-8 字节流（UTF-16/GBK 等错编码保存）回 `error.InvalidEncoding`（均由调用方母语提示）。
 /// 0.17 `Io.Limit` 是 enum(usize) 带载荷：有限值须经 `Limit.limited(n)` 构造，`.limited = n` 结构体初始化形不合法。
 pub fn readWhole(io: Io, gpa: std.mem.Allocator, path: []const u8) ![]const u8 {
     const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, Io.Limit.limited(max_source_bytes)) catch |e| switch (e) {
         error.StreamTooLong => return error.SourceTooLarge,
         else => |other| return other,
     };
+    // 编码封口（D31）：错编码保存（记事本 UTF-16 LE/老编辑器 GBK）是母语工程事故率最高的现场之一：
+    // 旧边界只剔 UTF-8 BOM、其余坏字节照单放行——方言词形按字节必不匹配 UTF-8 语言包，声明半消失，
+    // 用户拿到与真因无关的误导性语法错。UTF-16 BOM（FF FE/FE FF）与 GBK 实字节皆非法 UTF-8 序列，
+    // 单个 utf8ValidateSlice 一并封口；合法含 BOM 的 UTF-8 照过、交 stripBom。二进制安全面在
+    // readFileRaw（资源拷贝）不受本封口影响。
+    if (!std.unicode.utf8ValidateSlice(bytes)) return error.InvalidEncoding;
     // 剔除可能的 UTF-8 BOM，避免 Windows 编辑器写入的 BOM 污染首个词元。
     return translate.stripBom(bytes);
 }
@@ -84,6 +91,41 @@ test "file_io 读写往返 + BOM 剥离 + pathExists + readFileRaw 保留 BOM（
     const raw = try readFileRaw(io, gpa, probe);
     try std.testing.expectEqual(stripped.len + 3, raw.len);
     try std.testing.expectEqual(@as(u8, 0xEF), raw[0]);
+}
+
+test "readWhole 编码封口（D31）：UTF-16 BOM 与非法 UTF-8 字节拒为 InvalidEncoding、readFileRaw 不受影响" {
+    // 缺陷面：错编码保存（记事本“Unicode UTF-16 LE”/国内老编辑器 GBK）是母语工程事故率最高的
+    // 现场之一：旧边界只对 UTF-8 BOM 剔除、其余坏字节照单放行→方言词形按字节必不匹配 UTF-8
+    // 语言包→声明半消失→用户拿到与真因无关的误导性语法错，拿不到“存为 UTF-8”指引。
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const probe = ".zig-cache/zzc_fileio_enc_probe.txt";
+    try writeWhole(io, probe, "占位");
+    defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
+
+    // ① UTF-16 LE BOM（FF FE）：整文件多为非法 UTF-8，起始 BOM 即精确判据，拒。
+    try writeWhole(io, probe, "\xFF\xFE\x00\x5E");
+    try std.testing.expectError(error.InvalidEncoding, readWhole(io, gpa, probe));
+    // ② UTF-16 BE BOM（FE FF）：同理拒（FE 后跟非 BB 的字节也不是合法 UTF-8 序列）。
+    try writeWhole(io, probe, "\xFE\xFF\x5E\x00");
+    try std.testing.expectError(error.InvalidEncoding, readWhole(io, gpa, probe));
+    // ③ 无 BOM 的 GBK 实字节（“常数”= B3 A3 CA FD）：非法 UTF-8，拒。
+    try writeWhole(io, probe, "\xB3\xA3\xCA\xFD x = 1;");
+    try std.testing.expectError(error.InvalidEncoding, readWhole(io, gpa, probe));
+    // ④ 对照：合法 UTF-8（含/不含 EF BB BF BOM）照过——封口不得误伤现有链路（demos 护栏）。
+    try writeWhole(io, probe, "\xEF\xBB\xBF常数 = 1;\n");
+    const ok_bom = try readWhole(io, gpa, probe);
+    try std.testing.expectEqualStrings("常数 = 1;\n", ok_bom);
+    // 二进制安全面：资源拷贝路径 readFileRaw 不校编码，非法字节原样回（勿误伤大资源/二进制资产）。
+    try writeWhole(io, probe, "\xB3\xA3");
+    const raw_ok = try readFileRaw(io, gpa, probe);
+    try std.testing.expectEqual(@as(usize, 2), raw_ok.len);
 }
 
 test "pathIsSymlink：普通文件与不存在路径均回 false（R8 守卫假分支；第 63 轮下沉真测）" {

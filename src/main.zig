@@ -47,6 +47,11 @@ var werr: *Io.Writer = undefined;
 /// 重复同句是噪音；首次打印后由主循环 try 路径负责失败传播。
 var size_limit_warned = false;
 
+/// 编码错误去重集（D31）：同因多次 readWhole 扫描，坏文件须点名但不能每个扫描遍重复一次；
+/// 按路径内容去重（每坏文件恰报一次、多坏文件各自点名）。懒初始化（gpa_ 全局有序依赖），
+/// 键为调用方 path 借用视图、随 arena 长存（StringHashMap 按内容比较，后续扫描同路径字符串仍命中）。
+var enc_warned_set: ?*std.StringHashMap(void) = null;
+
 /// F3 未翻译短语收集清单（进程级）：跨多次 zigCompile 累积，在 main 命令分发前落盘——
 /// 成功/bail 两条退出路径都覆盖（bail 直接 exit、后置代码不执行）。
 var untranslated_list: UntranslatedList = .{};
@@ -74,6 +79,23 @@ fn readWhole(path: []const u8) ![]const u8 {
             if (!size_limit_warned) {
                 size_limit_warned = true;
                 printErr("zzc: 文件 {s} 超过大小上限（{d} MB）；母语工程不应有此体量源文件，请确认未误指向二进制/日志类文件", .{ path, file_io.max_source_bytes / (1024 * 1024) });
+            }
+            return error.Failed;
+        },
+        error.InvalidEncoding => {
+            // 错编码保存是可直接行动的真因（D31）：逐文件点名、给可操作指引，不让用户拿与真因无关的
+            // 下游语法错；同一文件被预扫描/豁免/主循环多遍读取，按路径去重防重复噪音（同超限只提一次
+            // 的动机，但比全局旗标精确：多个坏文件须各自点名）。
+            const set = enc_warned_set orelse blk: {
+                const s = gpa_.create(std.StringHashMap(void)) catch break :blk null;
+                s.* = std.StringHashMap(void).init(gpa_);
+                enc_warned_set = s;
+                break :blk s;
+            };
+            const first_time = if (set) |s| !s.contains(path) else true;
+            if (first_time) {
+                if (set) |s| s.put(path, {}) catch {};
+                printErr("zzc: 文件 {s} 不是 UTF-8 编码（疑似 UTF-16/GBK 等错编码保存）；请在编辑器中另存为 UTF-8（有无 BOM 均可）后重试", .{path});
             }
             return error.Failed;
         },
@@ -123,7 +145,10 @@ fn stageEmbedAssets(native_rel: []const u8, zig_str: []const u8, dest_zig: []con
             gpa_.free(srcp);
             continue;
         }
-        const dstp = cli.joinRelNorm(gpa_, dst_dir, p) catch { gpa_.free(srcp); continue; };
+        const dstp = cli.joinRelNorm(gpa_, dst_dir, p) catch {
+            gpa_.free(srcp);
+            continue;
+        };
         const bytes = readFileRaw(srcp) catch continue; // 源缺失→跳过，交给 zig 自己报 `failed opening`
         defer gpa_.free(bytes);
         writeWhole(dstp, bytes) catch |e| {
@@ -383,8 +408,7 @@ fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8
     // 未翻译清单注入进程级 `untranslated_list`（台账 F3，52 轮：跨多次 zigCompile 累积、出口落盘）。
     var filter: ?PureFilter = PureFilter.init(gpa_, .{}, &untranslated_list) catch null;
     if (filter) |*f| f.applyPackRules(lang.whitelist.items) catch {};
-    const native_errs = diag.translateStderr(gpa_, lang, table, units.items, res.stderr, seen,
-        if (filter) |*f| f else null) catch res.stderr;
+    const native_errs = diag.translateStderr(gpa_, lang, table, units.items, res.stderr, seen, if (filter) |*f| f else null) catch res.stderr;
     werr.writeAll(native_errs) catch |e| {
         printErr("zzc: 写入错误信息失败：{s}", .{@errorName(e)});
     };
