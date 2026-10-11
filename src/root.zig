@@ -8,6 +8,7 @@ pub const registry = @import("lang/registry.zig");
 pub const fullwidth = @import("diag/fullwidth.zig");
 pub const diag = @import("diag/translate.zig");
 pub const cli = @import("cli/args.zig");
+pub const file_io = @import("file_io.zig");
 
 pub const zh_pack_bytes = @embedFile("lang/packs/中文.txt");
 
@@ -21,4 +22,5 @@ test {
     _ = fullwidth;
     _ = diag;
     _ = cli;
+    _ = file_io;
 }

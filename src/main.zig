@@ -26,6 +26,7 @@ const PureFilter = @import("diag/pure_filter.zig").PureFilter;
 const UntranslatedList = @import("diag/pure_filter.zig").UntranslatedList;
 const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslatedJson;
 const cli = @import("cli/args.zig");
+const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
 
 const version_str = "0.1.0";
@@ -41,9 +42,7 @@ var werr: *Io.Writer = undefined;
 
 // ---------------------------------------------------------------- 基础 IO
 
-/// 输入文件上限（台账 B5，design.md 定值 10MB；旧 spec/tasks 的 100MB 矛盾表述已统一）：
-/// 超限在读取边界母语拒绝，避免恶意/误操作超大文件耗尽内存。
-const max_source_bytes: usize = 10 * 1024 * 1024;
+// 输入文件上限现由 file_io.max_source_bytes 定义（第 62 轮下沉测试图）。
 /// 超限提示只打一次：预扫描/豁免解析/主循环会对同一文件多次 readWhole，
 /// 重复同句是噪音；首次打印后由主循环 try 路径负责失败传播。
 var size_limit_warned = false;
@@ -67,45 +66,33 @@ fn flushUntranslated() void {
     };
 }
 
+/// 进程级薄封装：委托 file_io（已下沉测试图、第 62 轮），绑定 io_/gpa_ 全局并把超限反馈为母语提示。
 fn readWhole(path: []const u8) ![]const u8 {
-    // 0.17 `Io.Limit` 是 enum(usize) 带载荷：有限值须经 `Limit.limited(n)` 构造，`.limited = n` 结构体初始化形不合法。
-    const bytes = std.Io.Dir.cwd().readFileAlloc(io_, path, gpa_, Io.Limit.limited(max_source_bytes)) catch |e| switch (e) {
-        error.StreamTooLong => {
+    return file_io.readWhole(io_, gpa_, path) catch |e| switch (e) {
+        error.SourceTooLarge => {
             // 超限是用户可直接行动的情形（同第 42 轮“错误源头母语化”原则），不走 bail 兜底泄错名。
             if (!size_limit_warned) {
                 size_limit_warned = true;
-                printErr("zzc: 文件 {s} 超过大小上限（{d} MB）；母语工程不应有此体量源文件，请确认未误指向二进制/日志类文件", .{ path, max_source_bytes / (1024 * 1024) });
+                printErr("zzc: 文件 {s} 超过大小上限（{d} MB）；母语工程不应有此体量源文件，请确认未误指向二进制/日志类文件", .{ path, file_io.max_source_bytes / (1024 * 1024) });
             }
             return error.Failed;
         },
         else => |other| return other,
     };
-    // 剔除可能的 UTF-8 BOM，避免 Windows 编辑器写入的 BOM 污染首个词元。
-    return translate.stripBom(bytes);
 }
 
 fn writeWhole(path: []const u8, data: []const u8) !void {
-    const dir = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(path)) |parent| {
-        try dir.createDirPath(io_, parent);
-    }
-    var f = try dir.createFile(io_, path, .{});
-    defer f.close(io_);
-    var buf: [4096]u8 = undefined;
-    var w = Io.File.Writer.init(f, io_, &buf);
-    try w.interface.writeAll(data);
-    try w.interface.flush();
+    return file_io.writeWhole(io_, path, data);
 }
 
 /// 判断相对当前工作目录的路径是否存在（仅用于避免覆盖，不区分文件/目录）。
 fn pathExists(path: []const u8) bool {
-    std.Io.Dir.cwd().access(io_, path, .{}) catch return false;
-    return true;
+    return file_io.pathExists(io_, path);
 }
 
 /// 原始字节读（**不**做 stripBom），用于拷贝资源文件（二进制安全）。
 fn readFileRaw(path: []const u8) ![]const u8 {
-    return std.Io.Dir.cwd().readFileAlloc(io_, path, gpa_, .unlimited);
+    return file_io.readFileRaw(io_, gpa_, path);
 }
 
 /// 路径是否为符号链接（台账 R8）：不跟随地 stat，只认 `.sym_link` 真值。
@@ -922,80 +909,6 @@ pub fn main(init: std.process.Init) !void {
     }
     saveSymbols(table);
 }
-// ---------------------------------------------------------------- 单元测试
-
-test "readWhole - 读取文件内容" {
-    const gpa = std.testing.allocator;
-
-    // 创建临时测试文件
-    const tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const test_file = try tmp_dir.realpathAlloc(gpa, "test.txt");
-    const content = "测试内容";
-    try std.fs.createFileAbsolute(test_file, .{});
-    var f = try std.fs.openFileAbsolute(test_file, .{ .mode = .write_only });
-    defer f.close();
-    try f.writeAll(content);
-
-    // 测试 readWhole
-    const result = try readWhole(test_file);
-    defer gpa.free(result);
-    try std.testing.expectEqualStrings(content, result);
-}
-
-test "writeWhole - 写入文件内容" {
-    const gpa = std.testing.allocator;
-
-    // 创建临时目录
-    const tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const test_file = try tmp_dir.realpathAlloc(gpa, "subdir/test.txt");
-    const content = "测试写入内容";
-
-    // 测试 writeWhole
-    try writeWhole(test_file, content);
-
-    // 验证文件内容
-    const f = try std.fs.openFileAbsolute(test_file, .{ .mode = .read_only });
-    defer f.close();
-    var buf: [1024]u8 = undefined;
-    const bytes_read = try f.readAll(&buf);
-    try std.testing.expectEqualStrings(content, buf[0..bytes_read]);
-}
-
-test "pathExists - 路径存在性检查" {
-    const tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const gpa = std.testing.allocator;
-    const test_file = try tmp_dir.realpathAlloc(gpa, "test.txt");
-
-    // 不存在的路径
-    try std.testing.expect(!pathExists(test_file));
-
-    // 创建文件后存在
-    try std.fs.createFileAbsolute(test_file, .{});
-    try std.testing.expect(pathExists(test_file));
-}
-
-test "readFileRaw - 原始字节读取（不strip BOM）" {
-    const gpa = std.testing.allocator;
-
-    // 创建临时文件
-    const tmp_dir = std.testing.tmpDir(.{});
-    defer tmp_dir.cleanup();
-
-    const test_file = try tmp_dir.realpathAlloc(gpa, "test.bin");
-    const content = "\xEF\xBB\xBF测试内容"; // 含 UTF-8 BOM
-    try std.fs.createFileAbsolute(test_file, .{});
-    var f = try std.fs.openFileAbsolute(test_file, .{ .mode = .write_only });
-    defer f.close();
-    try f.writeAll(content);
-
-    // 测试 readFileRaw 不剥离 BOM
-    const result = try readFileRaw(test_file);
-    defer gpa.free(result);
-    try std.testing.expectEqualStrings(content, result);
-}
+// 基础 IO 的读写/BOM/pathExists 单测已随函数下沉至 file_io.zig（第 62 轮，zzc_core 测试图内真跑）。
+// main.zig 不在测试图、其 test 块从不执行，原此四段死测（且引用 0.17 已移除的 std.fs.createFileAbsolute/
+// std.testing.tmpDir 等旧 API、根本编译不过）予以删除。
