@@ -1417,6 +1417,38 @@ test "诊断行解析：file:line:col: kind: msg" {
     try std.testing.expectEqualStrings("use of undeclared identifier 'z_1'", d.msg);
 }
 
+test "parseDiagLine 对抗/畸形输入不 panic（两处 .? 由前置结构守卫兜住）、非诊断行一律 null" {
+    // 防回归护栏（非在线缺陷登记）：parseDiagLine 解析的是 zig stderr 这一**外部可控**面，
+    // 内含两处 `std.mem.indexOfScalarPos(...).?` 强制解包（line_end / col_end）。二者的安全性
+    // 依赖**非本地**的前置结构守卫——数字段后必跟 ':'（388）、列数字后必跟 ": "（393）。此测钉死
+    // 该跨行不变量：日后若有人重构削弱任一守卫，使解包落空，报错器反成崩溃源（在给用户翻译编译
+    // 错误的路径上 panic），本测立即转红。同时以 Windows 盘符 'C:' 正例钉住守卫**不得过度拒绝**。
+    const malformed = [_][]const u8{
+        "", // 空行
+        "  缩进行", // 前导空白（zig 顶格源码回显）
+        "a:1:2", // 缺尾部 ": "——若无 393 守卫则 col_end 的 .? panic
+        "a:1:2 error", // 列数字后是空格非冒号——同上，守卫兜底返 null
+        "a:1", // 仅行号、列冒号缺失
+        "a:b:c: msg", // 冒号后非数字
+        "a:1x:2: error: m", // 行号段夹字母
+        "a:1:2:", // 尾冒号无空格（须 ": "）
+        "a:99999999999999999999:1: error: x", // 行号 usize 溢出：parseInt catch → continue（非 panic）
+        "普通散文行，无位置前缀", // 纯消息行、无任何冒号
+    };
+    for (malformed) |raw| {
+        if (parseDiagLine(raw)) |_| return error.TestUnexpectedResult; // 畸形行绝不当作诊断
+    }
+    // 合法行须正确解析（守卫不得过度拒绝）：含 Windows 盘符 'C:' 的路径，其冒号后非数字，
+    // 不得被误当作位置分隔——首个数字段匹配须跳过盘符冒号命中真正的 ":行:列: "。
+    const win = "C:\\proj\\主.zz:3:4: error: 未声明";
+    const dw = parseDiagLine(win) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("C:\\proj\\主.zz", dw.file);
+    try std.testing.expectEqual(@as(usize, 3), dw.line);
+    try std.testing.expectEqual(@as(usize, 4), dw.col);
+    try std.testing.expectEqualStrings("error", dw.kind);
+    try std.testing.expectEqualStrings("未声明", dw.msg);
+}
+
 test "纯母语过滤器：英文残留被拦截" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
