@@ -2150,6 +2150,53 @@ test "translateStderr seen 的 dupe→put：空表桶分配失败不得泄漏 du
     try std.testing.expectError(error.OutOfMemory, translateStderr(fgpa, lang, table, &.{}, stderr, &seen_f, null));
 }
 
+test "CRLF 源位置回映防回归：混坐标自洽闭合（第 74 轮勘察坐实、非缺陷）" {
+    // 背景：translate 输出把 CRLF 归一为 LF，而 ColumnMap 登记的 nat_off 处于 CRLF 源坐标系——曾疑似
+    // 「混坐标回映逐行累偏」（本轮开头的手推账）。探针实证推翻：CRLF 多余字节只分布在已扫过的行尾、
+    // 必被 line_start 推进同数对销，列差不变；行归属同构。本测把该实证钉成防回归护栏：
+    // 若未来有人在边界野归一/改 copyVerbatim 破坏此自洽，回映立即报错。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    const tr = @import("../transpiler/translate.zig");
+    // LF 基线形与 CRLF 同形（同一程序、仅行尾不同）
+    const src_lf = "常数 标准库 = 导入(\"std\");\n" ++
+        "公开 函数 主函数() !void {\n" ++
+        "    变量 乙: 整数 = 0;\n" ++
+        "    标准库.打印(\"你好世界\", .{ 甲 });\n" ++
+        "}\n";
+    const src_crlf = "常数 标准库 = 导入(\"std\");\r\n" ++
+        "公开 函数 主函数() !void {\r\n" ++
+        "    变量 乙: 整数 = 0;\r\n" ++
+        "    标准库.打印(\"你好世界\", .{ 甲 });\r\n" ++
+        "}\r\n";
+
+    // 两份同坐标系的 table 独立建（同程序同序、转码编号一致）
+    var t1 = Mangle.init(gpa);
+    const r1 = try tr.translate(gpa, src_lf, lang, &t1);
+    const units1 = [_]Unit{.{ .native_path = "src/main.zz", .gen_path = "gen/main.zig", .gen_src = r1.zig_str, .nat_src = src_lf, .map = r1.map }};
+    var t2 = Mangle.init(gpa);
+    const r2 = try tr.translate(gpa, src_crlf, lang, &t2);
+    // 生成端字节同（CRLF 已归一）：两端 gen_src 全等、zig 报位同一坐标
+    try std.testing.expectEqualStrings(r1.zig_str, r2.zig_str);
+    const units2 = [_]Unit{.{ .native_path = "src/main.zz", .gen_path = "gen/main.zig", .gen_src = r2.zig_str, .nat_src = src_crlf, .map = r2.map }};
+
+    const o1 = try renderDiag(gpa, lang, t1, &units1, "gen/main.zig", 4, 40, "error", "use of undeclared identifier 'z_2'", null);
+    defer gpa.free(o1);
+    const o2 = try renderDiag(gpa, lang, t2, &units2, "gen/main.zig", 4, 40, "error", "use of undeclared identifier 'z_2'", null);
+    defer gpa.free(o2);
+
+    // 铁证：CRLF 源与 LF 源回映到完全相同的方言位置（与既有 LF 基线测同坐标 4:23）
+    try hasSub(o1, "src/main.zz:4:23");
+    try hasSub(o2, "src/main.zz:4:23");
+    // 片段行同文（行尾 \r 不在行本体、不上屏）
+    try hasSub(o2, "|     标准库.打印(\"你好世界\", .{ 甲 });");
+}
+
 fn hasSub(hay: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, hay, needle) != null);
 }
