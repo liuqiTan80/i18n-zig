@@ -36,9 +36,9 @@ whitelist: std.ArrayList([]const u8),
 /// 任何方言包若缺这些映射会在流程深处静默失能；在 parse 后立即校验、母语报错。
 /// 清单只含 ASCII 值、不硬编码任何方言词（语言无关原则）。
 pub const contract_values = [_][]const u8{
-    "const",   // 声明半：撞词避让 / const 单跳数据流（D3）
+    "const", // 声明半：撞词避让 / const 单跳数据流（D3）
     "var",
-    "fn",      // `主函数`→main 入口链与声明位识别
+    "fn", // `主函数`→main 入口链与声明位识别
     "if",
     "else",
     "return",
@@ -46,9 +46,9 @@ pub const contract_values = [_][]const u8{
     "enum",
     "union",
     "switch",
-    "@import",   // 导入词形预扫描（D2/D4）
+    "@import", // 导入词形预扫描（D2/D4）
     "@embedFile", // 嵌入词形预扫描与资产 staging（D2/D3）
-    "main",     // 语义编译根判据（含 main 的文件）
+    "main", // 语义编译根判据（含 main 的文件）
 };
 
 pub const ValidationError = error{
@@ -87,8 +87,8 @@ fn hasMappedValue(self: Pack, want: []const u8) bool {
 pub fn validate(self: Pack) ValidationError!void {
     if (std.mem.eql(u8, self.code, "??")) return error.PackMissingCode;
     const err_for = [_]ValidationError{
-        error.PackMissingConst, error.PackMissingVar, error.PackMissingFn, error.PackMissingIf, error.PackMissingElse,
-        error.PackMissingReturn, error.PackMissingStruct, error.PackMissingEnum, error.PackMissingUnion, error.PackMissingSwitch,
+        error.PackMissingConst,  error.PackMissingVar,       error.PackMissingFn,   error.PackMissingIf,    error.PackMissingElse,
+        error.PackMissingReturn, error.PackMissingStruct,    error.PackMissingEnum, error.PackMissingUnion, error.PackMissingSwitch,
         error.PackMissingImport, error.PackMissingEmbedFile, error.PackMissingMain,
     };
     for (contract_values, 0..) |want, i| {
@@ -157,7 +157,13 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 for (self.whitelist.items) |have| {
                     if (std.mem.eql(u8, have, rule)) dup = true;
                 }
-                if (!dup) try self.whitelist.append(gpa, try gpa.dupe(u8, rule));
+                if (!dup) {
+                    const owned = try gpa.dupe(u8, rule);
+                    // append 失败则 owned 未入列、无人回收→泄（D22/D24 同族错误路径缺口；
+                    // 批量预留容量不可注入红 R10f，code-review 源头治理）。
+                    errdefer gpa.free(owned);
+                    try self.whitelist.append(gpa, owned);
+                }
             },
             .keywords, .aliases => {
                 const eq = std.mem.indexOfScalar(u8, line, '=') orelse return error.InvalidLangPack;

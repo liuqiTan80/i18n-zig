@@ -484,6 +484,9 @@ fn collectConstStringBindings(
 /// 由诊断提示的**条件表述**说明“可能未被自动拷贝”而非断言不存在；跳过 `\"` 转义。
 pub fn extractEmbedPaths(gpa: std.mem.Allocator, src: []const u8) !std.ArrayList([]const u8) {
     var out: std.ArrayList([]const u8) = .empty;
+    // out 元素皆 src 借用子串（含 consts.get 值）→ 错误回滚只 deinit 本体、不逐项 free（R7f ⑤）；
+    // 孪生 findReferencedRels 已有本 errdefer，此处补齐对称（D22 族底衬回滚缺口，R10f 不可注入红·源头治理）。
+    errdefer out.deinit(gpa);
     var consts = std.StringHashMap([]const u8).init(gpa);
     defer consts.deinit();
     const one_const = [_][]const u8{"const"};
@@ -575,6 +578,8 @@ pub fn extractEmbedPathsForms(
     const_leads: []const []const u8,
 ) !std.ArrayList([]const u8) {
     var out: std.ArrayList([]const u8) = .empty;
+    // out 元素皆 src 借用子串 → 错误回滚只 deinit 本体、不逐项 free（R7f ⑤，同 extractEmbedPaths）。
+    errdefer out.deinit(gpa);
     var consts = std.StringHashMap([]const u8).init(gpa);
     defer consts.deinit();
     if (const_leads.len > 0) try collectConstStringBindings(&consts, src, const_leads);
@@ -731,7 +736,12 @@ pub fn findReferencedRels(
     // list 元素是 src 子串（借用、非 gpa 分配），只 deinit 本体、不逐项 free。
     defer list.deinit(gpa);
     for (list.items) |p| {
-        if (try resolveEmbedZzRel(gpa, src_dir, p)) |rel| try out.append(gpa, rel);
+        if (try resolveEmbedZzRel(gpa, src_dir, p)) |rel| {
+            // rel 为新分配、尚未入列（入列后由顶部 errdefer/调用方回收）：append 失败则泄 rel（D22 族）。
+            // 批量预留容量不可注入红（R10f），code-review 源头治理。
+            errdefer gpa.free(rel);
+            try out.append(gpa, rel);
+        }
     }
     return out;
 }

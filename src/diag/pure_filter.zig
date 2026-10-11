@@ -29,6 +29,10 @@ pub const Whitelist = struct {
     /// 添加白名单规则
     pub fn add(self: *Whitelist, rule: []const u8) !void {
         const owned = try self.gpa.dupe(u8, rule);
+        // owned 尚未入列（append 会把它交给 deinit 回收）：若 append 失败则无人回收→泄 owned。
+        // 与 D22/D24 同族的错误路径回滚缺口；append 增长走批量预留容量、不可确定性注入红（R10f），
+        // 故 code-review 驱动的源头治理（成功路径不触 errdefer、行为不变）。
+        errdefer self.gpa.free(owned);
         try self.rules.append(self.gpa, owned);
     }
 
