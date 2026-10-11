@@ -577,3 +577,37 @@ test "fromConfig 构造默认过滤器（第 66 轮：文档面公开 API 此前
     try std.testing.expect(f.log_list == null);
     try std.testing.expectEqual(@as(usize, 0), f.whitelist.rules.items.len);
 }
+
+// 护栏（第 89 轮、pure_filter 全量通读对抗面：证伪·无在线缺陷，钉 stated-behavior 族）：
+// detectEnglish 顶注声明「引号区为操作数领土整体跳过」与「未闭合则按普通字符断链处理」，
+// 两契约及其连带代价形（缩写孤撇号断链、min 长度恰等边界、enabled 总闸）历轮零测——
+// 本测钉住现状防静默漂移（D34 同族：注释与代码的自洽一旦断链，后来者按误注改码即酿漏检）。
+test "detectEnglish 护栏：引号区隔离、孤撇号断链、min 长度与 enabled 边界" {
+    const gpa = std.testing.allocator;
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    // ① 引号区隔离：操作数内整段英文不进入词链（顶注声明的现行契约）。
+    try std.testing.expect(!filter.detectEnglish("无法加载仅限编译期类型 'expected type found'"));
+    // 三种引号（' " `）均跳区，区外长词照常成链——夹带操作数的英文句仍必须被拦。
+    try std.testing.expect(filter.detectEnglish("failed \"foo bar\" here again"));
+    try std.testing.expect(filter.detectEnglish("check `aaa bbb` cccc done"));
+
+    // ② 未闭合引号：按普通字符断链，其后长词重新成链（保守形、不漏拦）。
+    try std.testing.expect(filter.detectEnglish("\"foo bar baz"));
+    // 孤撇号（缩写 it's 形）：无配对引号→断链；剩余词不构成链即漏判——declared 代价
+    //（zig 正式消息无缩写、生产链不可达漏判面；若未来消息形变化，本行为即已知缺口）。
+    try std.testing.expect(!filter.detectEnglish("expected it's wrong"));
+
+    // ③ min 长度恰等边界：恰好 min 字母即成链，min-1 字母不成链不断链。
+    try std.testing.expect(filter.detectEnglish("foo bar")); // 默认 min=3：两 3 字母词相邻成链
+    var f5 = try PureFilter.init(gpa, .{ .min_english_length = 5 }, null);
+    defer f5.deinit();
+    try std.testing.expect(f5.detectEnglish("hello world")); // 5+5 恰等边界成链
+    try std.testing.expect(!f5.detectEnglish("hello wor")); // 3 字母词低于 5、不另起链
+
+    // ④ enabled=false 总闸：一切放行。
+    var foff = try PureFilter.init(gpa, .{ .enabled = false }, null);
+    defer foff.deinit();
+    try std.testing.expect(!foff.detectEnglish("expected type, found 'i64'"));
+}
