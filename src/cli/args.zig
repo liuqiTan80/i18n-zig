@@ -166,11 +166,16 @@ test "findLangFlag / stripLangFlag：两参与等号形都识别，剔离后不�
 /// 判断 `eject` 目标 `dest` 是否会与方言源码树 `src` 重叠、或越出当前工程根——
 /// 命中即危险：`eject` 重写前会先清空 `dest/src`，若该路径就是真实 `src`（或包含它），
 /// 会直接删除用户的 `.zz` 源文件（数据丢失）。按分隔符分段比较（避免 `src2` 误判为 `src` 之下）、
-/// 忽略 `./` 噪声与多余斜杠。危险情形：空/根相对绝对路径、等价于 cwd（`.`）、上溯出 cwd（`..`）、
+/// 忽略 `./` 噪声与多余斜杠。危险情形：空/根相对绝对路径/盘符绝对（`X:` 起头，D39 补齐）、等价于 cwd（`.`）、上溯出 cwd（`..`）、
 /// 或 dest 就是 `src`/其子目录。eject 的本意是导出到独立子目录，故这些都拒绝。
 pub fn ejectDestHitsSourceTree(dest: []const u8) bool {
     if (dest.len == 0) return true; // 空目标 → `dest/src` 形如 `/src`，行为不定
     if (dest[0] == '/' or dest[0] == '\\') return true; // 根相对/绝对，非工程子目录
+    // D39（第 90 轮）：盘符绝对形 `C:/out`、`D:\work\src` 旧形漏检被放行——guard 是 cmdEject
+    // 对 dest/src 无条件 deleteTree 前的唯一闸门，漏检即真实删除工程外目录（不可逆数据销毁）。
+    // 段扫判据也拦不住：首实段是 `D:` 而非 `src`，at_src_root/has_escaped 双落空——须头检 `:`。
+    // 孪生 initNameIsUnsafe/embedPathStaysWithin 均有同款检查，本轮补齐对称。
+    if (dest.len >= 2 and dest[1] == ':') return true; // 盘符绝对（含非法目录名形，拒绝从严）
     var any_real_seg = false;
     var has_escaped = false;
     var at_src_root = false;
@@ -198,6 +203,11 @@ test "ejectDestHitsSourceTree：拒绝会毁源的目标，放行独立子目录
     try std.testing.expect(ejectDestHitsSourceTree("..")); // 上溯出 cwd
     try std.testing.expect(ejectDestHitsSourceTree("../x")); // 上溯出 cwd
     try std.testing.expect(ejectDestHitsSourceTree("/abs/out")); // 根相对/绝对
+    // D39（第 90 轮）盘符绝对形：旧实现只拦前导 `/` `\`，`C:/out` 被放行 → cmdEject 随后
+    // 对 dest/src 无条件 deleteTree → 真实删除工程外目录（不可逆数据销毁）；
+    // 孪生 initNameIsUnsafe/embedPathStaysWithin 均有 `:` 检查，独此缺失。
+    try std.testing.expect(ejectDestHitsSourceTree("C:/out")); // 盘符绝对（Windows）
+    try std.testing.expect(ejectDestHitsSourceTree("D:/work/src")); // 盘符+恰名 src 子目录（首实段是 `D:` 非 src、旧形双漏）
     try std.testing.expect(ejectDestHitsSourceTree("./")); // 归一后等价于 cwd
     try std.testing.expect(ejectDestHitsSourceTree(".\\src\\")); // Windows 分隔符同义
     // 安全（工程根下的独立子目录）：
