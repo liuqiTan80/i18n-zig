@@ -82,3 +82,28 @@ test "registry：登记的包字节可被 Pack 解析并通过 B6 契约校验�
         try std.testing.expectEqualStrings(p.code, pack.code);
     }
 }
+
+test "registry（R9续②③）：自动发现的繁体叠加层运行时真并入默认 zh，且不动简体基包" {
+    const Pack = @import("pack.zig").Pack;
+    const gpa = std.testing.allocator;
+
+    const zh = lookup("zh") orelse return error.TestUnexpectedResult;
+    // 自动发现应将 繁体.txt 作为补充层挂到 zh 基包上（非空 overlays）。
+    try std.testing.expect(zh.overlays.len > 0);
+
+    // 基包单独解析：不应含繁体形（证下面命中确来自叠加层、非基包）。
+    {
+        var base = try Pack.parse(gpa, zh.bytes);
+        defer base.deinit();
+        try std.testing.expect(base.keywords.get("常數") == null);
+    }
+
+    // 叠加后：繁体形命中且与简体孪生键同值；简体形不回退（纯并集、无覆盖）。
+    var pack = try Pack.loadWithOverlays(gpa, zh.bytes, zh.overlays);
+    defer pack.deinit();
+    try std.testing.expectEqualStrings("const", pack.keywords.get("常數").?); // 繁体→叠加层
+    try std.testing.expectEqualStrings("fn", pack.keywords.get("函數").?);
+    try std.testing.expectEqualStrings("struct", pack.keywords.get("結構").?);
+    try std.testing.expectEqualStrings("const", pack.keywords.get("常数").?); // 简体→基包、仍活
+    try std.testing.expectEqualStrings("fn", pack.keywords.get("函数").?);
+}

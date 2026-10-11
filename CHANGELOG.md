@@ -176,6 +176,8 @@ zzc 首个可用版本：用母语（首发中文）编写真实 Zig 的方言�
 
 - 现（chore(repo/ci-mismatch-discovery)，新登 D17）：第五十六轮（无代码变更）。将第 54–55 轮全绿/一致性改动 `git push origin main`（`51827cb..c28381b`、fast-forward）。为验证“push 能触发 ubuntu CI 以消 D5/R8”，先核 `.github/workflows/ci.yml` 与远端：发现唯一远端为 gitcode.com、而 CI 为 GitHub Actions 格式，gitcode 不原生执行（push 仅回显自有 “Git Hooks Checking [PASSED]”、无矩阵构建），仓库亦无 GitHub 远端。即长期声称的“CI 已配 ubuntu+windows 矩阵”为**不实**（从未一行 CI 真跑），是 D5/R8 待验无法闭环的真实根因。新登 **D17（P2、待办）**含两条修复方向（按 gitcode 原生格式重写 / 新增 GitHub 远端）；因修复需外部跑绿才能坐实，本轮不臆造不可验流水线产物（衔接 D11 虚假完成教训）。互引 docs/消缺台账.md 第 56 轮记录。(本轮文档改动未 git 提交。）
 
+- 现（test(lang/overlay-runtime-regression)，销第 54 轮测试覆盖债）：第五十七轮（仅新增测、不改行为）。坐实一处真实测试盲区：自动发现+繁体叠加的**运行时效果**从未被测试锁定（53 轮叠加测用内联常量非真实 `繁体.txt`；registry 集成测只验“能解析+code 匹配”不验繁体关键字真进包）。`registry.zig` 新增回归测（走真实 `entries`/`繁体.txt`/生成模块路径）：断言 `lookup("zh").overlays.len > 0`（自动发现真挂补充层）；基包单独 `parse` **不含** `常數`（命中来自叠加层）；叠加后 `常數→const`/`函數→fn`/`結構→struct` 命中且简体 `常数/函数` 不回退。**验证**：`zig build` 0 错；`zig build test --summary all` **116/116**（+1）；`tools/check-demos.ps1` **4/4** 字节一致（新测首跑即绿、无行为回归）。互引 docs/消缺台账.md 第 57 轮记录。(本轮改动未 git 提交。）
+
 ### 依赖
 
 - 需要本机安装 Zig 0.17.0+（`zzc` 通过进程调用 `zig`，不链接 libzig）。
