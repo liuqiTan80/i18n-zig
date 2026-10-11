@@ -325,11 +325,15 @@ pub const PureFilter = struct {
         try out.appendSlice(gpa, "|------|------|------|----------|\n");
 
         for (items, 1..) |phrase, idx| {
-            try out.appendSlice(gpa, try std.fmt.allocPrint(
+            // 行临时串必须逐行释放：旧写法 `appendSlice(gpa, try allocPrint(...))` 把 allocPrint 结果直接
+            // 传递给 appendSlice（拷贝字节入 out）却从不 free 那块临时串 → 每行泄 1 块（第 65 轮 D23 坐实）。
+            const row = try std.fmt.allocPrint(
                 gpa,
                 "| {d} | {s} | {s} | [待翻译] {s} |\n",
                 .{ idx, phrase.phrase, phrase.location, phrase.phrase },
-            ));
+            );
+            defer gpa.free(row);
+            try out.appendSlice(gpa, row);
         }
 
         return out.toOwnedSlice(gpa);
@@ -342,7 +346,6 @@ pub const PureFilter = struct {
         return try PureFilter.init(gpa, config, null);
     }
 };
-
 
 /// 短语本地化兜底（复用 translate.zig 中的逻辑）
 pub fn localizeFallback(gpa: std.mem.Allocator, text: []const u8) ![]const u8 {
@@ -510,7 +513,10 @@ test "filterMessage - 兜底翻译，且记入落盘清单（F3）" {
     const gpa = std.testing.allocator;
     var list = UntranslatedList{};
     defer {
-        for (list.items.items) |it| { gpa.free(it.phrase); gpa.free(it.location); }
+        for (list.items.items) |it| {
+            gpa.free(it.phrase);
+            gpa.free(it.location);
+        }
         list.items.deinit(gpa);
     }
     var filter = try PureFilter.init(gpa, .{}, &list);
@@ -611,4 +617,26 @@ test "renderUntranslatedJson - mid-loop OOM 不得泄漏已分配字符串（D22
     // → 已分配的 entries[0].suggested_translation（"[待翻译] alpha"，17 字节）泄漏（std.testing.allocator 会报）。
     // 期望：干净返回 OutOfMemory 且无泄漏（filled 计数 + errdefer 精确回滚已填部分）。
     try std.testing.expectError(error.OutOfMemory, renderUntranslatedJson(gpa, &items, 123));
+}
+
+test "renderReport - Markdown 渲染内容正确且不泄漏行临时串（D23 坐实）" {
+    const gpa = std.testing.allocator;
+    const items = [_]UntranslatedPhrase{
+        .{ .phrase = "alpha", .location = "main.zz:1:1", .timestamp = 1 },
+        .{ .phrase = "beta", .location = "src/主.zz:2:3", .timestamp = 2 },
+    };
+    const result = try PureFilter.renderReport(gpa, &items);
+    defer gpa.free(result);
+
+    // 内容正确性：表头 + 逐行（序号/短语/位置/建议翻译）。
+    try std.testing.expectEqualStrings(
+        "# 未翻译短语报告\n\n" ++
+            "| 序号 | 短语 | 位置 | 建议翻译 |\n" ++
+            "|------|------|------|----------|\n" ++
+            "| 1 | alpha | main.zz:1:1 | [待翻译] alpha |\n" ++
+            "| 2 | beta | src/主.zz:2:3 | [待翻译] beta |\n",
+        result,
+    );
+    // 兼做泄漏回归：旧实现循环内 `try out.appendSlice(gpa, try allocPrint(...))` 的行临时串从不 free
+    // → 每行泄 1 块（happy path 即泄），std.testing.allocator 会在测毕报 leaked——本测同钉此回归。
 }
