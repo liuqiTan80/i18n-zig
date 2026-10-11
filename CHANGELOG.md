@@ -178,6 +178,8 @@ zzc 首个可用版本：用母语（首发中文）编写真实 Zig 的方言�
 
 - 现（test(lang/overlay-runtime-regression)，销第 54 轮测试覆盖债）：第五十七轮（仅新增测、不改行为）。坐实一处真实测试盲区：自动发现+繁体叠加的**运行时效果**从未被测试锁定（53 轮叠加测用内联常量非真实 `繁体.txt`；registry 集成测只验“能解析+code 匹配”不验繁体关键字真进包）。`registry.zig` 新增回归测（走真实 `entries`/`繁体.txt`/生成模块路径）：断言 `lookup("zh").overlays.len > 0`（自动发现真挂补充层）；基包单独 `parse` **不含** `常數`（命中来自叠加层）；叠加后 `常數→const`/`函數→fn`/`結構→struct` 命中且简体 `常数/函数` 不回退。**验证**：`zig build` 0 错；`zig build test --summary all` **116/116**（+1）；`tools/check-demos.ps1` **4/4** 字节一致（新测首跑即绿、无行为回归）。互引 docs/消缺台账.md 第 57 轮记录。(本轮改动未 git 提交。）
 
+- 改（fix(build/pack-default-directive)，新登并消 D18）：第五十八轮。承接第 54 轮自动发现面，坐实一处真实潜在缺陷：`# @default` 头指令被 `parseDirectives` 解析却**完全空转**（build.zig 旧 194–195 行仅剩注释），默认包实由 `entries[0]`＝基包文件名字典序**偶然**决定——当前单基包（中文.txt）恰好正确，但新增一门基包若文件名排在 `中文.txt` 之前，`registry.defaultEntry()` 会静默取错默认包（头指令许诺与实现脱节，D11 型虚假完成味道）。修复：`Directive` 新增 `is_default`；`parseDirectives` 命中 `default` 置位；发射基包前先收集基包下标、校验至多一个 `is_default`（多个即 `std.process.fatal`），再按“默认置首、其余维持字典序”排序发射；`defaultEntry()` 取 `entries[0]` 不变、但此位现由头指令真实保证。同步校正 registry.zig 注释与 contributing 文档。**验证**：`zig build` 0 错；`zig build test --summary all` **116/116**（计数不变、`defaultEntry().key=="zh"` 测仍绿→默认选择行为无回归）；`tools/check-demos.ps1` **4/4** 字节一致。**边界**：多基包重排序行为无法靠单基包环内测试验证（临时新增第二基包会污染可选语言集），未为测试臆造假包。互引 docs/消缺台账.md 第 58 轮记录（随第五十八轮消缺提交入库）。
+
 ### 依赖
 
 - 需要本机安装 Zig 0.17.0+（`zzc` 通过进程调用 `zig`，不链接 libzig）。

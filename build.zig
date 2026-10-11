@@ -59,6 +59,7 @@ const Directive = struct {
     overlay_of: []const u8 = "",
     order: i32 = 0,
     has_key: bool = false,
+    is_default: bool = false,
 };
 
 const packs_dir = "src/lang/packs";
@@ -112,10 +113,28 @@ fn generatePackRegistry(b: *std.Build) *std.Build.Module {
         \\
     );
 
-    var base_count: usize = 0;
-    for (dirs.items) |base| {
-        if (!base.has_key or base.overlay_of.len != 0) continue;
-        if (base.code.len == 0) std.process.fatal("基包 {s} 缺 `# @code` 头指令", .{base.file});
+    // 收集基包下标（有 key 且非 overlay），校验 code，统计 `# @default` 个数。
+    var base_idx: std.ArrayList(usize) = .empty;
+    var default_seen: usize = 0;
+    for (dirs.items, 0..) |d, i| {
+        if (!d.has_key or d.overlay_of.len != 0) continue;
+        if (d.code.len == 0) std.process.fatal("基包 {s} 缺 `# @code` 头指令", .{d.file});
+        if (d.is_default) default_seen += 1;
+        base_idx.append(gpa, i) catch @panic("OOM");
+    }
+    if (base_idx.items.len == 0) std.process.fatal("未发现任何基包（需含 `# @key` 且非 overlay 的 .txt）", .{});
+    if (default_seen > 1) std.process.fatal("有多个基包同时标 `# @default`（至多一个）", .{});
+    // 发射序：默认包恒置首（registry.defaultEntry() 取 entries[0]），其余维持文件名字典序
+    //（dirs 与已排序 names 同序，故下标序即字典序；比较子对非默认项按唯一下标给出全序，排序结果确定）。
+    std.mem.sort(usize, base_idx.items, dirs.items, struct {
+        fn lt(ds: []const Directive, a: usize, bb: usize) bool {
+            if (ds[a].is_default != ds[bb].is_default) return ds[a].is_default;
+            return a < bb;
+        }
+    }.lt);
+
+    for (base_idx.items) |bi| {
+        const base = dirs.items[bi];
 
         // 收集该基包的补充层下标并按 (order, file) 升序。
         var ovl: std.ArrayList(usize) = .empty;
@@ -152,9 +171,7 @@ fn generatePackRegistry(b: *std.Build) *std.Build.Module {
             push(b, gpa, &out, ",");
         }
         push(b, gpa, &out, " }, },\n");
-        base_count += 1;
     }
-    if (base_count == 0) std.process.fatal("未发现任何基包（需含 `# @key` 且非 overlay 的 .txt）", .{});
     push(b, gpa, &out, "};\n");
 
     const wf = b.addWriteFiles();
@@ -192,7 +209,7 @@ fn parseDirectives(b: *std.Build, gpa: std.mem.Allocator, file_name: []const u8,
         } else if (std.mem.eql(u8, tag, "overlay-of")) {
             d.overlay_of = dupe(b, gpa, val);
         } else if (std.mem.eql(u8, tag, "default")) {
-            // 默认包 = entries[0]；当前基包按文件名字典序发射，约定 zh 排首即默认（多基包时须确保默认包名最小或后续扩展排序）。
+            d.is_default = true; // 基包发射时置首（entries[0]），registry.defaultEntry() 由此真实取到默认包，不再靠文件名字典序偶然命中
         } else if (std.mem.eql(u8, tag, "order")) {
             d.order = std.fmt.parseInt(i32, val, 10) catch std.process.fatal("包 {s} 的 `# @order` 非整数：{s}", .{ file_name, val });
         } else if (std.mem.eql(u8, tag, "aliases")) {

@@ -21,7 +21,7 @@ pub const Entry = registry_gen.Entry;
 /// 已登记的包（自动生成）。第一项恒为默认包（未指定 `--lang` 时选用）。
 pub const entries = registry_gen.entries;
 
-/// 默认包（未指定 `--lang` 时）。约定 `entries[0]` 恒为默认。
+/// 默认包（未指定 `--lang` 时）。生成器据 `# @default` 头指令把默认基包置首发射，故 `entries[0]` 恒为默认。
 pub fn defaultEntry() Entry {
     return entries[0];
 }

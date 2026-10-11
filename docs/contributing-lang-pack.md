@@ -52,7 +52,7 @@ MyType                  # 驼峰类标识符；`|` 之后为人读备注、不�
 
 1. 复制 `src/lang/packs/中文.txt`，改 `$name`/`$code`，逐段替换键为你的母语词。
 2. 放到 `src/lang/packs/` 下。
-3. **在包文件首部写注册头指令**（R9续②，构建期自动发现、**无需改任何代码**）：基包写 `# @key <选包名>`、`# @code <码>`、`# @display <显示名>`、可选 `# @aliases <别名,逗号分隔>`；若为默认包再加 `# @default`。这些行都是 `#` 注释、`Pack.parse` 不解析、对运行时零影响。`build.zig` 会扫 `packs/*.txt`、据头指令生成 `pack_registry` 注册表并内联包字节；`# @code` 须与包内 `$code` 一致（有单测锁定不漂移）。
+3. **在包文件首部写注册头指令**（R9续②，构建期自动发现、**无需改任何代码**）：基包写 `# @key <选包名>`、`# @code <码>`、`# @display <显示名>`、可选 `# @aliases <别名,逗号分隔>`；若为默认包再加 `# @default`（默认包会被生成器置首发射、即 `registry.defaultEntry()` 所取 `entries[0]`；至多一个包可标 `# @default`，多个即构建失败）。这些行都是 `#` 注释、`Pack.parse` 不解析、对运行时零影响。`build.zig` 会扫 `packs/*.txt`、据头指令生成 `pack_registry` 注册表并内联包字节；`# @code` 须与包内 `$code` 一致（有单测锁定不漂移）。
 4. 用 `zzc lang`（应列出新包）与 `zzc <子命令> --lang <新名> ...` 验证选包生效（注：子命令恒在最前，`--lang` 需置于子命令**之后**，如 `zzc check --lang 日本語 src/main.zz`）。
 5. 造一个 demo 工程（`demo/<语言>/src/main.zz`），跑通 `zzc run` 与 `zzc eject && zig build`。
 6. 补翻译快照测试（见 `src/transpiler/translate.zig` 的 `test`），锁定关键映射不回归。
