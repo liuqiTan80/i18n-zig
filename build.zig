@@ -124,6 +124,18 @@ fn generatePackRegistry(b: *std.Build) *std.Build.Module {
     }
     if (base_idx.items.len == 0) std.process.fatal("未发现任何基包（需含 `# @key` 且非 overlay 的 .txt）", .{});
     if (default_seen > 1) std.process.fatal("有多个基包同时标 `# @default`（至多一个）", .{});
+    // 校验每个补充层的 `# @overlay-of` 都指向一个真实存在的基包 key：否则下面按 key 匹配时会被静默丢弃、叠加无声失效。
+    for (dirs.items) |d| {
+        if (d.overlay_of.len == 0) continue;
+        var hit = false;
+        for (base_idx.items) |bi| {
+            if (std.mem.eql(u8, dirs.items[bi].key, d.overlay_of)) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) std.process.fatal("补充层 {s} 的 `# @overlay-of {s}` 未指向任何基包（拼写错误将静默丢弃该层）", .{ d.file, d.overlay_of });
+    }
     // 发射序：默认包恒置首（registry.defaultEntry() 取 entries[0]），其余维持文件名字典序
     //（dirs 与已排序 names 同序，故下标序即字典序；比较子对非默认项按唯一下标给出全序，排序结果确定）。
     std.mem.sort(usize, base_idx.items, dirs.items, struct {

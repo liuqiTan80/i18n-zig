@@ -180,6 +180,8 @@ zzc 首个可用版本：用母语（首发中文）编写真实 Zig 的方言�
 
 - 改（fix(build/pack-default-directive)，新登并消 D18）：第五十八轮。承接第 54 轮自动发现面，坐实一处真实潜在缺陷：`# @default` 头指令被 `parseDirectives` 解析却**完全空转**（build.zig 旧 194–195 行仅剩注释），默认包实由 `entries[0]`＝基包文件名字典序**偶然**决定——当前单基包（中文.txt）恰好正确，但新增一门基包若文件名排在 `中文.txt` 之前，`registry.defaultEntry()` 会静默取错默认包（头指令许诺与实现脱节，D11 型虚假完成味道）。修复：`Directive` 新增 `is_default`；`parseDirectives` 命中 `default` 置位；发射基包前先收集基包下标、校验至多一个 `is_default`（多个即 `std.process.fatal`），再按“默认置首、其余维持字典序”排序发射；`defaultEntry()` 取 `entries[0]` 不变、但此位现由头指令真实保证。同步校正 registry.zig 注释与 contributing 文档。**验证**：`zig build` 0 错；`zig build test --summary all` **116/116**（计数不变、`defaultEntry().key=="zh"` 测仍绿→默认选择行为无回归）；`tools/check-demos.ps1` **4/4** 字节一致。**边界**：多基包重排序行为无法靠单基包环内测试验证（临时新增第二基包会污染可选语言集），未为测试臆造假包。互引 docs/消缺台账.md 第 58 轮记录（随第五十八轮消缺提交入库）。
 
+- 改（fix(build/pack-orphan-overlay-guard)，新登并消 D19）：第五十九轮。继 D18 后继续审自动发现生成器，发现同族第二类静默失败：`generatePackRegistry` 仅在“基包 key 匹配”处收集补充层（build.zig 142 行），从不校验补充层 `# @overlay-of` 是否指向真实基包；写错则该层被**静默丢弃**、不报错也不进注册表，叠加关键字无声失效（现有测仅在恰为 zh 且已写对时能捕获）。修复：发射基包前新增孤儿补充层校验（`overlay_of` 不命中任何基包 key 即 `std.process.fatal`）。**验证**：正向既有包 `zig build` 0 错/`test` **116/116**/`check-demos` **4/4**；**负向探针**（本轮有真实可验性）临时造 `_坏叠加探针.txt`（`# @overlay-of 不存在的基包键`）→ 强制重跑后 `zig build` **EXIT=1** 且报确切 fatal，删探针后回归三绿（产物均已清）。**新坐实守则 R9f**：构建脚本命令式扫 `packs/`、包文件非声明依赖→仅新增 .txt 不触发脚本重跑，需改 build.zig/干净构建才重扫。互引 docs/消缺台账.md 第 59 轮记录（随第五十九轮消缺提交入库）。
+
 ### 依赖
 
 - 需要本机安装 Zig 0.17.0+（`zzc` 通过进程调用 `zig`，不链接 libzig）。
