@@ -95,12 +95,10 @@ fn readFileRaw(path: []const u8) ![]const u8 {
     return file_io.readFileRaw(io_, gpa_, path);
 }
 
-/// 路径是否为符号链接（台账 R8）：不跟随地 stat，只认 `.sym_link` 真值。
-/// 任何错误（不存在/无权限/平台不支持）一律回 false——保守不回退现状：
-/// 源缺失仍由后续 readFileRaw catch-continue 交给 zig 原生报错。
+/// 路径是否为符号链接（台账 R8）：第 63 轮下沉 file_io（基础 IO 一致性、入测试图），本处仅绑 io_ 全局。
+/// 任何错误（不存在/无权限/平台不支持）一律回 false——保守不回退现状。
 fn pathIsSymlink(path: []const u8) bool {
-    const st = std.Io.Dir.cwd().statFile(io_, path, .{ .follow_symlinks = false }) catch return false;
-    return st.kind == .sym_link;
+    return file_io.pathIsSymlink(io_, path);
 }
 
 /// 把某单位里 `@embedFile` 引用的资源从方言源目录原样拷到目标 .zig 所在目录（生成树或 eject dest）。

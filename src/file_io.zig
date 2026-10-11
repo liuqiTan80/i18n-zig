@@ -46,6 +46,14 @@ pub fn readFileRaw(io: Io, gpa: std.mem.Allocator, path: []const u8) ![]const u8
     return std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited);
 }
 
+/// 路径是否为符号链接（台账 R8）：不跟随地 stat，只认 `.sym_link` 真值。
+/// 任何错误（不存在/无权限/平台不支持）一律回 false——保守不回退现状：
+/// 源缺失仍由后续 readFileRaw catch-continue 交给 zig 原生报错。第 63 轮自 main.zig 下沉本模块（D7/D21 基础 IO 一致性）。
+pub fn pathIsSymlink(io: Io, path: []const u8) bool {
+    const st = std.Io.Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return false;
+    return st.kind == .sym_link;
+}
+
 test "file_io 读写往返 + BOM 剥离 + pathExists + readFileRaw 保留 BOM（第 62 轮 D21 下沉真测）" {
     // 测试上下文无 std.process.Init，自建同步 Io（文件操作走调用线程、不触异步分发，故 gpa 用 page_allocator 即可）。
     var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
@@ -76,4 +84,20 @@ test "file_io 读写往返 + BOM 剥离 + pathExists + readFileRaw 保留 BOM（
     const raw = try readFileRaw(io, gpa, probe);
     try std.testing.expectEqual(stripped.len + 3, raw.len);
     try std.testing.expectEqual(@as(u8, 0xEF), raw[0]);
+}
+
+test "pathIsSymlink：普通文件与不存在路径均回 false（R8 守卫假分支；第 63 轮下沉真测）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const probe = ".zig-cache/zzc_symlink_probe.txt";
+    try writeWhole(io, probe, "x");
+    defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
+
+    // 普通文件不是符号链接（守 R8：非链接的合法嵌入资产不得被误拒拷贝）。
+    try std.testing.expect(!pathIsSymlink(io, probe));
+    // 不存在路径保守回 false（交后续 readFileRaw catch-continue 处理）。
+    try std.testing.expect(!pathIsSymlink(io, ".zig-cache/zzc_no_such_link_xyz"));
+    // 边界：真符号链接→true 分支需 POSIX/管理员权限造链接，Windows 环内不可靠、不在此测（同台账 R8 真链接面待验）。
 }
