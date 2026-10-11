@@ -52,22 +52,16 @@ MyType                  # 驼峰类标识符；`|` 之后为人读备注、不�
 
 1. 复制 `src/lang/packs/中文.txt`，改 `$name`/`$code`，逐段替换键为你的母语词。
 2. 放到 `src/lang/packs/` 下。
-3. **在 `src/lang/registry.zig` 的 `entries` 里登记一行**（选包名 `key`、别名、`code`、显示名、`bytes = @embedFile("packs/<新包>.txt")`）。`code` 须与包内 `$code` 一致（有单测锁定不漂移）。这就是多包加载的全部接线（R9）。
+3. **在包文件首部写注册头指令**（R9续②，构建期自动发现、**无需改任何代码**）：基包写 `# @key <选包名>`、`# @code <码>`、`# @display <显示名>`、可选 `# @aliases <别名,逗号分隔>`；若为默认包再加 `# @default`。这些行都是 `#` 注释、`Pack.parse` 不解析、对运行时零影响。`build.zig` 会扫 `packs/*.txt`、据头指令生成 `pack_registry` 注册表并内联包字节；`# @code` 须与包内 `$code` 一致（有单测锁定不漂移）。
 4. 用 `zzc lang`（应列出新包）与 `zzc <子命令> --lang <新名> ...` 验证选包生效（注：子命令恒在最前，`--lang` 需置于子命令**之后**，如 `zzc check --lang 日本語 src/main.zz`）。
 5. 造一个 demo 工程（`demo/<语言>/src/main.zz`），跑通 `zzc run` 与 `zzc eject && zig build`。
 6. 补翻译快照测试（见 `src/transpiler/translate.zig` 的 `test`），锁定关键映射不回归。
 
-## 叠加层 / 补充包（适配层，R9 组合半面）
+## 叠加层 / 补充包（适配层，R9 组合半面 + ③自动发现）
 
-一个逻辑包可由「基包（base）+ 若干有序补充层（overlays）」拼成，无需复制整包就能方言适配或领域覆盖（如 `湖南.txt` 盖在通用中文上、`en` 回退基包）。在 `registry.zig` 的 `Entry` 里除 `bytes`（基包）外，再给 `overlays` 填若内嵌层字节（按生效序）：
+一个逻辑包可由「基包（base）+ 若干有序补充层（overlays）」拼成，无需复制整包就能方言适配或领域覆盖。补充层同样**丢进 `packs/` 即生效**：在层文件首部写 `# @overlay-of <基包 key>` 声明它叠加进哪个基包，可选 `# @order <整数>`（多层时的生效升序，缺省 0、再按文件名）——**不要**写 `# @key`（否则会被当作独立基包）。`build.zig` 会把它内联进对应基包项的 `overlays`。
 
-```
-.{
-    .key = "zh-hunan", .code = "zh-hn", .display = "湖南话",
-    .bytes = @embedFile("packs/中文.txt"),                        // 基包
-    .overlays = &.{ @embedFile("packs/补充包-湖南.txt") },  // 补充层（可多、按序）
-}
-```
+真实例：`src/lang/packs/繁体.txt` 以 `# @overlay-of zh` 把 7 条简繁同形关键字（`常數/變數/函數/公開/結構/枚舉/聯合`）叠加进默认 zh，使同一份 zh 包同时接受简体与繁体词形（键守 R3 纯中文、纯并集不覆盖简体孪生键）。
 
 `Pack.loadWithOverlays` 逐层 `parseInto`，**合并语义**如下：
 

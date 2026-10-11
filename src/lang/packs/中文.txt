@@ -1,5 +1,12 @@
 # zzc 中文语言包（首发内置）
 # 格式说明见 src/lang/pack.zig 头注释；新增语言请复制本文件修改。
+#
+# ---- 注册头指令（供 build.zig 自动发现，R9续②；均为注释、Pack.parse 不解析）----
+# @key zh
+# @code zh
+# @display 简体中文
+# @aliases 中文,简体,汉
+# @default
 
 $name = 中文
 $code = zh

@@ -2,39 +2,24 @@
 //!
 //! 把「按名选包」的加载缝集中到一处：新增一门方言只需
 //!   1) 在 `packs/` 放一份包文件；
-//!   2) 在下方 `entries` 登记一行（选择名 / 别名 / 码 / 内嵌字节）。
-//! 引擎与 CLI 零改动。当前仅内置中文包，结构为多语言扩展预留（注册表/加载器面）。
+//!   2) 在该文件首部写 `# @` 注册头指令（key/code/display/aliases/default；补充层用 overlay-of）。
+//! `entries` 由 build.zig 扫描上述头指令自动生成（R9续②）——引擎与 CLI 零改动。当前仅内置中文包
+//! （附 `繁体.txt` 叠加层），结构为多语言扩展预留（注册表/加载器面）。
 //!
 //! 本模块刻意保持纯数据 + 纯查询（不碰磁盘、不分配），进 zzc_core 测试图可单测。
+//!
+//! R9续②（第 54 轮）：`Entry`/`entries` 不再手与，改由 `pack_registry` 模块（build.zig 扫
+//! `src/lang/packs/` 的 `# @` 头指令自动生成）提供——新增方言/补充层 = 丢一份带头指令的 .txt，
+//! 零改代码。选包/匹配逻辑仍在本模块。
 
 const std = @import("std");
+const registry_gen = @import("pack_registry");
 
-pub const Entry = struct {
-    /// CLI `--lang` 的稳定选择名（小写 ASCII 码，不随显示名变动）
-    key: []const u8,
-    /// 别名（方言自称/中文名），`--lang` 亦可命中
-    aliases: []const []const u8,
-    /// ISO 语言码（供 version / lang 展示）
-    code: []const u8,
-    /// 注册表层显示名（包内 `$name` 会进一步覆盖，这里作展示/兜底）
-    display: []const u8,
-    /// 内嵌包字节（编译期进二进制，与工具同版本发布）——基包（base）。
-    bytes: []const u8,
-    /// 叠加的补充层/适配层字节（R11，第 53 轮）：按序累积解析到 `bytes` 之上，后层覆盖同键、
-    /// 白名单取并集。默认空即单包（无补充层）；本字段仅为数据，合并在 `Pack.loadWithOverlays` 完成。
-    overlays: []const []const u8 = &.{},
-};
+/// 注册表条目：数据形状由生成模块定义（与 build.zig 一致），本模块只消数据不手与。
+pub const Entry = registry_gen.Entry;
 
-/// 已登记的包。第一项恒为默认包（未指定 `--lang` 时选用）。
-pub const entries = [_]Entry{
-    .{
-        .key = "zh",
-        .aliases = &.{ "中文", "简体", "汉" },
-        .code = "zh",
-        .display = "简体中文",
-        .bytes = @embedFile("packs/中文.txt"),
-    },
-};
+/// 已登记的包（自动生成）。第一项恒为默认包（未指定 `--lang` 时选用）。
+pub const entries = registry_gen.entries;
 
 /// 默认包（未指定 `--lang` 时）。约定 `entries[0]` 恒为默认。
 pub fn defaultEntry() Entry {
