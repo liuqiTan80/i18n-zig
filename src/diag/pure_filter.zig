@@ -188,7 +188,11 @@ pub const PureFilter = struct {
 
     /// 检测文本中是否包含英文残留。
     /// 默认（非严格）模式为**词链启发式**：仅当两个及以上“长词”（≥min_english_length 连续字母）
-    /// 相邻——中间只隔空白/短虚词/数字/标点、无母语文字或标识符内部符号（-_.@/= 等）——才判英文句残留；
+    /// 相邻——中间只隔空白/短虚词/数字/句读标点（含点号 `.`）、且无母语文字或标识符内部符号
+    /// （`_` `@` `/` `=` `-` `\`）——才判英文句残留；
+    /// 点号 `.` 刻意归句读标点（保持链）而非标识符内部符号（断链）：本模块顶规「零英文泄漏优先」，
+    /// 若按 `.` 断链会漏判含小数/句号的真实英文句（如 `delay 1.5 seconds`、`failed. try again`）；
+    /// 代价是极少数裸夹在中文里的点分路径（如 `std.debug`）被过度判定——偏保守可接受，已知放行者交白名单。
     /// 引号区（'...' / `...` / "..."）为操作数领土整体跳过。
     /// 与台账 B2（操作数保留）边界对称：孤立 ASCII 词（类型签名 'comptime_int'、参数名
     /// --release=fast、标识符 MyType、内建 @constCast）是诊断实体、不拦截；真实英文句子
@@ -213,7 +217,8 @@ pub const PureFilter = struct {
                 i = j;
                 continue;
             }
-            // 空白/数字/句读标点：链保持（英文句里常夹数字与逗号）。
+            // 空白/数字/句读标点（含点号 `.`）：链保持——英文句里常夹数字、逗号乃至小数/句号；
+            // 点号按本行归入标点（保持链）系刻意取舍，详见 detectEnglish 顶注「零英文泄漏优先」。
             if (c == ' ' or c == '\t' or std.ascii.isDigit(c) or
                 c == ',' or c == ';' or c == ':' or c == '.' or c == '!' or c == '?' or
                 c == '(' or c == ')' or c == '[' or c == ']' or c == '{' or c == '}')
@@ -365,9 +370,25 @@ test "detectEnglish - B2 边界：孤立操作数不误拦" {
     try std.testing.expect(!filter.detectEnglish("MyType"));
     try std.testing.expect(!filter.detectEnglish("建议使用 @constCast 处理"));
     try std.testing.expect(!filter.detectEnglish("错误 FileNotFound 发生"));
-    // 标识符内部符号（下划线/点号）断链：comptime_int、my_variable 各自孤立。
+    // 标识符内部符号（下划线 @ = - 等）断链：comptime_int、my_variable 各自孤立。
+    // 注：点号 `.` 属句读标点、保持链（非断链），行为与用例见下方「点号保持链」专项测。
     try std.testing.expect(!filter.detectEnglish("值 comptime_int 无效"));
     try std.testing.expect(!filter.detectEnglish("字段 my_variable 缺失"));
+}
+
+test "detectEnglish - 点号属句读标点·保持链（刻意·零英文泄漏优先；防按旧误注改码致漏检回归）" {
+    const gpa = std.testing.allocator;
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    // 点号被当作句读标点保持词链：夹在其中的两段 ≥3 字母视为相邻、判英文句残留。
+    // 这是刻意为之（本模块顶规：冲突时纯母语/零英文泄漏优先）——过度判定仍附「原文」不丢信息，
+    // 反之若把 `.` 改判为断链会漏掉含小数/句号的真实英文句，泄漏英文更违背初衷。
+    try std.testing.expect(filter.detectEnglish("请检查 std.debug 调用"));
+    try std.testing.expect(filter.detectEnglish("请调用 std.debug.print 输出"));
+    // 对照断链族（下划线/@）：孤立操作数不误拦。
+    try std.testing.expect(!filter.detectEnglish("参考 comptime_int 类型"));
+    try std.testing.expect(!filter.detectEnglish("使用 @constCast 转换"));
 }
 
 test "detectEnglish - 严格模式保留旧规则" {
