@@ -215,23 +215,13 @@ const Project = struct {
 /// 生成文件相对路径：src/main.zz -> .zzc/gen/src/main.zig（保留子目录）。第 60 轮纯逻辑下沉 cli 并进测试图。
 const genPathFor = cli.genPathFor;
 
-/// 语言包中 `@embedFile` 的全部词形：ASCII 直通形 + 映射值恰为 @embedFile 的方言词（如 `嵌入文件`）。
-/// 供原文预扫描用（台账 D2：方言词尚未翻译，extractEmbedPaths 只认 ASCII 形不够）。
-fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
-    return keywordFormsFor(gpa, lang, "@embedFile");
-}
+/// 语言包 `@embedFile` 的全部词形：ASCII 直通形 + 映射值恰为 @embedFile 的方言词（如 `嵌入文件`）。
+/// 供原文预扫描用（台账 D2）。第 61 轮下沉 pack.zig 并进测试图（D7/D21）。
+const embedWordForms = @import("lang/pack.zig").embedWordForms;
 
 /// 语言包中映射值恰为 `want` 的全部词形 + ASCII 直通形 `want` 本身（如 const → `const` + `常数`）。
-/// 供原文单跳变量实参解析（台账 D3：`常数 名字 = "…"; 嵌入文件(名字)` 的原文预扫描）。
-fn keywordFormsFor(gpa: std.mem.Allocator, lang: Pack, want: []const u8) ![]const []const u8 {
-    var list: std.ArrayList([]const u8) = .empty; // 元素是字节切片；.items 即 []const []const u8
-    try list.append(gpa, want);
-    var it = lang.keywords.iterator();
-    while (it.next()) |e| {
-        if (std.mem.eql(u8, e.value_ptr.*, want)) try list.append(gpa, e.key_ptr.*);
-    }
-    return list.items;
-}
+/// 供原文单跳变量实参解析（台账 D3）。第 61 轮下沉 pack.zig 并进测试图。
+const keywordFormsFor = @import("lang/pack.zig").keywordFormsFor;
 
 /// 收集 entry 同目录（递归）全部 .zz 一并翻译（保证 @import 可达）。
 fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
@@ -1008,50 +998,4 @@ test "readFileRaw - 原始字节读取（不strip BOM）" {
     const result = try readFileRaw(test_file);
     defer gpa.free(result);
     try std.testing.expectEqualStrings(content, result);
-}
-
-test "stripBom - UTF-8 BOM 剥离" {
-    const gpa = std.testing.allocator;
-
-    // 带 BOM 的内容
-    const with_bom = "\xEF\xBB\xBF测试内容";
-    const result = try translate.stripBom(gpa, with_bom);
-    defer gpa.free(result);
-    try std.testing.expectEqualStrings("测试内容", result);
-
-    // 不带 BOM 的内容
-    const without_bom = "测试内容";
-    const result2 = try translate.stripBom(gpa, without_bom);
-    defer gpa.free(result2);
-    try std.testing.expectEqualStrings("测试内容", result2);
-}
-
-test "keywordFormsFor - 获取关键字词形" {
-    const gpa = std.testing.allocator;
-
-    var lang = try Pack.parse(gpa, zh_pack);
-    defer lang.deinit();
-
-    // 测试获取 @embedFile 的词形
-    const forms = try keywordFormsFor(gpa, lang, "@embedFile");
-    defer gpa.free(forms);
-
-    // 至少包含 ASCII 直通形
-    try std.testing.expect(forms.len > 0);
-    try std.testing.expect(std.mem.eql(u8, forms[0], "@embedFile"));
-}
-
-test "embedWordForms - 获取嵌入文件词形" {
-    const gpa = std.testing.allocator;
-
-    var lang = try Pack.parse(gpa, zh_pack);
-    defer lang.deinit();
-
-    // 测试获取嵌入文件词形
-    const forms = try embedWordForms(gpa, lang);
-    defer gpa.free(forms);
-
-    // 至少包含 ASCII 直通形
-    try std.testing.expect(forms.len > 0);
-    try std.testing.expect(std.mem.indexOf(u8, forms[0], "@embedFile") != null);
 }

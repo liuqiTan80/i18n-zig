@@ -211,6 +211,59 @@ pub fn loadWithOverlays(gpa: std.mem.Allocator, base: []const u8, overlays: []co
     return self;
 }
 
+/// 语言包中映射值恰为 `want` 的全部词形 + ASCII 直通形 `want` 本身（如 const → `const` + `常数`）。
+/// 供原文预扫描与单跳变量实参解析（台账 D2/D3：方言词尚未翻译，只认 ASCII 形不够）。
+/// 第 61 轮自 main.zig 下沉至本模块测试图（D7/D21：main.zig 的 test 块从不执行、此纯查询此前零有效覆盖）。
+/// 返回数组经 `toOwnedSlice` 拥有（len==capacity），调用方 `gpa.free(本体)` 释放数组；
+/// 元素是 `want` 与 keywords 键的借用视图（归 lang/常量字面量所有），勿逐项释放。
+pub fn keywordFormsFor(gpa: std.mem.Allocator, lang: Pack, want: []const u8) ![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer list.deinit(gpa);
+    try list.append(gpa, want);
+    var it = lang.keywords.iterator();
+    while (it.next()) |e| {
+        if (std.mem.eql(u8, e.value_ptr.*, want)) try list.append(gpa, e.key_ptr.*);
+    }
+    return list.toOwnedSlice(gpa);
+}
+
+/// `@embedFile` 的全部词形（ASCII 直通形 + 方言词，如 `嵌入文件`）。供原文预扫描（D2）。
+pub fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
+    return keywordFormsFor(gpa, lang, "@embedFile");
+}
+
+test "keywordFormsFor/embedWordForms（第 61 轮下沉真测）：ASCII 直通形居首 + 真实 zh 包方言词形被枚举" {
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var lang = try parse(gpa, zh);
+    defer lang.deinit();
+
+    // @embedFile：直通形必居首（确定性），且中文方言词「嵌入文件」(= @embedFile) 被枚举到。
+    const forms = try keywordFormsFor(gpa, lang, "@embedFile");
+    defer gpa.free(forms);
+    try std.testing.expectEqualStrings("@embedFile", forms[0]);
+    try std.testing.expect(forms.len >= 2);
+    var hit_embed = false;
+    for (forms) |f| {
+        if (std.mem.eql(u8, f, "嵌入文件")) hit_embed = true;
+    }
+    try std.testing.expect(hit_embed);
+
+    // const：方言词「常数」被枚举。
+    const cs = try keywordFormsFor(gpa, lang, "const");
+    defer gpa.free(cs);
+    var hit_const = false;
+    for (cs) |f| {
+        if (std.mem.eql(u8, f, "常数")) hit_const = true;
+    }
+    try std.testing.expect(hit_const);
+
+    // embedWordForms 即 @embedFile 词形的便捷别名，与上同。
+    const ew = try embedWordForms(gpa, lang);
+    defer gpa.free(ew);
+    try std.testing.expectEqualStrings("@embedFile", ew[0]);
+}
+
 test "语言包解析" {
     const gpa = std.testing.allocator;
     const src =
