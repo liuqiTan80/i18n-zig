@@ -606,3 +606,41 @@ test "区间白名单真边界：纯西里尔/与拉丁混排作方言文字放�
     }
     try std.testing.expect(got_e);
 }
+
+// 护栏（第 115 轮证伪落位）：`fullwidthFormHint` 系纯函数、此前仅经 `check` 间接触达，且三类
+// 划分中仅「全角数字」一类被断言（L389 测题虽称「数字/拉丁字母」实则只 got_digit）——「全角
+// 拉丁字母」（大写 FF21..FF3A / 小写 FF41..FF5A）与「全角符号」两类 label、以及 halfwidth 映
+// 射的真边界（区下界 FF01 含端、区上界 FF5E 含端、区外 null）零直调覆盖。危险表未列的全角
+// 拉丁/符号形（如 Ａ/ａ/＄）在 check 里唯有本函数能给精确提示——独一防线。本测直调钉住三类
+// 划分与逐字符半角映射（buf[i]=0x21+i、idx=cp-0xFF01），防分类边界/映射表被误改致静默降级为泛拒绝。
+test "fullwidthFormHint 三类划分（数字/拉丁字母/符号）与半角映射真边界（危险表外全角变体兜底独一防线，第 115 轮）" {
+    // ① 全角数字段 FF10..FF19 → label「全角数字」、半角=对应数字字符（FF15５ → '5'）。
+    {
+        const h = fullwidthFormHint("\u{FF15}") orelse return error.ExpectedHint;
+        try std.testing.expectEqualStrings("全角数字", h.label);
+        try std.testing.expectEqualStrings("5", h.ascii);
+    }
+    // ② 全角拉丁字母段（大写 FF21..FF3A、小写 FF41..FF5A）→ label「全角拉丁字母」——此两类不在危
+    //    险表内、既有测从未触达其分支（证本测独有价值）。
+    {
+        const up = fullwidthFormHint("\u{FF21}") orelse return error.ExpectedHint; // Ａ
+        try std.testing.expectEqualStrings("全角拉丁字母", up.label);
+        try std.testing.expectEqualStrings("A", up.ascii); // idx=0xFF21-0xFF01=32 → 0x21+32='A'
+        const lo = fullwidthFormHint("\u{FF41}") orelse return error.ExpectedHint; // ａ
+        try std.testing.expectEqualStrings("全角拉丁字母", lo.label);
+        try std.testing.expectEqualStrings("a", lo.ascii); // idx=64 → 0x61='a'
+    }
+    // ③ 其余全角符号段 → label「全角符号」；取区下界 FF01 与上界 FF5E 各钉端点闭区间 + 半角映射。
+    {
+        const low = fullwidthFormHint("\u{FF01}") orelse return error.ExpectedHint;
+        try std.testing.expectEqualStrings("全角符号", low.label);
+        try std.testing.expectEqualStrings("!", low.ascii); // 下界含端 idx=0 → 0x21 '!'
+        const high = fullwidthFormHint("\u{FF5E}") orelse return error.ExpectedHint;
+        try std.testing.expectEqualStrings("全角符号", high.label);
+        try std.testing.expectEqualStrings("~", high.ascii); // 上界含端 idx=93 → 0x7E '~'
+    }
+    // ④ 区外（普通 CJK / 低于 FF01 / 高于 FF5E）→ null（不误触发全角兜底、交由白名单或合法放行）。
+    try std.testing.expectEqual(null, fullwidthFormHint("\u{4E00}")); // 一：CJK、非全角变体区
+    try std.testing.expectEqual(null, fullwidthFormHint("\u{FF00}")); // 区下界外一格
+    try std.testing.expectEqual(null, fullwidthFormHint("\u{FF5F}")); // 区上界外一格
+}
