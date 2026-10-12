@@ -195,3 +195,28 @@ test "lineColOf/lineText 防御边界：越尾夹取、截于多字节字符中�
     try std.testing.expectEqualStrings("ccc", lineText("a\nbb\nccc", 100));
     try std.testing.expectEqualStrings("", lineText("a\n", 2));
 }
+
+// 护栏（第 123 轮证伪落位）：toNative/toStd 的 lo==0 零漂移恒等支（L75/L92「无任何条目在目标之前」）此前零覆盖——
+// 既有两测（往返一致 / R6 差分）首条目两端偏移皆 0，任何查询必得 lo≥1，恒不触达此支；而空 map（无任何替换词元的
+// 源文件，diag 回映链真调用面）与「查询落在首个被替换词元之前」两形从未钉。此支 load-bearing：删则 items[lo-1]
+// 在 lo==0 时 usize 下溢即 panic（线性参照版空 map 下跳循环天然安全、二分页独此一道防线）；误写成 return 0
+// 则首词元前的诊断偏移全被压 0、行列错乱。
+test "toNative/toStd lo==0 恒等：空 map 与首条目之前查询原样返回不 panic（第 123 轮证伪落位）" {
+    const gpa = std.testing.allocator;
+
+    // ① 空 map（无任何替换词元的文件）：任意偏移恒等，含 0 / 中间值 / 越尾。
+    var empty = init(gpa);
+    defer empty.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 0), empty.toNative(0));
+    try std.testing.expectEqual(@as(usize, 0), empty.toStd(0));
+    try std.testing.expectEqual(@as(usize, 7), empty.toNative(7));
+    try std.testing.expectEqual(@as(usize, 7), empty.toStd(7));
+
+    // ② 查询落在首个被替换词元之前：零漂移原样返回；恰击首条目起点则映至其 nat_off（含起点命中语义对照锤）。
+    var map = init(gpa);
+    defer map.deinit(gpa);
+    try map.add(gpa, .{ .nat_off = 12, .nat_len = 6, .std_off = 10, .std_len = 5 });
+    try std.testing.expectEqual(@as(usize, 5), map.toNative(5));
+    try std.testing.expectEqual(@as(usize, 9), map.toStd(9));
+    try std.testing.expectEqual(@as(usize, 12), map.toNative(10));
+}
