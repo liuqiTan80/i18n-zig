@@ -422,6 +422,27 @@ test "detectEnglish - 严格模式保留旧规则" {
     try std.testing.expect(!filter.detectEnglish("错误: 类型不匹配"));
 }
 
+// 护栏（第 113 轮证伪落位）：严格模式入口 detectAnyRun 的 `>= min` 连字母长度边界此前
+// 仅在非严格词链模式（detectEnglish，见下方 min 恰等边界测）钉过；严格测只用了
+// 远超 min 的 comptime_int(8) 与纯 CJK，从未钉 `=min`/`<min` 恰等边界——两入口共享
+// 同一 config.min_english_length 常量却只一侧被钉。本测补钉严格模式 min 长度边界，
+// 并证门槛随 config 移动（非硬编码 3）：严格只去掉「需两长词成链」、保留连字母长度门槛。
+test "detectEnglish 严格模式 detectAnyRun min 连字母长度边界（与词链模式共享 >= min 常量，第 113 轮）" {
+    const gpa = std.testing.allocator;
+    var fs = try PureFilter.init(gpa, .{ .strict_mode = true }, null); // 默认 min=3
+    defer fs.deinit();
+    try std.testing.expect(!fs.detectEnglish("fo ba")); // 2+2 字母均 < min → 不拦
+    try std.testing.expect(fs.detectEnglish("foo")); // 恰等 min 的单长词 → 拦（严格模式形）
+    try std.testing.expect(!fs.detectEnglish("值 ab 无效")); // 区内仅 2 字母 < min、CJK 字节不计 → 不拦
+    try std.testing.expect(fs.detectEnglish("值 int 无效")); // int=3 = min → 拦
+
+    var fs5 = try PureFilter.init(gpa, .{ .strict_mode = true, .min_english_length = 5 }, null);
+    defer fs5.deinit();
+    // 门槛随 config 移动：min=5 时 4 字母不拦、5 字母恰等拦——钉 >= min 常量非硬编码 3。
+    try std.testing.expect(!fs5.detectEnglish("hell")); // 4 < 5 → 不拦
+    try std.testing.expect(fs5.detectEnglish("hello")); // 5 = 5 → 拦
+}
+
 test "whitelist - 驼峰命名（规则由包供给：applyPackRules 加载内置包后生效）" {
     const gpa = std.testing.allocator;
     var pack = try Pack.parse(gpa, zh_pack);
