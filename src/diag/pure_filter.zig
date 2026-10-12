@@ -360,6 +360,26 @@ test "detectEnglish - 有英文残留" {
     try std.testing.expect(filter.detectEnglish("类型 'i64' not a function"));
 }
 
+test "detectEnglish - 引号保链不变量守卫（两长词被引号隔开仍须判英文；未闭合引号断链）" {
+    // 零覆盖对抗面：L357 测 "unused variable 'x'" 两长词均在引号之前、检测在触及引号前即完成；
+    // L360 "'i64' not a function" 引号在链首之前（非"词-引-词"形）。
+    // 若引号处理器误改为断链（chain=false），以下"词-引-词"形即漏检——本测钉住当前设计意图。
+    const gpa = std.testing.allocator;
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    // 词-引-词：chain 跨越引号保持 → expected…found 判英文（zig 实报 "expected 'X' found Y" 形）
+    try std.testing.expect(filter.detectEnglish("expected 'identifier' found something"));
+    try std.testing.expect(filter.detectEnglish("value `x` cannot be assigned"));
+    // 引号内操作数、引号外单长词 → 不触发（词-引-孤立，无第二长词）
+    try std.testing.expect(!filter.detectEnglish("无法转换 'comptime_int' 类型"));
+    // 未闭合引号：按普通字符断链（开引号后无闭引号 → 落到 chain=false）
+    // 断链后两侧孤立长词各自不成链 → 不判英文
+    try std.testing.expect(!filter.detectEnglish("first 'unclosed"));
+    // 但断链后若又出现两个相邻长词 → 新链完成、仍判英文
+    try std.testing.expect(filter.detectEnglish("first 'unclosed second third"));
+}
+
 test "detectEnglish - B2 边界：孤立操作数不误拦" {
     const gpa = std.testing.allocator;
     var filter = try PureFilter.init(gpa, .{}, null);
