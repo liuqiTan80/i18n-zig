@@ -1490,6 +1490,38 @@ test "parseDiagLine 对抗/畸形输入不 panic（两处 .? 由前置结构守�
     try std.testing.expectEqualStrings("未声明", dw.msg);
 }
 
+// 护栏（第 118 轮证伪落位）：parseDiagLine 定位段之后 `rest` 的 kind/msg 分割启发式
+// （`cand.len>0 and <=20 and 无空格` 才认 kind）此前仅被 77 轮 clean「error」正例触及——
+// rest 无冒号整段、冒号前含空格、前缀恰 20/21 字符阈值、空前缀四类拒分/恰等分支全零直调。
+// 若阈值或空格校验被误改，会对含冒号的普通消息散文伪造出 kind、或把长 kind 整段坠入 msg、
+// 令 kind_zh 本地化错位、错误种类词泄漏进正文——既有 e2e 测全用单字 kind 无从暴露。本测钉全分支。
+test "parseDiagLine kind/msg 分割启发式全分支：无冒号整段·含空格拒分·20 恰等认/21 拒·空前缀拒（第 118 轮证伪落位）" {
+    // ① 干净基线：短 kind「error」正常剖离、msg 去前导空格。
+    const d1 = parseDiagLine("src/m.zz:1:2: error: boom") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("error", d1.kind);
+    try std.testing.expectEqualStrings("boom", d1.msg);
+    // ② rest 无冒号：不伪造 kind，整段同时作 kind 与 msg（真实退化形）。
+    const d2 = parseDiagLine("src/m.zz:1:2: just a message") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("just a message", d2.kind);
+    try std.testing.expectEqualStrings("just a message", d2.msg);
+    // ③ 冒号前含空格（"a b"）：拒认 kind、整段留 msg（防把散文首词误当种类词）。
+    const d3 = parseDiagLine("src/m.zz:1:2: a b: c") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("a b: c", d3.kind);
+    try std.testing.expectEqualStrings("a b: c", d3.msg);
+    // ④ 冒号前缀恰 20 字符（<=20 上界含端）：认作 kind。
+    const d4 = parseDiagLine("src/m.zz:1:2: abcdefghijklmnopqrst: tail") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("abcdefghijklmnopqrst", d4.kind);
+    try std.testing.expectEqualStrings("tail", d4.msg);
+    // ⑤ 冒号前缀 21 字符（>20）：拒认 kind、整段留 msg（钉阈值上界恰在 20/21 之间）。
+    const d5 = parseDiagLine("src/m.zz:1:2: abcdefghijklmnopqrstu: tail") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("abcdefghijklmnopqrstu: tail", d5.kind);
+    try std.testing.expectEqualStrings("abcdefghijklmnopqrstu: tail", d5.msg);
+    // ⑥ rest 以冒号开头（空前缀 cand.len==0）：拒认 kind、整段留 msg。
+    const d6 = parseDiagLine("src/m.zz:1:2: : x") orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(": x", d6.kind);
+    try std.testing.expectEqualStrings(": x", d6.msg);
+}
+
 test "纯母语过滤器：英文残留被拦截" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
