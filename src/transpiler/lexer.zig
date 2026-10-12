@@ -288,3 +288,72 @@ test "词元边界不变量：任意源在任意字节处截断，scan 皆不 pa
         }
     }
 }
+
+/// 护栏测专用：逐词元断言 kind 与原文（序列全等比对，防「数量对但种类错」的错位漏钉）。
+fn expectTok(toks: []const Token, src: []const u8, i: usize, kind: Kind, txt: []const u8) !void {
+    try std.testing.expect(i < toks.len); // 越界先拦截、不致 toks[i] panic
+    try std.testing.expectEqual(kind, toks[i].kind);
+    try std.testing.expectEqualStrings(txt, toks[i].text(src));
+}
+
+// 护栏（第 114 轮证伪落位）：两条模块头注声明行为此前从未在词法层被 kind 序列直接钉过——
+// ① `@`+ASCII 词分开成词元：全库唯一消费点 translate.isImportOperand 回溯 `@import` 的前缀链
+//   按 toks[i-3]==punct('@') 精确下标判定，若 `@` 误并入 ascii_word（如自造 `@ident` 词类）则整条
+//   「.zz→.zig 字面量改写」静默失效（既有零测可挡）；② 换行终止未闭合 string/char/symbol：
+//   D33 截断测只钉「不越界」边界不变量、从不断言 kind 序列，「删掉 `\n` 终止检查」在全部既有测
+//   下仍全绿（串会吞至换行后下一闭引号、把整行代码并入串词元 → 不参与翻译 → 静默错译文）。
+test "词类划分行为钉：@ 与后随 ASCII 词分开成词元；换行终止未闭合 string/char/symbol（第 114 轮）" {
+    const gpa = std.testing.allocator;
+
+    // ① `@import("std")`：@ 独立 punct、import 独立 ascii_word——isImportOperand 前缀链的坐标基。
+    {
+        const s = "@import(\"std\")";
+        const toks = try scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 5), toks.len);
+        try expectTok(toks, s, 0, .punct, "@");
+        try expectTok(toks, s, 1, .ascii_word, "import");
+        try expectTok(toks, s, 2, .punct, "(");
+        try expectTok(toks, s, 3, .string, "\"std\"");
+        try expectTok(toks, s, 4, .punct, ")");
+    }
+    // @"符号" 例外合并为 symbol；但裸 @ + CJK 词仍分开（吸收规则不向回吞前置 @）。
+    {
+        const s1 = "@\"符号\"";
+        const t1 = try scan(gpa, s1);
+        defer gpa.free(t1);
+        try std.testing.expectEqual(@as(usize, 1), t1.len);
+        try expectTok(t1, s1, 0, .symbol, "@\"符号\"");
+        const s2 = "@甲";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try std.testing.expectEqual(@as(usize, 2), t2.len);
+        try expectTok(t2, s2, 0, .punct, "@");
+        try expectTok(t2, s2, 1, .nonascii_word, "甲");
+    }
+
+    // ② 未闭合串止于换行：串词元含行尾 \n、下一行另起词元（若删 `\n` 终止则第二行被并入串、此处翻红）。
+    {
+        const s = "x = \"abc\ndef;\n";
+        const toks = try scan(gpa, s);
+        defer gpa.free(toks);
+        try expectTok(toks, s, 0, .ascii_word, "x");
+        try expectTok(toks, s, 1, .punct, "=");
+        try expectTok(toks, s, 2, .string, "\"abc\n");
+        try expectTok(toks, s, 3, .ascii_word, "def");
+        try expectTok(toks, s, 4, .punct, ";");
+    }
+    // 未闭合字符与未闭合 @"符号" 同规则止于换行。
+    {
+        const s = "'a\nb";
+        const toks = try scan(gpa, s);
+        defer gpa.free(toks);
+        try expectTok(toks, s, 0, .char, "'a\n");
+        try expectTok(toks, s, 1, .ascii_word, "b");
+        const s2 = "@\"m\nn";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try expectTok(t2, s2, 0, .symbol, "@\"m\n");
+        try expectTok(t2, s2, 1, .ascii_word, "n");
+    }
+}
