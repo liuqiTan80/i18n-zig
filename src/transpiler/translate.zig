@@ -1153,3 +1153,86 @@ test "D49（第 105 轮）findEnglishWordForms hits 增长失败须回收 full�
     var failing = std.testing.FailingAllocator.init(back, .{ .fail_index = target });
     try std.testing.expectError(error.OutOfMemory, findEnglishWordForms(failing.allocator(), lang, src));
 }
+
+test "护栏：转译声明位回扫谓词边界形——未闭合/畸形括号不崩、首领归属不漂移（第 109 轮证伪落位）" {
+    // 承 108 轮方法论：`findOpenBracket`/`findMatchingOpen`/`braceGroupLeader` 三个回扫配对谓词
+    // 决定 `isExtendedDeclNamePos` case B 的枚举成员/union 变体/error 标签避让，此前仅经
+    // D1b/D1c/D42 端到端测间接触达、零直调覆盖（脚本实测测试区直调为 0）。逐例推演证伪皆
+    // 安全（深度配对、未闭合扫到头返 null、`.{` 与 brace_idx==0 首领非词元返 null），本测把
+    // 推演结论钉成回归防线：畸形输入不 panic、匹配归属不漂移（未来改动破配对/边界即红）。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const Find = struct {
+        fn punct(toks: []const lexer.Token, src: []const u8, c: u8) usize {
+            for (toks, 0..) |t, idx| {
+                if (t.kind == .punct and t.text(src).len == 1 and t.text(src)[0] == c) return idx;
+            }
+            @panic("测试构造词流不含目标标点（护栏用例前提失真）");
+        }
+    };
+
+    // braceGroupLeader：`枚举(u8) {` 首领跳一层参数括号认到 `枚举`（D42 修复面行为钉牢）
+    {
+        const s = "枚举(u8) { 文本 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        const lead = braceGroupLeader(toks, s, Find.punct(toks, s, '{'));
+        try std.testing.expect(lead != null);
+        try std.testing.expectEqualStrings("枚举", lead.?.text(s));
+    }
+    // braceGroupLeader：`.{ 文本 }` 结构字面量首领位是 `.`（非词元）→ null（成员照转码、不避让）
+    {
+        const s = ".{ 文本 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(null, braceGroupLeader(toks, s, Find.punct(toks, s, '{')));
+    }
+    // braceGroupLeader：`{` 为词流首元（brace_idx==0）→ null、不越界回读 toks[-1]
+    {
+        const s = "{ 文本 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(null, braceGroupLeader(toks, s, 0));
+    }
+    // findMatchingOpen：`枚举(u8)` 的 `)` 回跳匹配到对应 `(`
+    {
+        const s = "枚举(u8) { 文本 }";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        const open = findMatchingOpen(toks, s, Find.punct(toks, s, ')'));
+        try std.testing.expect(open != null);
+        try std.testing.expectEqualStrings("(", toks[open.?].text(s));
+    }
+    // findMatchingOpen：起始 `)` 无配对 → 扫到头 null、不 panic
+    {
+        const s = ") 文本";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(null, findMatchingOpen(toks, s, 0));
+    }
+    // findOpenBracket：`{ 文本 ,` 回溯命中未配对 `{`
+    {
+        const s = "{ 文本 ,";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        const ob = findOpenBracket(toks, s, Find.punct(toks, s, ','));
+        try std.testing.expect(ob != null);
+        try std.testing.expectEqual(@as(u8, '{'), ob.?.ch);
+    }
+    // findOpenBracket：`( 文本 ) ,` 先配平内层括号再回扫 → 该处无未配对开括号、null（深度配对不漂移）
+    {
+        const s = "( 文本 ) ,";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(null, findOpenBracket(toks, s, Find.punct(toks, s, ',')));
+    }
+    // findOpenBracket：全流无开括号 → null、不越界
+    {
+        const s = "文本 , 更多";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(null, findOpenBracket(toks, s, Find.punct(toks, s, ',')));
+    }
+}
