@@ -2314,6 +2314,72 @@ test "护栏：对抗坐标 col=0/行越界回译不崩、退化形合法" {
     try hasSub(out999, "src/main.zz:3:1");
 }
 
+// D41（第 95 轮）：`成员名不存在`（pattern "no member named"）永远被排在它前面的
+// `成员不存在`（pattern "has no member"）劫持——zig 成员错误恒形如 "has no member named"
+// 同时含两子串，短 pattern 先命中导致更具体的 tip（.len/标量/切片）不可达。
+// 修复=合并 tip 入保留条目、删死条目。红判据：修复前 tip 不含"切片"；修复后含。
+test "诊断回译：标量/切片类型成员错误给完整提示（D41 子串共现遮蔽消缺）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    // 模拟 zig 对标量类型成员访问的报错——旧形只命中 `成员不存在`、tip 无切片/标量说明。
+    const rendered = try renderDiag(
+        gpa,
+        lang,
+        table,
+        &.{},
+        "src/main.zz",
+        2,
+        15,
+        "error",
+        "type 'u32' has no member named 'len'",
+        &filter,
+    );
+    defer gpa.free(rendered);
+    // 译文主体保持（合并后仍用原 `成员不存在` 的 message 措辞）：
+    try hasSub(rendered, "所访问的成员不存在");
+    // D41 关键断言：修复后 tip 须涵盖切片/标量指引：
+    try hasSub(rendered, "切片");
+    try hasSub(rendered, "标量");
+    // 英文短语不得残留：
+    try noSub(rendered, "has no member");
+    try noSub(rendered, "no member named");
+}
+
+// 全表序守卫（D41 同族预防，承 92 轮 localizeRunner 方法论）：
+// 若 pattern A 是 pattern B 的子串（A⊆B），则任何匹配 B 的消息也匹配 A；
+// A 排在 B 前会劫持 B 的专属匹配——须保证「长（更具体）在前、短（更泛）在后」。
+test "matchDiag 全表子串包含序守卫（D41 同族·表序不变量）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // O(n²) 扫描：对每对 (i, j) i<j，若 diagnostics[j].pattern 是 diagnostics[i].pattern 的子串，
+    // 则 j 的消息集 ⊆ i 的消息集（j 是更具体的、i 是更泛的），且 i 先被 matchDiag 遍历到、
+    // 会劫持 j——违反「长 pattern 在前」不变量。期望零违规。
+    const items = lang.diagnostics.items;
+    for (items, 0..) |earlier, i| {
+        for (items[i + 1 ..]) |later| {
+            // later.pattern 包含 earlier.pattern → earlier 更泛且在前 → 劫持 later
+            if (earlier.pattern.len > 0 and later.pattern.len > 0 and
+                std.mem.indexOf(u8, later.pattern, earlier.pattern) != null)
+            {
+                std.debug.print("D41 序违规：idx {d} pattern '{s}' 是后项 '{s}' 的子串，泛条目劫持具体条目\n", .{ i, earlier.pattern, later.pattern });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
 fn hasSub(hay: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, hay, needle) != null);
 }
