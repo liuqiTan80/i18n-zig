@@ -133,8 +133,23 @@ fn upsertDiagnostic(self: *Pack, gpa: std.mem.Allocator, entry: Entry) !void {
 /// 把一份包字节流**累积**解析进已存在的 Pack（叠加层/补充包的底层，可多次调用）。
 /// 后写覆盖：keywords/aliases/`$code`/`$name` 同键覆盖；diagnostics 按 pattern 覆盖；
 /// whitelist 并集（幂等，已去重）。`bytes` 须比 `self` 存活更久（内嵌资源天然满足）。
+/// **同层冲突拒**（D36 mangle 撞号同族，第 93 轮）：同一次调用（单字节流）内同键/同 pattern
+/// 第二次出现且**值不同** → `error.InvalidLangPack` 源头拒（手编包矛盾两行静默其一失效属数据编辑
+/// 陷阱）；同值幂等放行（whitelist 先例对称）；跨层（多次调用）后写覆盖仍是 R11 文档化合并语义、
+/// 不受此检影响——故判据绑「本次调用写过该键」而非「表里已存在该键」。
 pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
     var section: Section = .keywords;
+    // 本次调用内已写键/值视图（key/value 均借 bytes，仅调用期内比较、不拥有）。
+    // keywords 与 aliases 分集：同词跨段两表各有映射不属同表矛盾（翻译链第 1/2 步优先级确定）。
+    const Seen = struct { key: []const u8, val: []const u8 };
+    var seen_kw: std.ArrayList(Seen) = .empty;
+    defer seen_kw.deinit(gpa);
+    var seen_al: std.ArrayList(Seen) = .empty;
+    defer seen_al.deinit(gpa);
+    var seen_diag: std.ArrayList(Entry) = .empty;
+    defer seen_diag.deinit(gpa);
+    var seen_name: ?[]const u8 = null;
+    var seen_code: ?[]const u8 = null;
     var it = std.mem.splitScalar(u8, bytes, '\n');
     while (it.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
@@ -177,13 +192,30 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 if (value.len == 0) return error.InvalidLangPack;
                 const map = if (section == .keywords) &self.keywords else &self.aliases;
                 if (std.mem.eql(u8, key, "$name")) {
+                    // 同层元数据矛盾两行（$name/$code 不同值）同族封口；同值幂等照放。
+                    if (seen_name) |old| {
+                        if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
+                    }
+                    seen_name = value;
                     self.name = value;
                     continue;
                 }
                 if (std.mem.eql(u8, key, "$code")) {
+                    if (seen_code) |old| {
+                        if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
+                    }
+                    seen_code = value;
                     self.code = value;
                     continue;
                 }
+                // 同层同键异值 → 拒；同值 → 幂等放行（不新增拒绝面）。
+                const seen = if (section == .keywords) &seen_kw else &seen_al;
+                for (seen.items) |s| {
+                    if (std.mem.eql(u8, s.key, key) and !std.mem.eql(u8, s.val, value)) {
+                        return error.InvalidLangPack;
+                    }
+                }
+                try seen.append(gpa, .{ .key = key, .val = value });
                 try map.put(key, value);
             },
             .diagnostics => {
@@ -199,10 +231,20 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 // （全局静默错译）；空 message 命中后输出空诊断。唯 tip 可空（`tip.len != 0`
                 // 才渲染提示行是既有契约，见 D30）。
                 if (pattern.len == 0 or message.len == 0) return error.InvalidLangPack;
+                const tip = std.mem.trim(u8, rest[p2 + 1 ..], " ");
+                // 同层同 pattern 不同内容 → 拒（键不参与匹配、冲突在 pattern 侧）；全等 → 幂等。
+                for (seen_diag.items) |s| {
+                    if (std.mem.eql(u8, s.pattern, pattern) and
+                        (!std.mem.eql(u8, s.message, message) or !std.mem.eql(u8, s.tip, tip)))
+                    {
+                        return error.InvalidLangPack;
+                    }
+                }
+                try seen_diag.append(gpa, .{ .pattern = pattern, .message = message, .tip = tip });
                 try self.upsertDiagnostic(gpa, .{
                     .pattern = pattern,
                     .message = message,
-                    .tip = std.mem.trim(u8, rest[p2 + 1 ..], " "),
+                    .tip = tip,
                 });
             },
         }
@@ -441,4 +483,35 @@ test "parseInto 对抗/畸形段头与诊断元数不足：一律 InvalidLangPac
     var okp = try parse(gpa, "$code = te\n[keywords]\n常数 = a#b//c\n");
     defer okp.deinit();
     try std.testing.expectEqualStrings("a#b//c", okp.keywords.get("常数").?);
+}
+
+test "同层重复键冲突源头拒（D36 mangle 撞号同族）：同一字节流内同键不同值即 InvalidLangPack；同值幂等放行；跨层覆盖照旧合法（R11）" {
+    // 缺陷面：keywords/aliases 段 L187 `map.put` 对同键后行静默覆盖——手编包/插件包写错两行
+    // 矛盾映射（`常数 = const` + `常数 = var`）时先行意图被无声丢弃、零诊断；diagnostics 同
+    // pattern 不同内容经 upsert 同形；`$code`/`$name` 同层两行不同值同族。D30 先例（配置源头
+    // 即拒）与 D36 先例（mangle 撞号 put 源头拒）的对称面。边界：R11 叠加层「跨层同键后写覆盖」
+    // 是文件头明钉的合并语义，不得误伤——故判据绑「同一 parseInto 调用内第二次出现且值不同」；
+    // 同层同键同值幂等放行（whitelist 重复行幂等先例对称）。
+    const gpa = std.testing.allocator;
+
+    // keywords / aliases 同层同键不同值 → 拒（对原始码：put 静默覆盖 → parse 成功 → 本断言红）。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[keywords]\n常数 = const\n常数 = var\n"));
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[aliases]\n标准库 = std\n标准库 = fmt\n"));
+    // diagnostics 同层同 pattern 不同内容 → 拒（键不参与匹配、冲突在 pattern 侧）。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n[diagnostics]\nd1 = 模式|译文A|提示\nd2 = 模式|译文B|提示\n"));
+    // $code/$name 同层两行不同值 → 拒（元数据同族）。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n$code = zz\n[keywords]\n常数 = const\n"));
+
+    // 对照①：同层同键同值 → 幂等放行（不新增拒绝面，whitelist 先例对称）。
+    var idem = try parse(gpa, "$code = te\n[keywords]\n常数 = const\n常数 = const\n[diagnostics]\nd1 = 模式|译文|提示\nd2 = 模式|译文|提示\n");
+    defer idem.deinit();
+    try std.testing.expectEqualStrings("const", idem.keywords.get("常数").?);
+    try std.testing.expectEqual(@as(usize, 1), idem.diagnostics.items.len);
+
+    // 对照②：R11 跨层同键不同值覆盖照旧合法（叠加层合并语义不得被误伤）。
+    var layered = try Pack.loadWithOverlays(gpa, "$code = te\n[keywords]\n常数 = const\n[diagnostics]\nd1 = 模式|基包译文|基包提示\n", &.{"[keywords]\n常数 = let\n[diagnostics]\nd2 = 模式|补充译文|补充提示\n"});
+    defer layered.deinit();
+    try std.testing.expectEqualStrings("let", layered.keywords.get("常数").?);
+    try std.testing.expectEqual(@as(usize, 1), layered.diagnostics.items.len);
+    try std.testing.expectEqualStrings("补充译文", layered.diagnostics.items[0].message);
 }

@@ -86,7 +86,11 @@ $code = zh
 任意类型 = anytype
 数据类型 = type
 
-# ---- 内置函数别名（保留 @ 前缀写法亦可）----
+# ---- 内置函数映射（注意：本节属上方 [keywords] 段、不在 [aliases] 段内，勿“归位”搬段）----
+# 留在 keywords 段是刻意为之：keywords 查表（翻译第 2 步）绑声明位避让——用户若声明 `常数 导入 = …`
+# 能转码保留；若搬进 [aliases]，第 1 步别名链会无条件先行吞词（链不辨声明位），`常数 导入 = 1;` 将被
+# 改写成非法的 `const @import = 1;`（静默产碎码）。映射值两种写法引擎都认：hasMappedValue/isImportOperand
+# 取 keywords ∪ aliases 并集，不依赖本词所在段。
 导入 = @import
 嵌入文件 = @embedFile
 取类型 = @TypeOf
