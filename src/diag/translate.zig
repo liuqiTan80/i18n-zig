@@ -1277,7 +1277,7 @@ test "诊断回译：丢弃 const 限定说明行不泄漏英文" {
     try noSub(cq, "const qualifier");
 }
 
-test "诊断回译：入口文件缺 main 给专门提示而非误导的拼写检查" {
+test "诊断回译：入口文件缺 main 收到入口场景指引（D50 合并形）" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
@@ -1291,14 +1291,18 @@ test "诊断回译：入口文件缺 main 给专门提示而非误导的拼写�
     var filter = try PureFilter.init(gpa, .{}, null);
     defer filter.deinit();
 
-    // build/run/test 指向无 main 的库模块时 zig 报此错；更具体的 `缺主入口`（no member named 'main'）
-    // 必须排在通用 `成员不存在`（has no member）之前，否则回落成误导的“查拼写”。
+    // build/run/test 指向无 main 的库模块时 zig 报此形。D50（第 106 轮）后该形与「误访 .main 成员」
+    // 共用同一消息（文本不可分）、同命中合并后的 `成员不存在` 单条——旧「缺主入口」独立条目
+    // 会反向劫持成员访问场景（误导 tip），合并 tip 须同时涵盖入口指引，两形皆不误导。
     const m = try renderDiag(gpa, lang, table, &.{}, "src/lib.zz", 1, 1, "error", "root source file struct 'lib' has no member named 'main'", &filter);
     defer gpa.free(m);
-    try hasSub(m, "缺少");
+    // 入口场景指引不得丢（合并 tip 末句）：
+    try hasSub(m, "主函数");
     try hasSub(m, "入口");
-    try noSub(m, "所访问的成员不存在");
-    try noSub(m, "拼写检查");
+    // 合并后消息为通用成员形：
+    try hasSub(m, "所访问的成员不存在");
+    try noSub(m, "has no member");
+    try noSub(m, "no member named");
 }
 
 test "诊断回译：入口非公开（'main' is not marked 'pub'）本地化不泄漏英文" {
@@ -1681,10 +1685,11 @@ test "编译诊断落在 zig 标准库绝对路径：安装路径与英文说明
     try noSub(out, "called inline here");
     try noSub(out, "has no member");
     try noSub(out, "root source file");
-    // 但错误的母语译文（命中 packs）必须保留；本例是“无 main 入口”，应命中更具体的 `缺主入口`
-    //而非回落成误导的“成员不存在/查拼写”。
-    try hasSub(out, "作为可执行/测试入口的文件缺少");
-    try noSub(out, "拼写检查");
+    // 但错误的母语译文（命中 packs）必须保留；本例是「无 main 入口」来源，D50（第 106 轮）合并后
+    // 命中的是 `成员不存在` 单条（旧「缺主入口」独立条目与成员访问场景交叉劫持、已删），
+    // 其 tip 末句涵盖入口场景指引——译文主体与入口指引两句都必须在场。
+    try hasSub(out, "所访问的成员不存在");
+    try hasSub(out, "主函数");
 }
 
 test "报错列映射：CJK 字符串字面量在前时，zig 字节列正确回映为方言字符列" {
@@ -2351,6 +2356,76 @@ test "诊断回译：标量/切片类型成员错误给完整提示（D41 子串
     // 英文短语不得残留：
     try noSub(rendered, "has no member");
     try noSub(rendered, "no member named");
+}
+
+// D50（第 106 轮）：D41 同族「交叉共现遮蔽」的反向场景——用户误访 `.main` 成员时 zig 报
+// `root source file struct 'math' has no member named 'main'`（探针实捕），该消息同时含
+// `has no member`（成员不存在）与 `no member named 'main'`（缺主入口、排前）两 pattern 而互不包含，
+// 表序前者永久劫持——用户收到「入口文件缺少 main」误导性 tip（自己的文件明明有 `主函数`）。
+// 且缺真 main 时 zig 报形完全同构（探针二实捕 struct 'r106_probe4' 同款消息）、文本层不可分，
+// 故修复=D41 先例形合并入单条目、tip 同时覆盖「成员访问笔误」+「入口缺 main」两场景指引。
+// 红判据：旧形 message 为「作为可执行/测试入口的文件缺少 main」、不含「所访问的成员不存在」→红。
+test "诊断回译：误访 .main 成员不得被缺主入口劫持成误导提示（D50 交叉共现遮蔽消缺）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    const rendered = try renderDiag(
+        gpa,
+        lang,
+        table,
+        &.{},
+        "src/main.zz",
+        5,
+        14,
+        "error",
+        "root source file struct 'math' has no member named 'main'",
+        &filter,
+    );
+    defer gpa.free(rendered);
+    // 合并后须落在通用成员 message 上（旧形被「缺主入口」劫持、此处红）：
+    try hasSub(rendered, "所访问的成员不存在");
+    // 入口场景指引不得丢（合并 tip 须涵盖「build/run/test 入口缺 main」另一来源）：
+    try hasSub(rendered, "主函数");
+    // 英文短语不得残留：
+    try noSub(rendered, "has no member");
+    try noSub(rendered, "no member named");
+}
+
+// 真消息命中矩阵（D50 方法论，第 106 轮）：「全表子串包含序守卫」只能扫 A⊆B 对；
+// 交叉共现（互不包含但真实消息同时含两者，如 D41/D50 两案）无法从 pattern 表自动检出
+//（需真实消息域知识）。故以探针实捕真形为样本库落守卫：每条消息→断言命中条目归属与
+// 场景指引在场。后续新增 diagnostics 条目时，先将其真形登本矩阵再提交（防交叉劫持回归）。
+test "matchDiag 真消息命中矩阵（D50 方法论·探针实捕真形样本）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    const Sample = struct { msg: []const u8, message: []const u8, tip_must: []const u8 };
+    const samples = [_]Sample{
+        // 探针三（第 106 轮）：误访 std.math 的 .main 成员——D50 劫持案主场景。
+        .{ .msg = "root source file struct 'math' has no member named 'main'", .message = "所访问的成员不存在", .tip_must = "主函数" },
+        // 探针四（第 106 轮）：真缺入口的同构报形——合并 tip 的入口指引也须服务此场景。
+        .{ .msg = "root source file struct 'mylib' has no member named 'main'", .message = "所访问的成员不存在", .tip_must = "主函数" },
+        // D41（第 95 轮）真形：标量取 .len——成员 tip 须涵盖切片/标量指引。
+        .{ .msg = "type 'u32' has no member named 'len'", .message = "所访问的成员不存在", .tip_must = "标量" },
+        // 探针一（第 106 轮）真形：结构体字段不存在——独立条目未被成员系劫持。
+        .{ .msg = "no field named 'main' in struct 'probe.main.T'", .message = "所访问的字段不存在", .tip_must = "字段" },
+    };
+    for (samples) |s| {
+        const m = matchDiag(lang, s.msg);
+        try std.testing.expect(m.matched);
+        try std.testing.expectEqualStrings(s.message, m.message);
+        try hasSub(m.tip, s.tip_must);
+    }
 }
 
 // 全表序守卫（D41 同族预防，承 92 轮 localizeRunner 方法论）：
