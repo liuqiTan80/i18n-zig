@@ -402,6 +402,34 @@ test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全
     try real.validate();
 }
 
+// 护栏（第 112 轮证伪落位）：`validate` 以循环指标 `i` 将 `contract_values[i]` 位置耦合到
+// `err_for[i]`（两定长数组、纯下标对齐）——B6 测仅钉 const/var/fn 前三位，余十位重排/增删
+// 无测可挡。本测依声明序逐项累积补值：每补一项，缺失报错须翻到对应的**下一个**具名错误，
+// 全十三项齐后方放行；钉死两数组全序对齐——任一被单独重排即错报、红。
+test "validate 契约清单与错误枚举逐项同序对齐（contract_values↔err_for 位置耦合，第 112 轮）" {
+    const gpa = std.testing.allocator;
+    // 期望序列：与 contract_values 声明序一一对应（const/var/fn/if/else/return/struct/enum/union/switch/@import/@embedFile/main）。
+    const expect_seq = [_]ValidationError{
+        error.PackMissingConst,  error.PackMissingVar,    error.PackMissingFn,
+        error.PackMissingIf,     error.PackMissingElse,   error.PackMissingReturn,
+        error.PackMissingStruct, error.PackMissingEnum,   error.PackMissingUnion,
+        error.PackMissingSwitch, error.PackMissingImport, error.PackMissingEmbedFile,
+        error.PackMissingMain,
+    };
+    // 等长前置守卫：contract_values 增项而 err_for 未同步即在此红（防越界读）。
+    try std.testing.expectEqual(contract_values.len, expect_seq.len);
+
+    var pack = Pack.init(gpa);
+    defer pack.deinit();
+    pack.code = "te"; // 绕开 PackMissingCode 首关，专走契约值循环
+    for (expect_seq, 0..) |want_err, i| {
+        try std.testing.expectError(want_err, pack.validate());
+        // 以 contract_values[i] 自身作键与值（静态字面量、生命期长于 pack），逐项累积补齐。
+        try pack.keywords.put(contract_values[i], contract_values[i]);
+    }
+    try pack.validate(); // 十三项齐 → 全序通过
+}
+
 test "R11 叠加层：基包+补充层——同键后写覆盖、diagnostics 按 pattern 覆盖、whitelist 并集" {
     const gpa = std.testing.allocator;
     const base =
