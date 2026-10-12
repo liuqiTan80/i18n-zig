@@ -346,3 +346,22 @@ test "护栏：转码词边界/编号解析纯谓词边界形——strict 整词
     try std.testing.expectEqual(@as(?usize, null), trailingNumber("")); // 空串
     try std.testing.expectEqual(@as(?usize, null), trailingNumber("z_99999999999999999999999999")); // 溢出退化
 }
+
+// 护栏（第 121 轮证伪落位）：parseSymbolText 对 CRLF（Windows 行尾）的容错此前零测——所有既有测
+// 皆纯 `\n`。此容错系 L165 `trim(u8, raw, " \t\r")` 的 `\r` 独力承担，且恰恰 load-bearing：若 `\r` 漏
+// trim，ascii 得 `z_7\r` → trailingNumber 因末字节非数字返 null → next_index 不被推高 → 后续新符号撞
+// 历史号（D36 同族）、且历史母语名被转成带尾 `\r` 的非法标识符泄漏进生成码。symbols.txt 支持手工
+// 编辑（D36 测即防此）、Windows 记事本写 CRLF 天然可达→本测钉住 CRLF 行尾解析与编号推进不被尾部 `\r` 击穿。
+test "parseSymbolText：CRLF（Windows）行尾容错——尾部 \\r 被归一、编号提取不被击穿（第 121 轮证伪落位）" {
+    const gpa = std.testing.allocator;
+    var table = init(gpa);
+    defer table.deinit();
+    // Windows 原生 .zzc/symbols.txt 用 CRLF；两条有效映射以 \\r\\n 行尾分隔。
+    try table.parseSymbolText("甲 = z_1\r\n招呼 = z_7\r\n");
+    try std.testing.expectEqual(@as(usize, 2), table.count());
+    // 反查侧须用干净的 "z_1"/"z_7"（无尾 \\r）——若 trim 漏 \\r，表内存的是 "z_1\\r"、此处 .? 将坠 null 而红。
+    try std.testing.expectEqualStrings("甲", table.unmangle("z_1").?);
+    try std.testing.expectEqualStrings("招呼", table.unmangle("z_7").?);
+    // next_index 必须推过 z_7（坐实 ascii 尾部无 \\r、trailingNumber 正常取到 7）→ 新符号从 z_8 起。
+    try std.testing.expectEqualStrings("z_8", try table.intern("新名字"));
+}
