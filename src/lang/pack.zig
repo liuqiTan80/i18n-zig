@@ -601,3 +601,24 @@ test "同层重复键冲突源头拒（D36 mangle 撞号同族）：同一字节
     try std.testing.expectEqual(@as(usize, 1), layered.diagnostics.items.len);
     try std.testing.expectEqualStrings("补充译文", layered.diagnostics.items[0].message);
 }
+
+// 护栏（第 120 轮证伪落位）：L588 测注释声称覆盖「$code/$name 同层两行不同值 → 拒」，但 L589
+// 实只喂 $code 一例——$name 的 seen_name 不同值封口分支（L220-221）从未被任何测 fired。若误删
+// 该判据，手编包矛盾两行 $name 静默后写覆盖、零诊断（D40 同族元数据损坏）。本测钉住：①同名异
+// 值拒（仅 $name 不因 $code 合法而漏拒）、②同值幂等放行、③$name/$code 各自独立封口、④缺省形。
+test "$name 同层元数据封口：两行不同值拒、同值幂等放行、缺省落默认（D40 同族·既有测仅钉 $code 一侧、$name 分支此前零 fired，第 120 轮）" {
+    const gpa = std.testing.allocator;
+
+    // ① $name 同层两行不同值 → 拒（seen_name != eql 分支，此前从未 fired）。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$name = 甲\n$name = 乙\n$code = te\n[keywords]\n常数 = const\n"));
+    // ② $name 同层同值 → 幂等放行（不新增拒绝面，对称 $code 先例）。
+    var idem = try parse(gpa, "$name = 甲\n$name = 甲\n$code = te\n[keywords]\n常数 = const\n");
+    defer idem.deinit();
+    try std.testing.expectEqualStrings("甲", idem.name);
+    // ③ $code/$name 各自独立：仅 $name 冲突不因 $code 合法而漏拒（seen_code 已置、seen_name 仍要检）。
+    try std.testing.expectError(error.InvalidLangPack, parse(gpa, "$code = te\n$name = 甲\n$name = 乙\n[keywords]\n常数 = const\n"));
+    // ④ 缺省形：无 $name 行照过、name 落默认「未知语言」（validate 只查 $code、不查 name）。
+    var defname = try parse(gpa, "$code = te\n[keywords]\n常数 = const\n");
+    defer defname.deinit();
+    try std.testing.expectEqualStrings("未知语言", defname.name);
+}
