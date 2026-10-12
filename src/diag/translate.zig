@@ -2485,6 +2485,57 @@ test "D51（第 107 轮）localizeRunner 增长失败须回滚已累积译文（
     try std.testing.expectError(error.OutOfMemory, localizeRunner(fa.allocator(), sample));
 }
 
+// 纯函数边界形对抗护栏（第 108 轮，承 77/80/81/82 轮方法论）：translateStderr 的七个静态
+// 切分/判定纯函数（parseFrame/splitLoc/onlyCarets/allDigits/endsWithSepNorm/pathsMatch/
+// isInternalPath）此前仅经 e2e 栈帧测间接触达、零直调覆盖——逐例推演证伪无在线缺陷
+//（区间恒闭合、溢出走 catch、两处 .? 有前置结构守卫），本测把推演结论钉成回归防线：
+// 畸形输入不 panic 不越界（未来改动破边界即红）+ 已推演判定形不漂移（误改即红）。
+test "护栏：stderr 回译静态纯函数边界形——畸形输入不崩、判定不漂移（第 108 轮证伪落位）" {
+    // parseFrame：`path:line: 0xHEX in name (obj)` 取前缀；畸形全 null、不越界。
+    try std.testing.expectEqualStrings("a.zig:3", parseFrame("a.zig:3: 0x7ff in foo (bar)").?);
+    try std.testing.expectEqual(null, parseFrame("no frame here")); // 无 `: 0x`
+    try std.testing.expectEqual(null, parseFrame("a: 0x in b")); // 0x 后无十六进制数字
+    try std.testing.expectEqual(null, parseFrame("a:3: 0x7ff")); // 地址后缺 ` in `（尾部短串）
+    try std.testing.expectEqual(null, parseFrame("a:3: 0x7ffin b")); // `in` 前缺空格
+    // splitLoc：`file:L:C`/`file:L` 从右往左取数字段；盘符 Windows 路径不致错位。
+    const two = splitLoc("C:\\u\\x.zz:12:34").?;
+    try std.testing.expectEqualStrings("C:\\u\\x.zz", two.file);
+    try std.testing.expectEqual(@as(usize, 12), two.line);
+    try std.testing.expectEqual(@as(usize, 34), two.col);
+    const one = splitLoc("src/lib.zz:7").?;
+    try std.testing.expectEqual(@as(usize, 7), one.line);
+    try std.testing.expectEqual(@as(usize, 1), one.col); // 缺列形退化列 1
+    try std.testing.expectEqual(null, splitLoc("nofile")); // 无冒号
+    try std.testing.expectEqual(null, splitLoc("a:")); // 尾空非数字
+    try std.testing.expectEqual(null, splitLoc("a:x")); // 尾非数字
+    try std.testing.expectEqual(null, splitLoc("a:99999999999999999999")); // 溢出走 catch 回 null、不 panic
+    // allDigits：空串 false、含非数字 false、全数字 true。
+    try std.testing.expect(!allDigits(""));
+    try std.testing.expect(allDigits("1234"));
+    try std.testing.expect(!allDigits("12a"));
+    // onlyCarets：空串 false（装饰判定不得把空行认成波浪线）；纯 `^~` true；其余 false。
+    try std.testing.expect(!onlyCarets(""));
+    try std.testing.expect(onlyCarets("^^~~^"));
+    try std.testing.expect(!onlyCarets("^ ^"));
+    try std.testing.expect(!onlyCarets("^—")); // 多字节形按字节判、非 ^~ 即 false
+    // endsWithSepNorm / pathsMatch：`\`≡`/`，前缀不算命中，`./` 归一。
+    try std.testing.expect(endsWithSepNorm("x\\y\\src\\main.zig", "src/main.zig"));
+    try std.testing.expect(!endsWithSepNorm("src/main.zig", "x\\y\\src\\main.zig")); // 长 needle 直 false
+    try std.testing.expect(endsWithSepNorm("azig", "zig")); // 本函数仅字节后缀比较、无路径段语义（伪命中由调用方场景限定，
+    // pathsMatch 双序包含性即此防御）；此处钉真实行为、写反即红——护栏测自身推演也须实跑自证。
+    try std.testing.expect(pathsMatch("./src/main.zig", "src/main.zig"));
+    try std.testing.expect(!pathsMatch("backup/src/main.zig", "x/src/main.zig"));
+    // isInternalPath：盘符绝对/前导分隔符/.zig-cache/.zzc 内部形 true，方言相对路径 false。
+    try std.testing.expect(isInternalPath("C:\\Users\\guilt\\zig\\lib\\std\\start.zig"));
+    try std.testing.expect(isInternalPath("/usr/lib/zig/std.zig"));
+    try std.testing.expect(isInternalPath("\\srv\\share\\x.zig"));
+    try std.testing.expect(isInternalPath(".zig-cache/o/abc/x.o"));
+    try std.testing.expect(isInternalPath(".zzc/gen/src/main.zig"));
+    try std.testing.expect(!isInternalPath("src/main.zz"));
+    try std.testing.expect(!isInternalPath("")); // 空路径不得误判内部（否则位置行被隐藏）
+    try std.testing.expect(!isInternalPath("1a:bad")); // 首字符非字母的 `X:` 形不当盘符
+}
+
 fn hasSub(hay: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, hay, needle) != null);
 }
