@@ -181,12 +181,12 @@ fn braceGroupLeader(toks: []const lexer.Token, src: []const u8, brace_idx: usize
     return p;
 }
 
-/// 当前词元是否处于扩展的“被声明的名字”位（台账 D1b/D1c）：
+/// 当前词元是否处于扩展的“被声明的名字”位（台账 D1b/D1c/D42）：
 ///  A. 参数名/字段名：prev ∈ {(, {, ,} 且 next == `:`（`名字: 类型` 只出现在参数/字段声明，
 ///     zig 调用实参与匿名字面量无此形）；
-///  B. 枚举成员/union 变体（含带值 `= n`、带载荷 `(T)`、裸名）：prev ∈ {{, ,}、
+///  B. 枚举成员/union 变体/error 标签（含带值 `= n`、带载荷 `(T)`、裸名）：prev ∈ {{, ,}、
 ///     next ∈ {`,`, `}`, `=`, `(`}，回溯未配对组头 `{`，其首领词（跳一层 `(...)` 参数）
-///     映射为 enum 或 union；
+///     映射为 enum、union 或 error；
 ///  C. 字段访问/成员路径：prev == `.`——点后必是名字（点分别名链已在第 1 步先行消化，
 ///     能走到这里的都是非链词），查表会把字段名误替成类型词；
 ///  D. for 捕获名：prev 与 next 同为 `|`。
@@ -204,7 +204,7 @@ fn isExtendedDeclNamePos(lang: Pack, src: []const u8, toks: []const lexer.Token,
                 if (findOpenBracket(toks, src, i - 1)) |ob| {
                     if (ob.ch == '{') {
                         if (braceGroupLeader(toks, src, ob.idx)) |lead| {
-                            if (mappedIs(lang, src, lead, "enum") or mappedIs(lang, src, lead, "union")) return true;
+                            if (mappedIs(lang, src, lead, "enum") or mappedIs(lang, src, lead, "union") or mappedIs(lang, src, lead, "error")) return true;
                         }
                     }
                 }
@@ -520,6 +520,28 @@ test "D1c tagged union 变体名/带值枚举成员撞词：首领词跳一层�
     try std.testing.expectEqualStrings(expect, res.zig_str);
     try std.testing.expectEqualStrings("文本", table.unmangle("z_2").?);
     try std.testing.expectEqualStrings("整数", table.unmangle("z_5").?);
+}
+
+test "D42 error 集标签撞词：error { } 组首领未入 case B 判定、标签被查表替换产碎码" {
+    // 缺陷面：isExtendedDeclNamePos case B 的 braceGroupLeader 只检 "enum"/"union"，
+    // 漏 "error"——用户写 `常数 E = 错误 { 文本, 整数 };` 时 `文本`(→[]const u8)、`整数`(→i64)
+    // 在标签位被查表替换、产出非法码 `error { []const u8, i64 }`。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    const src = "常数 错误集 = 错误 { 文本, 整数 };\n";
+    // 修复后期望：标签名走转码（z_2, z_3）而非关键字替换。
+    const expect = "const z_1 = error { z_2, z_3 };\n";
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+    try std.testing.expectEqualStrings("文本", table.unmangle("z_2").?);
+    try std.testing.expectEqualStrings("整数", table.unmangle("z_3").?);
 }
 
 test "关键字/别名超串标识符：整词不拆分，别名仅对完整词链生效" {
