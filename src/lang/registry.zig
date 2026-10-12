@@ -107,3 +107,29 @@ test "registry（R9续②③）：自动发现的繁体叠加层运行时真并�
     try std.testing.expectEqualStrings("const", pack.keywords.get("常数").?); // 简体→基包、仍活
     try std.testing.expectEqualStrings("fn", pack.keywords.get("函数").?);
 }
+
+// 护栏（第 116 轮证伪落位）：本模块零分配（纯数据+纯查询），D51 逐分配点对账真空闭合；转钉
+// 私有 `nameMatch` 的双向大小写折叠真边界。两个纯防御/正确性面此前经任何公共路径零触达：
+//   · b 侧大写分支（L36）——现行注册 key/alias 全小写或 CJK，输入大写形只走 a 侧分支（lookup("ZH")
+//     已覆盖），注册项含大写形才触发 b 侧；若误删此支，将来登记大写别名的包会大小写不敏感静默失效。
+//   · 非字母字节须原样相等——`a + 32 == b` 若不校验 `a`/`b` 落 A-Z/a-z，会把差 0x20 的非字母对（如
+//     空格 0x20 与 @ 0x40）误折为「相等」。本测直调逐形钉住两向折叠、混合大小写、CJK 逐字节精确、
+//     非字母差 0x20 不误折、长度不等先拒。
+test "nameMatch 双向大小写折叠真边界：两向 ASCII 折叠 + 非字母逐字节精确 + 长度短路（b 侧大写分支现行数据零触达，第 116 轮）" {
+    // ① 全等 / 双空串。
+    try std.testing.expect(nameMatch("zh", "zh"));
+    try std.testing.expect(nameMatch("", ""));
+    // ② a 侧大写折叠（x 大写、y 小写；既有 lookup("ZH") 已间接走过此支）。
+    try std.testing.expect(nameMatch("ZH", "zh"));
+    // ③ b 侧大写折叠（x 小写、y 大写）——现行注册数据零触达的纯防御分支（本测独有价值）。
+    try std.testing.expect(nameMatch("zh", "ZH"));
+    // ④ 混合大小写逐位折叠。
+    try std.testing.expect(nameMatch("ZhCk", "zHcK"));
+    // ⑤ 非字母字节须原样相等：CJK 按字节精确命中、不误折。
+    try std.testing.expect(nameMatch("中文", "中文"));
+    // ⑥ 非字母但差 0x20 的对不得误折（空格 0x20 vs @ 0x40）——钉 a/b 两侧均非大写范围时不折叠。
+    try std.testing.expect(!nameMatch(" ", "@"));
+    // ⑦ 字母 vs 非字母同位不等 → 拒；长度不等先短路拒。
+    try std.testing.expect(!nameMatch("zh", "zhh"));
+    try std.testing.expect(!nameMatch("zh", "zx"));
+}
