@@ -214,6 +214,42 @@ test "R9g findFlag/stripFlag：--lang-file 两参/等号形识别；同族前缀
     try std.testing.expectEqual(@as(usize, 1), s3.items.len);
 }
 
+test "护栏：旗标等号空值形边界——`--lang=`/`--lang-file=` 返回空串非 null、与裸尾缺值形语义相反（第 110 轮证伪落位）" {
+    // 承 108/109 轮方法论：findFlag 的「等号空值」形（`--name=`）此前零覆盖——既有测只钉
+    // 两参形、等号非空形、无旗标 null、裸尾缺值 null。本形语义微妙：`--lang=` 令 findLangFlag
+    // 返回空串 ""（非 null），caller 据此按「未知语言包『』」母语提示 exit 2（非回落默认包）；
+    // 而裸尾 `--lang`（无 `=`）才 null→回落默认。二者语义相反、须钉住防重构漂移（若 findFlag
+    // 被改成对空值也返回 null，`--lang=` 会静默改用默认包、用户显式空输入被无声吞掉）。
+    const gpa = std.testing.allocator;
+
+    // 等号空值：返回 ""（空切片、非 null）。
+    const l = [_][]const u8{"--lang="};
+    const lr = findLangFlag(&l);
+    try std.testing.expect(lr != null); // 关键：非 null
+    try std.testing.expectEqualStrings("", lr.?);
+    // 末位等号空值亦 ""（等号形自含、不要求后继元素）。
+    const l2 = [_][]const u8{ "check", "--lang=" };
+    try std.testing.expectEqualStrings("", findLangFlag(&l2).?);
+
+    // --lang-file= 同形。
+    const lf = [_][]const u8{"--lang-file="};
+    try std.testing.expectEqualStrings("", findLangFileFlag(&lf).?);
+
+    // 裸尾缺值（无 `=`）：null（与等号空值形语义相反）——补 findLangFileFlag 同形对照。
+    const d = [_][]const u8{ "build", "--lang-file" };
+    try std.testing.expectEqual(@as(?[]const u8, null), findLangFileFlag(&d));
+
+    // strip 侧：等号空值形仍须剔离（不透传给 zig）。
+    var s = try stripLangFlag(gpa, &[_][]const u8{ "check", "--lang=" });
+    defer s.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), s.items.len);
+    try std.testing.expectEqualStrings("check", s.items[0]);
+
+    // 等号值内含 `=`：取首个 `=` 后全部（非只到第二个 `=`）。
+    const v = [_][]const u8{"--lang=a=b"};
+    try std.testing.expectEqualStrings("a=b", findLangFlag(&v).?);
+}
+
 /// 判断 `eject` 目标 `dest` 是否会与方言源码树 `src` 重叠、或越出当前工程根——
 /// 命中即危险：`eject` 重写前会先清空 `dest/src`，若该路径就是真实 `src`（或包含它），
 /// 会直接删除用户的 `.zz` 源文件（数据丢失）。按分隔符分段比较（避免 `src2` 误判为 `src` 之下）、
