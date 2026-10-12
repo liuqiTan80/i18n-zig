@@ -1,0 +1,17 @@
+# R9g 守卫负形：语法合法但 B6 契约缺映射（缺 @embedFile/@import/main 等）——
+# 模拟只写了常用子集就发行的第三方包。期望：母语报「不完整」并点名缺哪条映射，退出码非 0。
+$name = 欠け語
+$code = mis
+$format = 1
+
+[keywords]
+定数 = const
+変数 = var
+関数 = fn
+もし = if
+さもなくば = else
+返す = return
+構造体 = struct
+列挙型 = enum
+共用体 = union
+スイッチ = switch

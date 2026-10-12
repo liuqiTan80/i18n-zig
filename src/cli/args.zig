@@ -95,33 +95,37 @@ test "pickEntry：带值旗标不被误当入口，仅 .zz 作为文件" {
     try std.testing.expectEqual(@as(?usize, null), pd.idx);
 }
 
-/// R9：从 zzc 层参数里取 `--lang <name>` 或 `--lang=<name>` 的语言名（纯查询、不改入参；无则 null）。
-/// 语言名缺值（`--lang` 处于末尾且无后继）视为 null（由调用方按未选包处理）。
-pub fn findLangFlag(args: []const []const u8) ?[]const u8 {
+/// 旗标解析真相源（R9g，第 103 轮泛化）：取 `--<name> <值>`（两参形）或 `--<name>=<值>`（等号形）的值；
+/// 纯查询、不改入参；无则 null。缺值裸旗标（末尾无后继）视为 null（由调用方处置）。
+/// 全等匹配 + 等号前缀匹配：`--lang` 不会误匹 `--lang-file`（非全等且非 `--lang=` 前缀）。
+pub fn findFlag(args: []const []const u8, name: []const u8) ?[]const u8 {
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const a = args[i];
-        if (std.mem.eql(u8, a, "--lang")) {
+        if (std.mem.eql(u8, a, name)) {
             return if (i + 1 < args.len) args[i + 1] else null;
         }
-        if (std.mem.startsWith(u8, a, "--lang=")) return a["--lang=".len..];
+        // 等号形无堆分配：直接按字节位置判 `=`（`--lang=x` 不会被 `--lang-file` 误匹）。
+        if (a.len > name.len and a[name.len] == '=' and std.mem.startsWith(u8, a, name)) {
+            return a[name.len + 1 ..];
+        }
     }
     return null;
 }
 
-/// 从参数列表剔离 `--lang <name>`（两参形）/`--lang=<name>`（一参形），返回新 ArrayList（元素借用自 args、仅本体分配）。
-/// 目的：`--lang` 是 zzc 层旗标，不能透传给 zig。缺值的裸 `--lang`（末尾）一并剔离。无旗标时返回逐元素等长的原样副本。
-pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
+/// 剔离 `--<name> <值>`（两参形）/`--<name>=<值>`（一参形），返回新 ArrayList（元素借用自 args、仅本体分配）。
+/// 目的：zzc 层旗标不得透传给 zig。缺值裸旗标（末尾）一并剔离。无旗标时返回逐元素等长的原样副本。
+pub fn stripFlag(gpa: std.mem.Allocator, args: []const []const u8, name: []const u8) !std.ArrayList([]const u8) {
     var out: std.ArrayList([]const u8) = .empty;
     errdefer out.deinit(gpa);
     var i: usize = 0;
     while (i < args.len) {
         const a = args[i];
-        if (std.mem.eql(u8, a, "--lang")) {
-            i += 2; // 连同其值一起剔离
+        if (std.mem.eql(u8, a, name)) {
+            i += 2; // 连同其值一起剔离（末尾裸旗标时 i+=2 自然出循环）
             continue;
         }
-        if (std.mem.startsWith(u8, a, "--lang=")) {
+        if (a.len > name.len and a[name.len] == '=' and std.mem.startsWith(u8, a, name)) {
             i += 1;
             continue;
         }
@@ -129,6 +133,28 @@ pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.Arra
         i += 1;
     }
     return out;
+}
+
+/// R9：从 zzc 层参数里取 `--lang <name>` 或 `--lang=<name>` 的语言名（纯查询、不改入参；无则 null）。
+/// 语言名缺值（`--lang` 处于末尾且无后继）视为 null（由调用方按未选包处理）。
+pub fn findLangFlag(args: []const []const u8) ?[]const u8 {
+    return findFlag(args, "--lang");
+}
+
+/// R9g（第 103 轮）：取 `--lang-file <路径>` 外部语言包文件旗标（第三方发行包运行时加载、免重编译）。
+pub fn findLangFileFlag(args: []const []const u8) ?[]const u8 {
+    return findFlag(args, "--lang-file");
+}
+
+/// 从参数列表剔离 `--lang <name>`（两参形）/`--lang=<name>`（一参形），返回新 ArrayList（元素借用自 args、仅本体分配）。
+/// 目的：`--lang` 是 zzc 层旗标，不能透传给 zig。缺值的裸 `--lang`（末尾）一并剔离。无旗标时返回逐元素等长的原样副本。
+pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
+    return stripFlag(gpa, args, "--lang");
+}
+
+/// R9g：剔离 `--lang-file`（两参/等号形）——同不透传 zig 契约。
+pub fn stripLangFileFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
+    return stripFlag(gpa, args, "--lang-file");
 }
 
 test "findLangFlag / stripLangFlag：两参与等号形都识别，剔离后不透传 zig" {
@@ -161,6 +187,31 @@ test "findLangFlag / stripLangFlag：两参与等号形都识别，剔离后不�
     var s4 = try stripLangFlag(gpa, &d);
     defer s4.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), s4.items.len);
+}
+
+test "R9g findFlag/stripFlag：--lang-file 两参/等号形识别；同族前缀旗标互不误匹" {
+    const gpa = std.testing.allocator;
+    const a = [_][]const u8{ "check", "--lang-file", "包/外.txt", "--lang", "zh" };
+    // --lang 查询不得误匹 --lang-file（全等形取后继、等号形需 `=` 位）；两旗标各取所得。
+    try std.testing.expectEqualStrings("包/外.txt", findLangFileFlag(&a).?);
+    try std.testing.expectEqualStrings("zh", findLangFlag(&a).?);
+    var s = try stripLangFlag(gpa, &a);
+    defer s.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 3), s.items.len); // 仅剔 --lang zh，--lang-file 照留
+    try std.testing.expectEqualStrings("--lang-file", s.items[1]);
+    var s2 = try stripLangFileFlag(gpa, s.items);
+    defer s2.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), s2.items.len); // 串接剔离：两 zzc 旗标都连值不透传，仅剩 check
+    try std.testing.expectEqualStrings("check", s2.items[0]);
+
+    // 等号形 + 裸尾缺值形。
+    const e = [_][]const u8{ "--lang-file=/tmp/外.zzpack", "src/main.zz" };
+    try std.testing.expectEqualStrings("/tmp/外.zzpack", findLangFileFlag(&e).?);
+    const d = [_][]const u8{ "build", "--lang-file" };
+    try std.testing.expectEqual(@as(?[]const u8, null), findLangFileFlag(&d));
+    var s3 = try stripLangFileFlag(gpa, &d);
+    defer s3.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), s3.items.len);
 }
 
 /// 判断 `eject` 目标 `dest` 是否会与方言源码树 `src` 重叠、或越出当前工程根——
@@ -318,6 +369,7 @@ pub const usage_text =
     \\  zzc version            版本与当前语言包
     \\选项：
     \\  --lang <名>            选择语言包（如 zh / 中文；缺省为中文；该旗标不透传 zig）
+    \\  --lang-file <路径>     从外部文件加载语言包（第三方发行包、免重编译；与 --lang 互斥；不透传 zig）
     \\方言文件默认取 src/main.zz；错误标签与 std 错误名保持 ASCII 原样。
 ;
 

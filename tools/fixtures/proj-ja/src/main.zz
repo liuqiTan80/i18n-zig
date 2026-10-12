@@ -1,0 +1,3 @@
+// R9g 守卫用最小方言工程源：纯日语词形（对应 tools/fixtures/external-min.txt 的映射）。
+// 期望：`zzc check --lang-file <external-min.txt>` 通过、转译产物顶层含入口函数定义。
+公開 関数 メイン関数() void { }

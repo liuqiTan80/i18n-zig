@@ -455,6 +455,31 @@ fn describePackError(e: PackParseError) []const u8 {
     };
 }
 
+/// R9g（第 103 轮）：外部语言包文件装载真相源（第三方发行包、运行时加载免重编译）。
+/// 各失败形面向贡献者母语报出（区别于内置包的「工具自身缺陷」措辞）；契约缺失由调用处
+/// 统一 validate（同一消息形制、携路径）。字节不 free：Pack 键值为借用视图（pack.zig
+/// 存活期约定），gpa_ 为 arena 活到进程退出天然满足；FileNotFound 等可行动错误源头母语。
+fn loadExternalPack(path: []const u8) !Pack {
+    const bytes = readWhole(path) catch |e| switch (e) {
+        error.FileNotFound => {
+            printErr("zzc: 外部语言包文件不存在：{s}", .{path});
+            return error.Failed;
+        },
+        else => return e, // 超限/权限等：readWhole 母语前缀或 bail 的 localizeFsErr 双层拦截既有形
+    };
+    return Pack.parse(gpa_, bytes) catch |e| switch (e) {
+        error.PackFormatTooNew => {
+            printErr("zzc: 外部语言包「{s}」声明的 $format 过新（当前 zzc 仅支持格式 {d}）。请升级 zzc。", .{ path, Pack.supported_format });
+            return error.Failed;
+        },
+        error.InvalidLangPack => {
+            printErr("zzc: 外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/$format 非数等），请按 docs/contributing-lang-pack.md 检查。", .{path});
+            return error.Failed;
+        },
+        else => return e, // OOM 等工具层错误传播致 bail
+    };
+}
+
 // ---------------------------------------------------------------- 子命令
 
 fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
@@ -893,34 +918,58 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // R9（第 52 轮）：`--lang` 选包——cli 解旗标 + registry 按名取包；缺省用注册表默认（中文）。
+    // R9g（第 103 轮）：新增 `--lang-file` 外部发行包文件源（免重编译），与 `--lang` 互斥。
     // 旗标从透传参数中剔离，不会进入 zig（check/build/run/test/eject 只看 argv）。
-    const chosen: registry.Entry = if (cli.findLangFlag(args)) |n|
-        registry.lookup(n) orelse {
-            printErr("zzc: 未知语言包「{s}」。当前可用：", .{n});
-            for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
-            printErr("\n", .{});
-            werr.flush() catch {};
-            std.process.exit(2); // 尚未编译、无兼底项待落盘；直接退 2（与 error.Usage 同码）
-        }
-    else
-        registry.defaultEntry();
-    var filtered = cli.stripLangFlag(gpa_, args) catch |e| {
+    const lang_name = cli.findLangFlag(args);
+    const lang_file = cli.findLangFileFlag(args);
+    if (lang_name != null and lang_file != null) {
+        printErr("zzc: --lang 与 --lang-file 互斥：内置选包、外部包文件二选一。", .{});
+        werr.flush() catch {};
+        std.process.exit(2); // 用法错与未知包同码；此刻表未建、无派生状态待落盘（D46 形安全）
+    }
+    var lang: Pack = if (lang_file) |fp|
+        // 失败走 bail 而非 `return error.Failed`：main 带错返回会由 Zig 运行时打 `error: Failed`
+        // + 栈帧（泄 std 绝对路径、D 族历史形）；母语消息已在源头报出，bail(Failed) 静默退 1。
+        loadExternalPack(fp) catch |e| bail(e)
+    else blk: {
+        const chosen: registry.Entry = if (lang_name) |n|
+            registry.lookup(n) orelse {
+                printErr("zzc: 未知语言包「{s}」。当前可用：", .{n});
+                for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
+                printErr("\n", .{});
+                werr.flush() catch {};
+                std.process.exit(2); // 尚未编译、无兼底项待落盘；直接退 2（与 error.Usage 同码）
+            }
+        else
+            registry.defaultEntry();
+        // R11（第 53 轮）：基包 + 补充层叠加加载（当前 zh 无补充层，overlays 为空→等价单包）。
+        const bp = Pack.loadWithOverlays(gpa_, chosen.bytes, chosen.overlays) catch |e| {
+            printErr("zzc: 语言包解析失败（{s}），这属于工具自身缺陷，请反馈。", .{@errorName(e)});
+            bail(error.Failed); // noreturn：不外泄 error 名与栈帧（同外部源形制）
+        };
+        break :blk bp;
+    };
+    defer lang.deinit();
+    var stripped = cli.stripLangFlag(gpa_, args) catch |e| {
+        printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
+        return e;
+    };
+    defer stripped.deinit(gpa_);
+    var filtered = cli.stripLangFileFlag(gpa_, stripped.items) catch |e| {
         printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
         return e;
     };
     defer filtered.deinit(gpa_);
     const argv = filtered.items;
 
-    // R11（第 53 轮）：基包 + 补充层叠加加载（当前 zh 无补充层，overlays 为空→等价单包）。
-    var lang = Pack.loadWithOverlays(gpa_, chosen.bytes, chosen.overlays) catch |e| {
-        printErr("zzc: 语言包解析失败（{s}），这属于工具自身缺陷，请反馈。", .{@errorName(e)});
-        return error.Failed;
-    };
-    defer lang.deinit();
     // 契约面校验（B6）：登记的包理应恒通过（有单测锁定）；失败即工具缺陷，母语报错不外泄 error 名。
+    // 外部包（R9g）失败则是贡献者缺陷，消息面向包作者携带路径可行动。
     lang.validate() catch |e| {
-        printErr("zzc: 语言包不完整：{s}", .{describePackError(e)});
-        return error.Failed;
+        if (lang_file) |fp|
+            printErr("zzc: 外部语言包「{s}」不完整：{s}", .{ fp, describePackError(e) })
+        else
+            printErr("zzc: 语言包不完整：{s}", .{describePackError(e)});
+        bail(error.Failed); // 静默退 1：不外泄 error 名与栈帧（探针实锤形，第 103 轮）
     };
 
     if (std.mem.eql(u8, cmd, "version")) {
@@ -930,7 +979,7 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "lang")) {
         // R9：反映注册表——除当前选定包详情外，列出可注册的包名（多包加载面可见）。
         printOut("当前语言包：{s}({s}) —— 关键字 {d} 条 / 路径别名 {d} 条 / 报错模式 {d} 条\n可注册包：", .{
-            lang.name, chosen.code, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
+            lang.name, lang.code, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
         });
         for (registry.entries) |p| printOut("{s}({s}) ", .{ p.key, p.display });
         printOut("\n", .{});

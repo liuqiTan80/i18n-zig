@@ -335,5 +335,44 @@ if ($zigCmd) {
     Write-Output "  [SKIP] nozig guard: zig not on PATH (nothing to strip)"
 }
 
+# --- R9g external lang-pack `--lang-file` e2e guard (round 103; also pins D47: a
+# keywords-section `X = main` entry form must translate to main, not be declaration-
+# position-avoided into z_N which silently degrades check into a library-style shallow
+# pass). Three shapes: A positive (external minimal ja pack loads, gen contains
+# `pub fn main(`, exit 0); B `$format` too new refused with native upgrade hint;
+# C `--lang` + `--lang-file` mutual exclusion exits 2. Fixture data lives in
+# tools/fixtures (outside the packs/ auto-discovery scan, never in the registry).
+Write-Output "== external lang-pack guard =="
+$fx = Join-Path $root "tools\fixtures"
+$gr = Join-Path $root ".zig-cache/r9g_guard"
+if (Test-Path $gr) { Remove-Item -Recurse -Force $gr }
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $gr) | Out-Null
+Copy-Item (Join-Path $fx "proj-ja") $gr -Recurse
+$r9Ok = $true
+# A: positive load + entry translation actually reached (deep check shape)
+$pA = Start-Process -FilePath $zzc -ArgumentList @("check", "--lang-file", (Join-Path $fx "external-min.txt")) -NoNewWindow -Wait -PassThru -WorkingDirectory $gr `
+    -RedirectStandardOutput (Join-Path $gr "a.o.txt") -RedirectStandardError (Join-Path $gr "a.e.txt")
+if ($pA.ExitCode -ne 0) { Write-Output ("  [FAIL] r9g A: external pack check expected exit 0, got " + $pA.ExitCode); $r9Ok = $false }
+$genZig = Join-Path $gr ".zzc\gen\src\main.zig"
+$genTxt = if (Test-Path $genZig) { [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($genZig)) } else { "" }
+# 行首断言而非任意子串：源注释里若含目标字面串会随透传混进 gen 使 Contains 假命中（反证轮实捕的静默空转形）。
+$hasMainFn = (@($genTxt -split "`n" | Where-Object { $_.StartsWith("pub fn main(") -or $_.StartsWith("fn main(") }).Count -gt 0)
+if (-not $hasMainFn) { Write-Output "  [FAIL] r9g A/D47: keywords-section main form not translated at entry position (silent library-shape pass)"; $r9Ok = $false }
+# B: $format too new -> refused with native upgrade hint (qing-sheng-ji via code points)
+$pB = Start-Process -FilePath $zzc -ArgumentList @("check", "--lang-file", (Join-Path $fx "external-toofmt.txt")) -NoNewWindow -Wait -PassThru -WorkingDirectory $gr `
+    -RedirectStandardOutput (Join-Path $gr "b.o.txt") -RedirectStandardError (Join-Path $gr "b.e.txt")
+$bErr = [System.IO.File]::ReadAllBytes((Join-Path $gr "b.e.txt"))
+$bTxt = if ($bErr.Length -gt 0) { [System.Text.Encoding]::UTF8.GetString($bErr) } else { "" }
+if ($pB.ExitCode -ne 1) { Write-Output ("  [FAIL] r9g B: format-too-new expected exit 1, got " + $pB.ExitCode); $r9Ok = $false }
+if (-not $bTxt.Contains((Native 0x8BF7,0x5347,0x7EA7))) { Write-Output "  [FAIL] r9g B: native upgrade hint missing from stderr"; $r9Ok = $false }
+if ($bTxt.Contains("error: Failed")) { Write-Output "  [FAIL] r9g B: raw error name / stack trace leaked (bail-shape required)"; $r9Ok = $false }
+# C: --lang and --lang-file together -> usage exit 2
+$pC = Start-Process -FilePath $zzc -ArgumentList @("check", "--lang", "zh", "--lang-file", (Join-Path $fx "external-min.txt")) -NoNewWindow -Wait -PassThru -WorkingDirectory $gr `
+    -RedirectStandardOutput (Join-Path $gr "c.o.txt") -RedirectStandardError (Join-Path $gr "c.e.txt")
+if ($pC.ExitCode -ne 2) { Write-Output ("  [FAIL] r9g C: mutually-exclusive flags expected exit 2, got " + $pC.ExitCode); $r9Ok = $false }
+if ($r9Ok) { Write-Output "  [PASS] r9g guard: external pack loads, entry form translates, format-too-new refused natively, flags mutually exclusive" }
+else { $fail = $fail + 1 }
+Remove-Item -Recurse -Force $gr -ErrorAction SilentlyContinue
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"

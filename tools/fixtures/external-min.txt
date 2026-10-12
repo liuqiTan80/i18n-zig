@@ -1,0 +1,22 @@
+# R9g（第 103 轮）最小合规外部发行包示例：日语基包，覆盖 B6 契约 13 值。
+# 用途：`zzc <子命令> --lang-file tools/fixtures/external-min.txt` 免重编译加载；
+# 亦作 tools/check-demos.ps1 r9g 守卫节数据源（进 build.zig packs 扫描面之外的目录，不入注册表）。
+$name = テスト日本語
+$code = tst-ja
+$format = 1
+
+[keywords]
+公開 = pub
+定数 = const
+変数 = var
+関数 = fn
+もし = if
+さもなくば = else
+返す = return
+構造体 = struct
+列挙型 = enum
+共用体 = union
+スイッチ = switch
+インポート = @import
+埋め込み = @embedFile
+メイン関数 = main

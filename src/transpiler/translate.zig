@@ -260,9 +260,16 @@ pub fn translate(
                 if (lang.keywords.get(word)) |repl| {
                     const decl_name_pos = prevIsDeclKeyword(lang, src, toks, i) or
                         isExtendedDeclNamePos(lang, src, toks, i);
+                    // D47（第 103 轮）入口定义位例外：前词映射为 fn、本词形映射为 main、
+                    // 后紧跟 `(` ——三条件全绑句法位、纯值判据不硬编码任何方言词。缺此例外则
+                    // keywords 段的 `X = main` 词形（B6 契约两表皆可的合法形）被避让 intern 成
+                    // z_N、生成物失去 `pub fn main(`、check 静默退化库形浅检假成功；中文先例
+                    // `主函数 = main` 实属 aliases 段（第 1 步链免避让）才可用——两段皆须真生效。
+                    const main_def_pos = decl_name_pos and std.mem.eql(u8, repl, "main") and
+                        isPunctAt(toks, src, i + 1, '(') and mappedIs(lang, src, toks[i - 1], "fn");
                     const occupied = table.native_to_ascii.get(word) != null;
                     const ident_first = occupied and !prevIsColon(src, toks, i);
-                    if (!decl_name_pos and !ident_first) {
+                    if ((!decl_name_pos or main_def_pos) and !ident_first) {
                         try emitReplacement(gpa, &out, &map, t.off, word.len, repl);
                         continue;
                     }
@@ -1014,4 +1021,31 @@ test "D45 类型词覆盖守卫：常用定宽类型词有母语词条且类型�
     defer table.deinit();
     const res = try translate(gpa, "常数 甲: 中整数 = 3;\n", lang, &table);
     try std.testing.expectEqualStrings("const z_1: i32 = 3;\n", res.zig_str);
+}
+
+test "D47 入口词形在 keywords 段：fn 声明位避让不得把 main 映射词形 intern 成 z_N（静默浅检陷阱）" {
+    // 缺陷面：B6 契约 hasMappedValue 查 keywords∪aliases 两表、贡献者把 `X = main` 放 keywords
+    // 完全合法；但入口定义位在 `函数`(→fn) 声明名位、避让规则使其 intern 成 z_1——生成物失去
+    // `pub fn main(`，check 退化成库形浅检假成功。中文先例 `主函数 = main` 实属 aliases 段
+    // （第 1 步链不受声明位避让）才可用——两段皆可的契约必须两段皆真生效（R9g 外部包开发探针坐实）。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa,
+        \\    $code = ja
+        \\    [keywords]
+        \\    定数 = const
+        \\    公開 = pub
+        \\    関数 = fn
+        \\    メイン関数 = main
+    );
+    defer lang.deinit();
+
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const res = try translate(gpa, "公開 関数 メイン関数() void { }\n", lang, &table);
+    try std.testing.expectEqualStrings("pub fn main() void { }\n", res.zig_str);
+    // 非入口形（声明动词语后无 `(`）不受特例：`関数 メイン関数` 之外的普通名仍走避让——
+    // 若日后真有 `定数 メイン関数 = 5`（常量名叫入口词形）属包作者命名冲突，避让哲学不变。
 }

@@ -7,6 +7,8 @@
 //!     把词元抹成空串／绕过 `$code` 校验／使空 pattern 吞掉全部诊断；唯 diagnostics 第三段 tip 可空）
 //!   - diagnostics 段的值以 `|` 分隔三段：`匹配前缀|译文模板|教学提示`
 //!   - whitelist 段每行即一条白名单规则（整行精确匹配、无需 `=`），供纯母语过滤器豁免（台账 F2）
+//!   - `$format = 1` 包格式版本头（R9g，第 103 轮）：外部分发包声明其所依的包格式版本；
+//!     高于当前工具支持值即拒载并提示升级 zzc（而非误译/崩溃），未声明缺省为 1（旧包向后兼容）
 //!
 //! 引擎语言无关：新增一门方言只需新增一份包文件。
 //!
@@ -23,6 +25,10 @@ pub const Entry = struct {
     message: []const u8,
     tip: []const u8,
 };
+
+/// 当前工具支持的对外包格式版本（R9g）：行式格式自第三方独立发行起升格为**对外契约**，
+/// 包内 `$format` 声明高于此值必须明确拒绝（旧包无 `$format` 行、缺省视为 1，永不破坏已流通的包）。
+pub const supported_format: u32 = 1;
 
 name: []const u8 = "未知语言",
 code: []const u8 = "??",
@@ -137,6 +143,8 @@ fn upsertDiagnostic(self: *Pack, gpa: std.mem.Allocator, entry: Entry) !void {
 /// 第二次出现且**值不同** → `error.InvalidLangPack` 源头拒（手编包矛盾两行静默其一失效属数据编辑
 /// 陷阱）；同值幂等放行（whitelist 先例对称）；跨层（多次调用）后写覆盖仍是 R11 文档化合并语义、
 /// 不受此检影响——故判据绑「本次调用写过该键」而非「表里已存在该键」。
+/// `$format` 版本头（R9g）：>supported_format → error.PackFormatTooNew；0/非十进制数 → InvalidLangPack；
+/// 合法值吞进元数据不入 keywords/aliases 表（同 $name/$code 形制）。
 pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
     var section: Section = .keywords;
     // 本次调用内已写键/值视图（key/value 均借 bytes，仅调用期内比较、不拥有）。
@@ -150,6 +158,7 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
     defer seen_diag.deinit(gpa);
     var seen_name: ?[]const u8 = null;
     var seen_code: ?[]const u8 = null;
+    var seen_format: ?[]const u8 = null;
     var it = std.mem.splitScalar(u8, bytes, '\n');
     while (it.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
@@ -191,6 +200,21 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 // $name/$code 分支之前，三条路径一并封口，转译端无从见到空值。
                 if (value.len == 0) return error.InvalidLangPack;
                 const map = if (section == .keywords) &self.keywords else &self.aliases;
+                // 包格式版本头（R9g，第 103 轮）：外部分发包的前向兼容契约。
+                // 合法即吞不入表；高于 supported_format 拒并提示升级——否则新格式字段（如未来新段）
+                // 会被旧工具当非法行拒或静默丢弃，造成半翻译；0 与非十进制数属手误形拒。
+                if (std.mem.eql(u8, key, "$format")) {
+                    if (seen_format) |old| {
+                        if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
+                    }
+                    seen_format = value;
+                    const v = std.fmt.parseInt(u32, value, 10) catch return error.InvalidLangPack;
+                    if (v == 0 or v > supported_format) {
+                        if (v > supported_format) return error.PackFormatTooNew;
+                        return error.InvalidLangPack;
+                    }
+                    continue;
+                }
                 if (std.mem.eql(u8, key, "$name")) {
                     // 同层元数据矛盾两行（$name/$code 不同值）同族封口；同值幂等照放。
                     if (seen_name) |old| {
@@ -432,6 +456,40 @@ test "R11 空补充层等价单包 parse（loadWithOverlays 不退化现有行�
     try std.testing.expectEqualStrings(a.code, b.code);
     try std.testing.expectEqual(a.keywords.count(), b.keywords.count());
     try std.testing.expectEqualStrings("const", b.keywords.get("常数").?);
+}
+
+test "R9g $format 版本头：合法值吞不入表、缺省兼容旧包；过高/0/非数/同层冲突各拒各形" {
+    const gpa = std.testing.allocator;
+    const minimal = "$code = te\n$name = 测试\n";
+
+    // ① 合法声明：解析通过且 `$format` 被元数据分支吞掉——不入 keywords/aliases（翻译链摸不到它）。
+    var p = try Pack.parse(gpa, minimal ++ "$format = 1\n[keywords]\n常数 = const\n");
+    defer p.deinit();
+    try std.testing.expect(p.keywords.get("$format") == null);
+    try std.testing.expect(p.aliases.get("$format") == null);
+    try std.testing.expectEqualStrings("const", p.keywords.get("常数").?);
+
+    // ② 缺省兼容：无 $format 行的旧包照过（已流通包永不被新规则事后杀死）。
+    var old = try Pack.parse(gpa, minimal ++ "[keywords]\n常数 = const\n");
+    defer old.deinit();
+
+    // ③ 同值幂等声明放行（D40 封口对称）；同层异值冲突 → InvalidLangPack。
+    var idem = try Pack.parse(gpa, minimal ++ "$format = 1\n$format = 1\n[keywords]\n常数 = const\n");
+    defer idem.deinit();
+    try std.testing.expectError(error.InvalidLangPack, Pack.parse(gpa, minimal ++ "$format = 1\n$format = 2\n[keywords]\n常数 = const\n"));
+
+    // ④ 高于支持值 → 专错 PackFormatTooNew（提示升级而非误译/崩）；不取未来支持值。
+    try std.testing.expectError(error.PackFormatTooNew, Pack.parse(gpa, minimal ++ "$format = 99\n[keywords]\n常数 = const\n"));
+
+    // ⑤ 手误形：0/负数/非十进制数 → InvalidLangPack（版本从 1 起）。
+    try std.testing.expectError(error.InvalidLangPack, Pack.parse(gpa, minimal ++ "$format = 0\n[keywords]\n常数 = const\n"));
+    try std.testing.expectError(error.InvalidLangPack, Pack.parse(gpa, minimal ++ "$format = -1\n[keywords]\n常数 = const\n"));
+    try std.testing.expectError(error.InvalidLangPack, Pack.parse(gpa, minimal ++ "$format = 一\n[keywords]\n常数 = const\n"));
+
+    // ⑥ 叠加层不受版本头约束：基包声明 1、补充层无头，合并照过（R11 语义不变）。
+    var layered = try Pack.loadWithOverlays(gpa, minimal ++ "$format = 1\n[keywords]\n常数 = const\n", &.{"[keywords]\n函数 = fn\n"});
+    defer layered.deinit();
+    try std.testing.expectEqualStrings("fn", layered.keywords.get("函数").?);
 }
 
 test "空值条目拒绝（D30）：keywords/aliases/$code/diagnostics 空 pattern・空 message 均 InvalidLangPack" {

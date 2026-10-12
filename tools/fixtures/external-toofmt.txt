@@ -1,0 +1,8 @@
+# R9g 守卫负形：$format 高于当前工具支持值（supported_format=1）。
+# 期望：拒载并提示升级 zzc（而非误译/崩溃），退出码非 0。
+$name = 未来語
+$code = fut
+$format = 99
+
+[keywords]
+定数 = const
