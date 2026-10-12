@@ -637,18 +637,9 @@ fn cmdInit(name: []const u8) !void {
         return;
     }
     try std.Io.Dir.cwd().createDirPath(io_, name);
-    const proj_zz =
-        \\// zzc 母语工程模板 —— 在本目录运行 `zzc run` 即可
-        \\常数 标准库 = 导入("std");
-        \\
-        \\公开 函数 主函数() !void {
-        \\    变量 数量: 整数 = 10;
-        \\    数量 = 数量 + 1;
-        \\    标准库.打印("数量是：{d}\n", .{数量});
-        \\}
-        \\
-    ;
-    try writeWhole(main_zz, proj_zz);
+    // 模板下沉 cli.initTemplate（D48，第 104 轮）：进测试图被零违例纯测钉住，防再被历轮
+    // 契约升格（如 99 轮纯度门）漏 dogfood 而「工具拒自家脚手架」。
+    try writeWhole(main_zz, cli.initTemplate);
     printOut("已创建工程 {s}（src/main.zz）。进入目录后运行：zzc run", .{name});
 }
 

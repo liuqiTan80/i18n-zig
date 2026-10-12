@@ -374,5 +374,52 @@ if ($r9Ok) { Write-Output "  [PASS] r9g guard: external pack loads, entry form t
 else { $fail = $fail + 1 }
 Remove-Item -Recurse -Force $gr -ErrorAction SilentlyContinue
 
+# --- R104 `zzc init` scaffold e2e guard (round 104; pins D48: the emitted template must
+# pass the tool's OWN purity gate -- round 99 dogfood missed cmdInit's hardcoded `!void`,
+# so a freshly init-ed project failed `zzc check` at birth). Three shapes: A success form
+# exits 0, writes src/main.zz, and the written project then checks clean (behavioral
+# assertion, no substring traps per round-103 lesson: template comments pass through to
+# gen verbatim); B no-overwrite: sentinel survives re-init with native hint; C unsafe name
+# exits 2 with native hint and zero side effects (no stray src/ in workspace).
+Write-Output "== init scaffold guard =="
+$ig = Join-Path $root ".zig-cache/init_guard"
+if (Test-Path $ig) { Remove-Item -Recurse -Force $ig }
+New-Item -ItemType Directory -Force -Path $ig | Out-Null
+$igOk = $true
+# A: init + self-check of the emitted project
+$pA = Start-Process -FilePath $zzc -ArgumentList @("init", "probe_proj") -NoNewWindow -Wait -PassThru -WorkingDirectory $ig `
+    -RedirectStandardOutput (Join-Path $ig "a.o.txt") -RedirectStandardError (Join-Path $ig "a.e.txt")
+if ($pA.ExitCode -ne 0) { Write-Output ("  [FAIL] init A: expected exit 0, got " + $pA.ExitCode); $igOk = $false }
+$tmpl = Join-Path $ig "probe_proj\src\main.zz"
+if (-not (Test-Path $tmpl)) { Write-Output "  [FAIL] init A: src/main.zz not written"; $igOk = $false }
+$aOut = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((Join-Path $ig "a.o.txt")))
+if (-not $aOut.Contains((Native 0x5DF2,0x521B,0x5EFA))) { Write-Output "  [FAIL] init A: native created-notice missing from stdout"; $igOk = $false }
+# the D48 crux: the project the tool just scaffolded must pass the tool's own check
+$proj = Join-Path $ig "probe_proj"
+$pA2 = Start-Process -FilePath $zzc -ArgumentList @("check", "src/main.zz") -NoNewWindow -Wait -PassThru -WorkingDirectory $proj `
+    -RedirectStandardOutput (Join-Path $ig "a2.o.txt") -RedirectStandardError (Join-Path $ig "a2.e.txt")
+if ($pA2.ExitCode -ne 0) { Write-Output ("  [FAIL] init A/D48: freshly-init-ed project fails its own check (exit " + $pA2.ExitCode + ") - template drifted into a form the tool rejects"); $igOk = $false }
+# B: no-overwrite (non-destructive idempotence) - sentinel must survive
+Add-Content -Path $tmpl -Value "# SENTINEL-KEEP-ME" -Encoding UTF8
+$pB = Start-Process -FilePath $zzc -ArgumentList @("init", "probe_proj") -NoNewWindow -Wait -PassThru -WorkingDirectory $ig `
+    -RedirectStandardOutput (Join-Path $ig "b.o.txt") -RedirectStandardError (Join-Path $ig "b.e.txt")
+$bOut = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((Join-Path $ig "b.o.txt")))
+$bContent = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($tmpl))
+if ($pB.ExitCode -ne 0) { Write-Output ("  [FAIL] init B: re-init expected exit 0, got " + $pB.ExitCode); $igOk = $false }
+if (-not $bOut.Contains((Native 0x672A,0x8986,0x76D6))) { Write-Output "  [FAIL] init B: native no-overwrite hint missing from stdout"; $igOk = $false }
+if (-not $bContent.Contains("SENTINEL-KEEP-ME")) { Write-Output "  [FAIL] init B: existing project content was overwritten (destructive re-init)"; $igOk = $false }
+# C: unsafe name -> exit 2 + native hint + zero side effects
+$pC = Start-Process -FilePath $zzc -ArgumentList @("init", "..") -NoNewWindow -Wait -PassThru -WorkingDirectory $ig `
+    -RedirectStandardOutput (Join-Path $ig "c.o.txt") -RedirectStandardError (Join-Path $ig "c.e.txt")
+$cErr = [System.IO.File]::ReadAllBytes((Join-Path $ig "c.e.txt"))
+$cTxt = if ($cErr.Length -gt 0) { [System.Text.Encoding]::UTF8.GetString($cErr) } else { "" }
+if ($pC.ExitCode -ne 2) { Write-Output ("  [FAIL] init C: unsafe name expected exit 2, got " + $pC.ExitCode); $igOk = $false }
+if (-not $cTxt.Contains((Native 0x4E0D,0x5B89,0x5168))) { Write-Output "  [FAIL] init C: native unsafe-name hint missing from stderr"; $igOk = $false }
+# escape shape `init ..` would write ../src/main.zz, i.e. .zig-cache/src in the workspace parent
+if (Test-Path (Join-Path $root ".zig-cache\src")) { Write-Output "  [FAIL] init C: reject happened AFTER side effects (escape wrote src/ into the parent dir)"; $igOk = $false }
+if ($igOk) { Write-Output "  [PASS] init guard: scaffold passes own purity gate (D48), re-init non-destructive, unsafe names exit 2 before any write" }
+else { $fail = $fail + 1 }
+Remove-Item -Recurse -Force $ig -ErrorAction SilentlyContinue
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"

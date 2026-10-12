@@ -1049,3 +1049,31 @@ test "D47 入口词形在 keywords 段：fn 声明位避让不得把 main 映射
     // 非入口形（声明动词语后无 `(`）不受特例：`関数 メイン関数` 之外的普通名仍走避让——
     // 若日后真有 `定数 メイン関数 = 5`（常量名叫入口词形）属包作者命名冲突，避让哲学不变。
 }
+
+test "D48（第 104 轮）init 脚手架模板须零违例通过自家纯母语门：工具不得拒自家产物" {
+    // 缺陷面：99 轮 D44 纯度门升格后 dogfood 清单只扫 demo/守卫内嵌源，漏了 main.zig cmdInit
+    // 硬编码模板的 ASCII `void`（`空 = void` 是包映射值 → 被拦）——`zzc init` 建的项目出生即
+    // `zzc check`/`zzc run` 不过，新手第一步就碰「纯母语: 英文 void 请改用 空」。探针实锤后
+    // 模板下沉 cli.initTemplate（main 不入测试图、既有约束）并由本测钉住：模板恒须零违例。
+    const cli = @import("../cli/args.zig");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 面一：纯母语门零违例（先红形：`!void` 被坐实时本断言抓红）
+    var v = try findEnglishWordForms(gpa, lang, cli.initTemplate);
+    defer v.deinit();
+    if (v.items.len != 0) {
+        std.debug.print("init 模板混入英文词形: {s}（母语形应为 {s}）\n", .{ v.items[0].word, v.items[0].native });
+        return error.TestUnexpectedResult;
+    }
+
+    // 面二：翻译行为侧模板产物真含顶层入口（防 D47 同族静默浅检另一形：模板若撞入口避让也不产 main）
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const res = try translate(gpa, cli.initTemplate, lang, &table);
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "pub fn main() !void {") != null);
+}
