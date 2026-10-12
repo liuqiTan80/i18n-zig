@@ -955,3 +955,63 @@ test "纯母语强制：映射值恰作用户名时声明避让（与 D1 哲学�
     defer v.deinit();
     try std.testing.expectEqual(@as(usize, 0), v.items.len);
 }
+
+test "D45 类型词覆盖补全：用户原型示例 `常数 x: i32 = 10;` 混入英文定宽类型词被拦（先红）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 用户判定原则的原型示例：声明位中文、类型词英文。此前 i32 不在包映射值集合、
+    // 门无从坐实（端到端 EXIT=0 实锤）；补全词条后英文形即违例、携母语建议形。
+    var v1 = try findEnglishWordForms(gpa, lang, "常数 x: i32 = 10;\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("i32", v1.items[0].word);
+    try std.testing.expectEqualStrings("中整数", v1.items[0].native);
+
+    // 同词族其余形：u32 被拦；母语形 `半精度` 不属违例（它就是被推荐的写法）。
+    var v2 = try findEnglishWordForms(gpa, lang, "变量 a: u32 = 1;\n常数 b: 半精度 = 2;\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("u32", v2.items[0].word);
+    try std.testing.expectEqualStrings("中无符号整数", v2.items[0].native);
+
+    // 避让面不受累：映射值恰作用户名时声明位照旧避让（交下游更准诊断）。
+    var v3 = try findEnglishWordForms(gpa, lang, "常数 i32 = 1;\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v3.items.len);
+}
+
+test "D45 类型词覆盖守卫：常用定宽类型词有母语词条且类型标注位命中翻译" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 覆盖守卫：iN/uN 常用位宽与 isize/f16/f128 逐值有母语词条——补一半漏一半正是
+    // 「同词族半拦半放」不一致的根因；新增词条使纯度门对英文形自动坐实。
+    const want = [_][2][]const u8{
+        .{ "有符号字节", "i8" },
+        .{ "中整数", "i32" },
+        .{ "短无符号整数", "u16" },
+        .{ "中无符号整数", "u32" },
+        .{ "长无符号整数", "u128" },
+        .{ "有符号字", "isize" },
+        .{ "半精度", "f16" },
+        .{ "四倍精度", "f128" },
+    };
+    for (want) |p| {
+        try std.testing.expectEqualStrings(p[1], lang.keywords.get(p[0]).?);
+    }
+
+    // 翻译行为面：母语类型词在类型标注位命中新词条、产出标准定宽类型。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const res = try translate(gpa, "常数 甲: 中整数 = 3;\n", lang, &table);
+    try std.testing.expectEqualStrings("const z_1: i32 = 3;\n", res.zig_str);
+}

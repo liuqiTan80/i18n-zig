@@ -9,6 +9,10 @@ pub fn build(b: *std.Build) void {
 
     // R9续②（第 54 轮）：构建期自动发现语言包——扫 src/lang/packs/*.txt 的 `# @` 头指令，
     // 生成 pack 注册表模块（含内联包字节），作者丢文件即注册、无需手改 registry.zig。
+    // R9f 陷阱（第 100 轮 D45 坐实）：包字节以 u8 字面量内联进生成模块，而脚本用命令式
+    // readFileAlloc 读取、不向构建系统声明文件依赖——故**仅改 .txt 包内容不会触发脚本重跑**，
+    // exe 仍嵌旧词条（而测图 @embedFile 追踪变更显新行为，二者分歧会假绿）。改包后须让
+    // build.zig 自身发生内容变更（或删 .zig-cache 强制重建）方能刷新内联字节。
     const pack_mod = generatePackRegistry(b);
 
     const mod = b.addModule("zzc_core", .{
