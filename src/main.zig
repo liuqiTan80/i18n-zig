@@ -40,6 +40,13 @@ var out_w: *Io.Writer = undefined;
 var werr_file: Io.File.Writer = undefined;
 var werr: *Io.Writer = undefined;
 
+/// D46（第 101 轮）：bail 失败退出路径的符号表补位指针。仅在主函数里
+/// `loadSymbols` 全量解析成功后指向 table——此前（init/--lang/半解析的
+/// DuplicateSymbol）保持 null，bail 便不会落盘半成品表；此后任何失败退出
+/// （check/build 语义编译错、eject `.fail` 毕业验证未过等）都与 D38 同形：
+/// 本轮已 intern 的新母语名映射不得因 noreturn exit 被吞。
+var bail_table: ?*Mangle = null;
+
 // ---------------------------------------------------------------- 基础 IO
 
 // 输入文件上限现由 file_io.max_source_bytes 定义（第 62 轮下沉测试图）。
@@ -827,6 +834,12 @@ fn bail(e: anyerror) noreturn {
         },
     }
     // bail 是 noreturn（exit 不跑 main 帧 defer）：落盘须在此补位（F3），与 main 的 defer 二选一命中。
+    // D46（第 101 轮）：同理 saveSymbols 也须在失败退出前补位——D38 只接了 run 分支 exit(c)
+    // 那条退出路径，bail 这条形同根因的遗漏面由 e2e 探针实锤（eject `.fail`/check 语义错后
+    // symbols.txt 缺失，同工程修好走正常返回则落盘）。loadSymbols 成功后 bail_table 才非 null，
+    // 半解析表（DuplicateSymbol）与无表场景（init/--lang）天然不写回。正常返回走 main 末尾
+    // saveSymbols、bail 路径 noreturn，二者互斥无双写。
+    if (bail_table) |t| saveSymbols(t.*);
     flushUntranslated();
     out_w.flush() catch |flush_err| {
         printErr("zzc: 刷新标准输出失败：{s}", .{@errorName(flush_err)});
@@ -931,7 +944,8 @@ pub fn main(init: std.process.Init) !void {
 
     var table = Mangle.init(gpa_);
     defer table.deinit();
-    loadSymbols(&table) catch |e| bail(e);
+    loadSymbols(&table) catch |e| bail(e); // 此线之前 bail_table 为 null：半解析表不落盘（D46）
+    bail_table = &table; // D46：自此表已全量就位，任何失败 bail 前补位持久化
 
     if (std.mem.eql(u8, cmd, "check")) {
         cmdCheck(lang, &table, argv) catch |e| bail(e);

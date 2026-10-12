@@ -230,5 +230,68 @@ if ($guardOk) { Write-Output "  [PASS] embed-staging guard: in-tree asset mirror
 else { $fail = $fail + 1 }
 Remove-Item -Recurse -Force $gb -ErrorAction SilentlyContinue
 
+# --- D46 e2e guard (round 101 defect, D38 twin on the bail path): failures that
+# occur AFTER translation/interned new native names (check/build semantic errors,
+# eject `.fail` graduation verify) take the bail noreturn exit, which historically
+# persisted F3 (flushUntranslated) but NOT saveSymbols -> mappings silently lost.
+# Pin both failure shapes e2e: non-zero exit preserved AND symbols.txt persisted.
+# Script stays pure ASCII: native forms built from code points.
+Write-Output "== d46 bail-persistence guard =="
+$N_var_g = Native 0x53D8,0x91CF            # bian-liang (var)
+$N_u8_g  = Native 0x5B57,0x8282            # zi-jie (u8)
+$gA = Native 0x7532                        # jia
+$gB = Native 0x4E59                        # yi
+$d46Ok = $true
+
+# (A) check with a semantic compile error (u8 out of range): translation+intern
+# succeeds, zig build-exe fails -> error.Failed -> bail.
+$ga46 = Join-Path $root ".zig-cache/d46A_guard"
+if (Test-Path $ga46) { Remove-Item -Recurse -Force $ga46 }
+New-Item -ItemType Directory -Force -Path (Join-Path $ga46 "src") | Out-Null
+$g46SrcA = @"
+$N_const ${gA}: $N_u8_g = 300;
+
+$N_pub $N_fn $N_main() $N_void {
+    _ = ${gA};
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $ga46 "src\main.zz"), $g46SrcA, $encNoBom)
+$gp46a = Start-Process -FilePath $zzc -ArgumentList "check" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $ga46 -RedirectStandardOutput (Join-Path $ga46 "o.txt") -RedirectStandardError (Join-Path $ga46 "e.txt")
+if ($gp46a.ExitCode -ne 1) { Write-Output ("  [FAIL] d46 guard A: expected exit 1 on semantic error, got " + $gp46a.ExitCode); $d46Ok = $false }
+$sym46a = Join-Path $ga46 ".zzc\symbols.txt"
+if (-not (Test-Path $sym46a)) {
+    Write-Output "  [FAIL] d46 guard A: symbols.txt missing after check failure (bail swallowed saveSymbols)"
+    $d46Ok = $false
+} else {
+    $t46a = [System.Text.Encoding]::UTF8.GetString((Read-B $sym46a))
+    if ($t46a -notmatch '=\s*z_\d+') {
+        Write-Output "  [FAIL] d46 guard A: symbols.txt present but no interned native->z_N mapping"
+        $d46Ok = $false
+    }
+}
+Remove-Item -Recurse -Force $ga46 -ErrorAction SilentlyContinue
+
+# (B) eject whose graduation `zig build` fails (undeclared native identifier
+# passes the pure translation layer): dest artifacts are written, verifyBuild
+# returns .fail -> error.Failed -> bail. Interned names must still persist.
+$gb46 = Join-Path $root ".zig-cache/d46B_guard"
+if (Test-Path $gb46) { Remove-Item -Recurse -Force $gb46 }
+New-Item -ItemType Directory -Force -Path (Join-Path $gb46 "src") | Out-Null
+$g46SrcB = "$N_pub $N_fn $N_main() $N_void { $N_var_g $gA = $gB; }`n"
+[System.IO.File]::WriteAllText((Join-Path $gb46 "src\main.zz"), $g46SrcB, $encNoBom)
+$gp46b = Start-Process -FilePath $zzc -ArgumentList "eject out" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $gb46 -RedirectStandardOutput (Join-Path $gb46 "o.txt") -RedirectStandardError (Join-Path $gb46 "e.txt")
+if ($gp46b.ExitCode -ne 1) { Write-Output ("  [FAIL] d46 guard B: expected exit 1 on eject verify failure, got " + $gp46b.ExitCode); $d46Ok = $false }
+$sym46b = Join-Path $gb46 ".zzc\symbols.txt"
+if (-not (Test-Path $sym46b)) {
+    Write-Output "  [FAIL] d46 guard B: symbols.txt missing after eject .fail (bail swallowed saveSymbols)"
+    $d46Ok = $false
+}
+Remove-Item -Recurse -Force $gb46 -ErrorAction SilentlyContinue
+
+if ($d46Ok) { Write-Output "  [PASS] d46 guard: post-intern failure exits (check error, eject .fail) persist symbols faithfully" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
