@@ -254,64 +254,71 @@ fn splitLoc(loc: []const u8) ?FrameLoc {
     return .{ .file = head, .line = std.fmt.parseInt(usize, tail, 10) catch return null, .col = 1 };
 }
 
+/// 短语替换表（文件级：供 localizeRunner 与「前缀劫持不变量」护栏测共同引用）。
+/// **表序即优先级**：匹配是逐偏移 `startsWith` 首中即停，所以若表序靠前的短语是另一靠后
+/// 短语的**严格前缀**（如 `argument` 排在 `arguments` 前），短串会在同偏移永久截胡长串、
+/// 长串条目失效、译文静默劣化——且这类错位不报错、只悄悄变坏。下面成对注释的排序约束
+/// 由此不变量测自动钉死（第 92 轮），新增条目排错序即红，不再只靠人肉注释提醒。
+const runner_pairs = [_][2][]const u8{
+    .{ "expected ", "期望 " },
+    .{ ", found ", "，实得 " },
+    .{ "; found ", "；实得 " },
+    .{ " passed", " 通过" },
+    .{ " skipped", " 跳过" },
+    .{ " failed", " 失败" },
+    // 逐用例失败行 zig 打 `FAIL (错误集名)`（与汇总行的小写 `failed` 不同形）：状态词 `FAIL` 本地化，
+    // 括号内的错误集名（如 TestExpectedEqual）按项目惯例作类型/错误操作数原样保留。
+    .{ "FAIL ", "失败 " },
+    // 无位置的 CLI 级裸诊断：只翻前缀/关键短语，保留尾部（如非法参数名）。
+    .{ "error: ", "错误: " },
+    .{ "warning: ", "警告: " },
+    .{ "note: ", "说明: " },
+    .{ "unrecognized parameter", "无法识别的参数" },
+    // 需保留具体数值/字段名/类型名的诊断：按短语本地化、不丢弃 zig 给出的具体信息（走命中失败后的兜底路）。
+    .{ "argument(s)", "参数" },
+    .{ "arguments", "参数" },
+    .{ "argument", "参数" }, // 单数形式（如 `@enumFromInt` 少参报 "expected 1 argument"）；须排在 `arguments`/`argument(s)` 之后，不抢复数前缀。
+    .{ "duplicate switch value", "重复的匹配分支值" }, // 保留被重复的具体值 '1'。
+    .{ "previous value", "先前的分支值" }, // 配以上说明行。
+    .{ "array elements", "数组元素" },
+    .{ "an identifier", "标识符" }, // 解析错描述符（如 `expected 'an identifier', found '='`）；词序与中文对齐、且保留 `found` 侧的具体符号操作数。
+    .{ "missing struct field", "结构体缺少字段" },
+    .{ "cannot represent integer value", "无法表示整数值" },
+    // 保留数字操作数的下标越界消息：英文词序与中文天然对齐（index→下标、outside array of length→超出数组长度），
+    // 两端数字 5/3 原样保留（同 `期望 N 参数，实得 M` 机制）。须在通用 `length ` 之前、且靠各自偏移的前缀匹配。
+    .{ "outside array of length ", "超出数组长度 " },
+    .{ "index ", "下标 " },
+    // 格式串与实参类型不符（`std.fmt`/打印 常见）：`invalid format string 'd' for type 'X'`——
+    // 用一对短语保住格式符 'd' 与类型操作数 'X'（整句模板反而会丢这两个关键信息）。
+    .{ "invalid format string ", "无效格式串 " },
+    .{ " for type '", " 对类型 '" },
+    .{ "type '", "类型 '" },
+    // 枚举 `匹配` 非穷尽时逐条列出的说明行 `unhandled enumeration value: 'X'`——保住未处理的枚举成员名 'X'（主错 `switch must handle` 已由 packs `匹配不穷尽` 接住）。
+    .{ "unhandled enumeration value", "未处理的枚举取值" },
+    // 格式串/括号未闭合 `missing closing }`（std @compileError）——保住实际的闭合字符 `}`（同族还有 `)` 等）。
+    .{ "missing closing ", "缺少闭合的 " },
+    // comptime_int 变量须 const：`variable of type 'X' must be const or comptime`——用一对短语把 “variable of type X” 重排为中文的“变量（类型 X）”，
+    // 闭括号搭在第二段开头，既保住类型操作数 'X'、又拼出自然语序（const→常数、comptime→计期 用真实别名）。
+    .{ "variable of type ", "变量（类型 " },
+    .{ " must be const or comptime", "）必须是 `常数`（const）或 `计期`（comptime）" },
+    .{ "error union type", "错误联合类型" },
+    .{ "optional type", "可选类型" }, // `expected optional type, found 'i64'`（对非可选值用 `.?`）：`expected `/`, found ` 已由上面短语翻译，这里补中间描述词；'i64' 类型签名保留。
+    .{ "does not support", "不支持" },
+    .{ "field access", "字段访问" },
+    .{ "not a function", "不是函数" },
+    .{ "cannot dereference non-pointer", "不能解引用非指针" },
+    .{ "invalid escape character", "非法转义字符" },
+    .{ " is invalid", " 无效" }, // `'struct X' is invalid` 之类：保住被引号包裹的操作数（类型/名字），仅译尾部谓语；配套的 `说明: 声明容器…` 走 packs 给正确写法。
+    .{ "length ", "长度 " },
+    .{ " here", " 在此处" },
+};
+
 /// 测试运行器专有英文短语、以及无位置的 CLI 级裸诊断前缀的母语替换（仅涉及已知串，
 /// 不影响其他输出）。裸诊断（如 `error: unrecognized parameter: --release=fast`）不带
 /// `file:line:col` 前缀，不进 `parseDiagLine`、只经此透传；按短语替换可保留引发问题的
-/// 具体参数名（静态模板反而会丢它），对用户更有用。
+/// 具体参数名（静态模板反而会丢它），对用户更有用。短语表见 `runner_pairs`（表序即优先级）。
 fn localizeRunner(gpa: std.mem.Allocator, s: []const u8) ![]const u8 {
-    const pairs = [_][2][]const u8{
-        .{ "expected ", "期望 " },
-        .{ ", found ", "，实得 " },
-        .{ "; found ", "；实得 " },
-        .{ " passed", " 通过" },
-        .{ " skipped", " 跳过" },
-        .{ " failed", " 失败" },
-        // 逐用例失败行 zig 打 `FAIL (错误集名)`（与汇总行的小写 `failed` 不同形）：状态词 `FAIL` 本地化，
-        // 括号内的错误集名（如 TestExpectedEqual）按项目惯例作类型/错误操作数原样保留。
-        .{ "FAIL ", "失败 " },
-        // 无位置的 CLI 级裸诊断：只翻前缀/关键短语，保留尾部（如非法参数名）。
-        .{ "error: ", "错误: " },
-        .{ "warning: ", "警告: " },
-        .{ "note: ", "说明: " },
-        .{ "unrecognized parameter", "无法识别的参数" },
-        // 需保留具体数值/字段名/类型名的诊断：按短语本地化、不丢弃 zig 给出的具体信息（走命中失败后的兜底路）。
-        .{ "argument(s)", "参数" },
-        .{ "arguments", "参数" },
-        .{ "argument", "参数" }, // 单数形式（如 `@enumFromInt` 少参报 "expected 1 argument"）；须排在 `arguments`/`argument(s)` 之后，不抢复数前缀。
-        .{ "duplicate switch value", "重复的匹配分支值" }, // 保留被重复的具体值 '1'。
-        .{ "previous value", "先前的分支值" }, // 配以上说明行。
-        .{ "array elements", "数组元素" },
-        .{ "an identifier", "标识符" }, // 解析错描述符（如 `expected 'an identifier', found '='`）；词序与中文对齐、且保留 `found` 侧的具体符号操作数。
-        .{ "missing struct field", "结构体缺少字段" },
-        .{ "cannot represent integer value", "无法表示整数值" },
-        // 保留数字操作数的下标越界消息：英文词序与中文天然对齐（index→下标、outside array of length→超出数组长度），
-        // 两端数字 5/3 原样保留（同 `期望 N 参数，实得 M` 机制）。须在通用 `length ` 之前、且靠各自偏移的前缀匹配。
-        .{ "outside array of length ", "超出数组长度 " },
-        .{ "index ", "下标 " },
-        // 格式串与实参类型不符（`std.fmt`/打印 常见）：`invalid format string 'd' for type 'X'`——
-        // 用一对短语保住格式符 'd' 与类型操作数 'X'（整句模板反而会丢这两个关键信息）。
-        .{ "invalid format string ", "无效格式串 " },
-        .{ " for type '", " 对类型 '" },
-        .{ "type '", "类型 '" },
-        // 枚举 `匹配` 非穷尽时逐条列出的说明行 `unhandled enumeration value: 'X'`——保住未处理的枚举成员名 'X'（主错 `switch must handle` 已由 packs `匹配不穷尽` 接住）。
-        .{ "unhandled enumeration value", "未处理的枚举取值" },
-        // 格式串/括号未闭合 `missing closing }`（std @compileError）——保住实际的闭合字符 `}`（同族还有 `)` 等）。
-        .{ "missing closing ", "缺少闭合的 " },
-        // comptime_int 变量须 const：`variable of type 'X' must be const or comptime`——用一对短语把 “variable of type X” 重排为中文的“变量（类型 X）”，
-        // 闭括号搭在第二段开头，既保住类型操作数 'X'、又拼出自然语序（const→常数、comptime→计期 用真实别名）。
-        .{ "variable of type ", "变量（类型 " },
-        .{ " must be const or comptime", "）必须是 `常数`（const）或 `计期`（comptime）" },
-        .{ "error union type", "错误联合类型" },
-        .{ "optional type", "可选类型" }, // `expected optional type, found 'i64'`（对非可选值用 `.?`）：`expected `/`, found ` 已由上面短语翻译，这里补中间描述词；'i64' 类型签名保留。
-        .{ "does not support", "不支持" },
-        .{ "field access", "字段访问" },
-        .{ "not a function", "不是函数" },
-        .{ "cannot dereference non-pointer", "不能解引用非指针" },
-        .{ "invalid escape character", "非法转义字符" },
-        .{ " is invalid", " 无效" }, // `'struct X' is invalid` 之类：保住被引号包裹的操作数（类型/名字），仅译尾部谓语；配套的 `说明: 声明容器…` 走 packs 给正确写法。
-        .{ "length ", "长度 " },
-        .{ " here", " 在此处" },
-    };
+    const pairs: []const [2][]const u8 = &runner_pairs;
     var out: std.ArrayList(u8) = .empty;
     var i: usize = 0;
     while (i < s.len) {
@@ -976,6 +983,28 @@ test "localizeRunner 最长超串优先：裸复数 arguments 整体替换不残
     try hasSub(out, "2");
     try hasSub(out, "3");
     try noSub(out, "argument");
+}
+
+test "localizeRunner 短语表不变量：表序靠前条目不得是靠后条目的严格前缀（防前缀劫持，第 92 轮护栏）" {
+    // localizeRunner 匹配是逐偏移 startsWith 首中即停——若表序靠前的 pair p 是另一靠后 pair q
+    // 的**严格前缀**，则同偏移 p 永久截胡 q：q 条目失效、译文静默劣化且编译/跑测均不报错。
+    // 现表的三处排序人肉注释（`argument(s)`/`arguments` 先于 `argument`、` for type '` 先于
+    // `type '`）即此约束的实例；但注释提醒不了后来者——只有全表扫描才能自动拦截插错序。
+    // 同长度重复键一并拒绝（靠后条目成永不命中的死码）。注：`length `/`index ` 那类靠
+    // **不同偏移**各自命中、不属同偏移前缀竞争，不受本不变量约束、也不应被它误拦。
+    for (runner_pairs, 0..) |p, i| {
+        for (runner_pairs[i + 1 ..], 0..) |q, j| {
+            const k = i + 1 + j;
+            if (std.mem.eql(u8, p[0], q[0])) {
+                std.debug.print("重复短语条目: #{d} 与 #{d} `{s}`\n", .{ i, k, p[0] });
+                return error.DuplicatePairInTable;
+            }
+            if (q[0].len > p[0].len and std.mem.startsWith(u8, q[0], p[0])) {
+                std.debug.print("前缀劫持: #{d} `{s}` 是 #{d} `{s}` 的严格前缀\n", .{ i, p[0], k, q[0] });
+                return error.PrefixHijackInTable;
+            }
+        }
+    }
 }
 
 test "诊断回译：未使用循环标签/语句结束符缺失/'an identifier' 描述符不泄漏英文" {
