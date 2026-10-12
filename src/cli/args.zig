@@ -918,6 +918,32 @@ test "normalizeRelPath：解 ./../、统一分隔、越界保留前导 .." {
     try std.testing.expectEqualStrings("a/b", c);
 }
 
+// 护栏（第 119 轮证伪落位）：normalizeRelPath 的「连续多级前导 `..` 逐级保留」分支
+// （L840 else 之「segs 非空且末段已是 .. → 追加」子路）此前零直调——既有测 L913
+// `src\sub\..\..\..\x` 只在 segs 被清空后经 `len==0` 支追加单个 ..，从未走到「末段
+// 已 .. 再追加 ..」的多级累加。此支是 resolveEmbedZzRel 越根判定、embedPathStaysWithin
+// 越界写守卫赖以识别「逃出 N 层」的不变量：若误改判据去掉 `!eql(末段,"..")` → `../../x`
+// 塌成 `x`，多级上溯被下报、越界路径伪装成工程内相对路径。本测钉死任意多个前导 .. 全数保留。
+test "normalizeRelPath：连续多级前导 .. 逐级保留不折叠（越界深度即安全边界，第 119 轮证伪落位）" {
+    const gpa = std.testing.allocator;
+    // 双 .. 起头、无先行真实段：两段 .. 皆保留（命中「末段已是 .. → 追加」子路）。
+    const a = try normalizeRelPath(gpa, "../../x");
+    defer gpa.free(a);
+    try std.testing.expectEqualStrings("../../x", a);
+    // 三连 .. 亦全数保留。
+    const b = try normalizeRelPath(gpa, "../../../y");
+    defer gpa.free(b);
+    try std.testing.expectEqualStrings("../../../y", b);
+    // 真实段先被抵消、余下两级 .. 保留（混合形）。
+    const c = try normalizeRelPath(gpa, "src/../../../z");
+    defer gpa.free(c);
+    try std.testing.expectEqualStrings("../../z", c);
+    // 纯 `../..`（无尾段）两级都留，不退化。
+    const d = try normalizeRelPath(gpa, "../..");
+    defer gpa.free(d);
+    try std.testing.expectEqualStrings("../..", d);
+}
+
 test "embedPathStaysWithin：同目录/子目录/包内 ../ 允许，越出镜像根与绝对路径拒绝" {
     const gpa = std.testing.allocator;
     // base=.zzc/gen/src、root=.zzc/gen：
