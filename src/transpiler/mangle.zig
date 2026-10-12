@@ -305,3 +305,44 @@ test "D36：不同母语名撞同一 ASCII 编号源头拒——propagate error.
     // putExisting 直调面同样拒撞号（不经 parseSymbolText 的调用方同受保护）。
     try std.testing.expectError(error.DuplicateSymbol, t2.putExisting("乙", "z_1"));
 }
+
+test "护栏：转码词边界/编号解析纯谓词边界形——strict 整词与 lenient 尾数语义不对称、溢出退化不崩（第 111 轮证伪落位）" {
+    // 承 108/109/110 方法论：isIdentByte/parseZNumber/trailingNumber 三个纯谓词决定 reserveZInText
+    // 的词边界预留（D16：扫源码把独立成词的 z_<十进制> 编号预留、防母语名 intern 撞用户手写 z_N）
+    // 与 relocate/putExisting 的尾号提取（D36 撞号避让），此前仅经 reserve 系列端到端测间接触达、
+    // 零直调覆盖（脚本实测测试区直调为 0）。逐例推演证伪皆安全，本测把结论钉成回归防线：
+    // parseZNumber「整词严格」与 trailingNumber「尾数宽松」的语义不对称须锁定（前者用于扫任意文本、
+    // 必须整段恰为 z_+数字才认，故 az_1/z_1x/zz_1 在极大标识符段上不误命中预留；后者作用于已是 z_N
+    // 形的存量名、只取尾部连续数字），溢出/畸形一律退化 null 不 panic（未来改动破边界即红）。
+    // 护栏测自身推演也须实跑自证（承 108 轮教训）。
+
+    // isIdentByte：ASCII 字母/数字/下划线为标识符字节，其余（空白/标点/UTF-8 多字节）皆词边界。
+    try std.testing.expect(isIdentByte('a'));
+    try std.testing.expect(isIdentByte('Z'));
+    try std.testing.expect(isIdentByte('0'));
+    try std.testing.expect(isIdentByte('_'));
+    try std.testing.expect(!isIdentByte(' '));
+    try std.testing.expect(!isIdentByte('.'));
+    try std.testing.expect(!isIdentByte(0xFF)); // 非 ASCII 字节（CJK 续字节等）恒判词边界
+
+    // parseZNumber：整段须恰为 `z_` + 一或多十进制数字——前缀/后缀/缺数字一律 null（词边界严格）。
+    try std.testing.expectEqual(@as(?usize, 1), parseZNumber("z_1"));
+    try std.testing.expectEqual(@as(?usize, 99), parseZNumber("z_99"));
+    try std.testing.expectEqual(@as(?usize, 0), parseZNumber("z_0")); // 编号 0 合法整词
+    try std.testing.expectEqual(@as(?usize, null), parseZNumber("z_")); // len<3、无数字
+    try std.testing.expectEqual(@as(?usize, null), parseZNumber("az_1")); // 前缀污染非整词
+    try std.testing.expectEqual(@as(?usize, null), parseZNumber("z_1x")); // 后缀污染
+    try std.testing.expectEqual(@as(?usize, null), parseZNumber("zz_1")); // 非 z_ 前缀
+    try std.testing.expectEqual(@as(?usize, null), parseZNumber("z_99999999999999999999999999")); // 溢出退化
+
+    // trailingNumber：只取尾部连续数字段（宽松、不校验 z_ 前缀）——与 parseZNumber 整词严格刻意不对称；
+    // 结尾无数字/溢出退化 null。
+    try std.testing.expectEqual(@as(?usize, 12), trailingNumber("z_12"));
+    try std.testing.expectEqual(@as(?usize, 12), trailingNumber("_12")); // 只认尾数、不校前缀（对照 parseZNumber 拒此形）
+    try std.testing.expectEqual(@as(?usize, 9), trailingNumber("x9"));
+    try std.testing.expectEqual(@as(?usize, 2), trailingNumber("z_1_2")); // 尾段独立取数、不要求整词
+    try std.testing.expectEqual(@as(?usize, null), trailingNumber("z_")); // 结尾无数字
+    try std.testing.expectEqual(@as(?usize, null), trailingNumber("abc"));
+    try std.testing.expectEqual(@as(?usize, null), trailingNumber("")); // 空串
+    try std.testing.expectEqual(@as(?usize, null), trailingNumber("z_99999999999999999999999999")); // 溢出退化
+}
