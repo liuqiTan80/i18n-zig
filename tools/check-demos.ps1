@@ -19,6 +19,21 @@ $isWin = ($env:OS -eq "Windows_NT")
 $ext = if ($isWin) { ".exe" } else { "" }
 $zzc = Join-Path $root ("zig-out/bin/zzc" + $ext)
 
+# Native dialect keyword forms, built from code points (script must stay pure
+# ASCII; PS 5.1 -File misreads BOM-less UTF-8 as GBK). Since round 99 the .zz
+# purity gate rejects ASCII forms of keywords that have a native mapping, so the
+# embedded guard sources below must be written in native word forms. Standard
+# library paths (std/debug/print/process/exit/.len) are aliases/interop territory
+# and stay ASCII. Local const is intentionally named ASCII `std` (not a keyword).
+function Native([int[]]$cps) { -join ($cps | ForEach-Object { [char]$_ }) }
+$N_const  = Native 0x5E38,0x6570            # chang-shu
+$N_import = Native 0x5BFC,0x5165            # dao-ru  (@import)
+$N_pub    = Native 0x516C,0x5F00            # gong-kai
+$N_fn     = Native 0x51FD,0x6570            # han-shu
+$N_main   = Native 0x4E3B,0x51FD,0x6570     # zhu-han-shu (main)
+$N_void   = Native 0x7A7A                   # kong  (void)
+$N_embed  = Native 0x5D4C,0x5165,0x6587,0x4EF6 # qian-ru-wen-jian (@embedFile)
+
 function Read-B([string]$p) {
     if (Test-Path $p) { return [System.IO.File]::ReadAllBytes($p) } else { return @() }
 }
@@ -100,10 +115,10 @@ if (Test-Path $g) { Remove-Item -Recurse -Force $g }
 New-Item -ItemType Directory -Force -Path (Join-Path $g "src") | Out-Null
 $natName = [string][char]0x6D4B + [string][char]0x8BD5 + [string][char]0x7B26 + [string][char]0x53F7 # cjk native identifier built from code points
 $gsrc = @"
-const std = @import("std");
+$N_const std = $N_import("std");
 
-pub fn main() !void {
-    const $natName = 7;
+$N_pub $N_fn $N_main() !$N_void {
+    $N_const $natName = 7;
     std.debug.print("{d}\n", .{$natName});
     std.process.exit(7);
 }
@@ -148,11 +163,11 @@ New-Item -ItemType Directory -Force -Path (Join-Path $ga "src") | Out-Null
 $assetBytes = $encNoBom.GetBytes("EMBED-ASSET-CONTENT-12345") # 25 bytes, ASCII for stable comparison
 [System.IO.File]::WriteAllBytes((Join-Path $ga ("src\" + $assetName)), $assetBytes)
 $gaSrc = @"
-const std = @import("std");
+$N_const std = $N_import("std");
 
-const embedA = @embedFile("$assetName");
+$N_const embedA = $N_embed("$assetName");
 
-pub fn main() void {
+$N_pub $N_fn $N_main() $N_void {
     std.debug.print("{d}\n", .{embedA.len});
 }
 "@
@@ -189,11 +204,11 @@ New-Item -ItemType Directory -Force -Path (Join-Path $gb "src") | Out-Null
 $escSide = Join-Path $root (".zig-cache\" + $escName)
 [System.IO.File]::WriteAllBytes($escSide, $encNoBom.GetBytes("OUTSIDE"))
 $gbSrc = @"
-const std = @import("std");
+$N_const std = $N_import("std");
 
-const embedB = @embedFile("../../$escName");
+$N_const embedB = $N_embed("../../$escName");
 
-pub fn main() void {
+$N_pub $N_fn $N_main() $N_void {
     std.debug.print("{d}\n", .{embedB.len});
 }
 "@

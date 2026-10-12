@@ -336,6 +336,17 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
             }
             return error.Failed;
         }
+        // 纯母语强制（第 99 轮）：.zz 源不得混入英文关键字/类型词形——AI 生成方言代码的
+        // 半中半英混搭旧行为是无声透传、方言纯度静默降级；与词法检查同形制母语报错。
+        var eng = translate.findEnglishWordForms(gpa_, lang, nat_src) catch return error.Failed;
+        defer eng.deinit();
+        if (eng.items.len > 0) {
+            for (eng.items) |v| {
+                const lc = ColumnMap.lineColOf(nat_src, v.off);
+                printErr("{s}:{d}:{d}: 纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", .{ rel, lc.line, lc.col, v.word, v.native });
+            }
+            return error.Failed;
+        }
         const res = try translate.translate(gpa_, nat_src, lang, table);
         const gen = try genPathFor(gpa_, rel);
         // .zzc 内容缓存：生成结果与磁盘上已有产物逐字节一致时跳过写盘，

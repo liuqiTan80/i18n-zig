@@ -738,3 +738,220 @@ fn expectNoEnglishSentence(text: []const u8) !void {
         i += 1;
     }
 }
+
+// ---------------------------------------------------------------------------
+// 纯母语强制（第 99 轮）：.zz 方言源必须 100% 母语词形。
+// AI 生成方言代码时常混入英文关键字/类型词（`const 数量 = 10;`、`主函数() !void`、
+// `fn x()`、`@embedFile`），旧行为是 ASCII 词元原样透传——混搭源无声通过、方言纯度
+// 静默降级。本检查在翻译前把「词形恰为语言包关键字段某键映射值」的 ASCII 词元坐实为
+// 违例（如 `const`：存在 `常数 = const`）。判据全取自被检的包、不硬编码任何词表（F2
+// 同源原则），任意语言包自动适配。
+// 豁免位（词元级，字符串/注释/多行串/@"..." 符号整体是单词元、天然不拆解）：
+//   - 数字字面量/含数字混合形：映射值皆纯字母词，全等判据天然放行；C ABI 领土名（`c_int`/`c_char`）
+//     不属任何语言包的映射值（它们不是 Zig 关键字、是 C 生态符号），同一判据天然豁免；
+//   - 无母语映射的 Zig 内建（`@as`/`@min`/`@intCast`…）：语言领土、无可反查对象，放行；
+//   - 点号后的段（`a.true` 型字段访问）：Zig 的 `.` 后接关键字合法，不报；
+//   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
+//     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
+// `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
+// 内建如 `@import`/`@embedFile`/`@TypeOf` 同样强制）。
+// 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
+
+pub const EnglishWord = struct {
+    off: usize,
+    /// 英文词形本体（包含 `@` 前缀；内存由 EnglishWords 容器持有）
+    word: []const u8,
+    /// 应改用的母语词形，多词形以 `/` 连接（如 `变量/让`；内存由 EnglishWords 容器持有）
+    native: []const u8,
+};
+
+/// 违例列表：容器自持 word/native 字符串内存，`deinit` 一次性回收。
+pub const EnglishWords = struct {
+    gpa: std.mem.Allocator,
+    items: []EnglishWord,
+
+    pub fn deinit(self: *EnglishWords) void {
+        for (self.items) |v| {
+            self.gpa.free(v.word);
+            self.gpa.free(v.native);
+        }
+        self.gpa.free(self.items);
+        self.* = undefined;
+    }
+};
+
+pub fn findEnglishWordForms(
+    gpa: std.mem.Allocator,
+    lang: Pack,
+    src: []const u8,
+) !EnglishWords {
+    const body = stripBom(src);
+    const toks = try lexer.scan(gpa, body);
+    defer gpa.free(toks);
+
+    var viol: std.ArrayList(EnglishWord) = .empty;
+    errdefer {
+        for (viol.items) |v| {
+            gpa.free(v.word);
+            gpa.free(v.native);
+        }
+        viol.deinit(gpa);
+    }
+
+    var i: usize = 0;
+    while (i < toks.len) : (i += 1) {
+        const t = toks[i];
+        if (t.kind != .ascii_word) continue;
+        const word = t.text(body);
+        // `@` 紧邻前缀：拼回内建全形再反查（`@embedFile` 而非 `embedFile`）。
+        const at_prefix = i > 0 and toks[i - 1].kind == .punct and
+            std.mem.eql(u8, toks[i - 1].text(body), "@") and toks[i - 1].off + 1 == t.off;
+        const full = if (at_prefix)
+            try std.fmt.allocPrint(gpa, "@{s}", .{word})
+        else
+            try gpa.dupe(u8, word);
+
+        // 反查：本词的词形是否恰为包内某关键字的映射值（O(关键词数)、词数极少）。
+        var hits: std.ArrayList([]const u8) = .empty;
+        defer hits.deinit(gpa);
+        var it = lang.keywords.iterator();
+        while (it.next()) |kv| {
+            if (std.mem.eql(u8, kv.value_ptr.*, full)) try hits.append(gpa, kv.key_ptr.*);
+        }
+        // 未命中 / 命中但在豁免位：本词形无需报告，释放 full 后继续（命中且需报告时下方移交 viol 持有）。
+        const dot_operand = i > 0 and toks[i - 1].kind == .punct and std.mem.eql(u8, toks[i - 1].text(body), ".");
+        const decl_name = prevIsDeclKeyword(lang, body, toks, i) or isExtendedDeclNamePos(lang, body, toks, i);
+        if (hits.items.len == 0 or dot_operand or decl_name) {
+            gpa.free(full);
+            continue;
+        }
+
+        const native = std.mem.join(gpa, "/", hits.items) catch {
+            gpa.free(full);
+            return error.OutOfMemory;
+        };
+        viol.append(gpa, .{ .off = if (at_prefix) toks[i - 1].off else t.off, .word = full, .native = native }) catch {
+            gpa.free(native);
+            gpa.free(full);
+            return error.OutOfMemory;
+        };
+        // 成功移交后 full/native 由 viol 持有（函数顶 errdefer 与 EnglishWords.deinit 负责回收）。
+    }
+    return .{ .gpa = gpa, .items = try viol.toOwnedSlice(gpa) };
+}
+
+test "纯母语强制：英文关键字/类型词混入方言源被坐实（先红）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 混入形一：声明关键字英文（`常数 x: i32 = 10;` 型半中半英的同族反例）
+    var v1 = try findEnglishWordForms(gpa, lang, "const 数量 = 10;\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("const", v1.items[0].word);
+    try std.testing.expectEqual(@as(usize, 0), v1.items[0].off);
+    try std.testing.expectEqualStrings("常数", v1.items[0].native);
+
+    // 混入形二：返回值类型词英文（demo 曾在线使用的 `!void` 形也被强制）
+    var v2 = try findEnglishWordForms(gpa, lang, "公开 函数 主函数() !void {\n}\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("void", v2.items[0].word);
+
+    // 混入形三：函数关键字英文 + 内建函数英文直通（`@embedFile` 有母语映射 `嵌入文件`、全形被拦）
+    var v3 = try findEnglishWordForms(gpa, lang, "fn 主函数() 空 {\n    返回 @embedFile(\"t\");\n}\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 2), v3.items.len);
+    try std.testing.expectEqualStrings("fn", v3.items[0].word);
+    try std.testing.expectEqualStrings("@embedFile", v3.items[1].word);
+    try std.testing.expectEqualStrings("嵌入文件", v3.items[1].native);
+}
+
+test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 真实 demo 级纯母语源：零违例
+    const clean =
+        \\常数 标准库 = 导入("std");
+        \\公开 函数 主函数() !空 {
+        \\    变量 数量: 整数 = 10;
+        \\    标准库.打印("hello {d}\n", .{数量});
+        \\}
+        \\'
+    ;
+    var v0 = try findEnglishWordForms(gpa, lang, clean);
+    defer v0.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v0.items.len);
+
+    // 数字字面量与含字母混合形（非映射值）天然放行；C ABI 名不属映射值放行；
+    // 字符串/注释/@"..."/点分链段不拆解、不检查；映射值恰作用户名时声明避让、交下游诊断。
+    const exempt =
+        \\常数 版本 = 12345;
+        \\常数 十六 = 0xFF;
+        \\常数 说明 = "constant 数量 and void";
+        \\// const fn void 混入都不报错
+        \\常数 符号 = @"true";
+        \\公开 外部 函数 调用外部(x: c_int) 调用约定(.c) c_char {
+        \\    返回 x;
+        \\}
+        \\常数 常量 = 1;
+        \\常数 结构 = .{ .true = 1 };
+        \\常数 路径 = "sub/mod";
+        \\'
+    ;
+    var v1 = try findEnglishWordForms(gpa, lang, exempt);
+    defer v1.deinit();
+    if (v1.items.len > 0) std.debug.print("exempt misfires: {s}\n", .{v1.items[0].word});
+    try std.testing.expectEqual(@as(usize, 0), v1.items.len);
+}
+
+test "纯母语强制：任意语言包泛化——反查映射值不硬编码中文表" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    // 合成非 zh 包：值集合与 zh 不同，验证判据取自考的包而非硬编码清单
+    const synthetic =
+        \\$name = eo
+        \\$code = eo
+        \\[keywords]
+        \\konstant = const
+        \\funkcio = fn
+        \\tipo = void
+        \\[aliases]
+        \\ĉefa = main
+    ;
+    var lang = try Pack.parse(gpa, synthetic);
+    defer lang.deinit();
+    var v = try findEnglishWordForms(gpa, lang, "const x = 1;\nfn main() void {}\n");
+    defer v.deinit();
+    try std.testing.expectEqual(@as(usize, 3), v.items.len); // const / fn / void；main 属 aliases 领土不在关键字判据内
+    try std.testing.expectEqualStrings("const", v.items[0].word);
+    try std.testing.expectEqualStrings("fn", v.items[1].word);
+    try std.testing.expectEqualStrings("void", v.items[2].word);
+}
+
+test "纯母语强制：映射值恰作用户名时声明避让（与 D1 哲学一致、交下游更准诊断）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // `函数` 后的 `if` 居声明名位（方言词声明 + 英文名）：不报「请改母语」而交 zig 语法错
+    // （更准：若报请改母语反而误导用户去改一个本就合法的位置）。
+    const src = "函数 if() 空 {\n}\n";
+    var v = try findEnglishWordForms(gpa, lang, src);
+    defer v.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v.items.len);
+}
