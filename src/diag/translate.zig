@@ -320,6 +320,10 @@ const runner_pairs = [_][2][]const u8{
 fn localizeRunner(gpa: std.mem.Allocator, s: []const u8) ![]const u8 {
     const pairs: []const [2][]const u8 = &runner_pairs;
     var out: std.ArrayList(u8) = .empty;
+    // D51（第 107 轮）：D26/D29/D37/D49 泄漏族——循环内 try append/appendSlice 增长 OOM 返错时，
+    // 已累积的部分译文无人回收；同文件 unmangleText/renderDiag/translateStderr 皆 errdefer out.deinit，
+    // 唯独本函数缺席（不对称即铁证）。成功路径 toOwnedSlice 已移交所有权、errdefer 自动撤销。
+    errdefer out.deinit(gpa);
     var i: usize = 0;
     while (i < s.len) {
         var matched = false;
@@ -2453,6 +2457,32 @@ test "matchDiag 全表子串包含序守卫（D41 同族·表序不变量）" {
             }
         }
     }
+}
+
+// D51（第 107 轮）：D26/D29/D37/D49 泄漏族·OOM 错误路径形。不对称铁证：同文件四处 ArrayList 出生点
+// unmangleText/renderDiag/translateStderr 皆有 errdefer out.deinit，唯独本函数没有——
+// localizeRunner 循环内 try append/appendSlice 增长 OOM 返错，已累积的部分译文无人回收。
+// 生产主链走 arena 掩盖（同 D27/D37/D49 先例）、历轮直测全 arena 包裹盲区未暴。
+// 注入校准（承 D49 教训、零魔法数）：GPA 对同 size-class 增大走 extend_sent 原地扩展，
+// resize_fail_index=1 形下整链仅 1 次 alloc（实测坐实）——杀末次即杀首 alloc、缓冲尚未
+// 建立无从泄。改 resize_fail_index=0：所有原地 resize 一律失败，每次增长皆走
+// alloc+copy+free 回退，alloc 数随串长增长；**双跑同用 FailingAllocator**（cal.alloc_index
+// 直接计数）彻底消除跨工具分配序分歧；杀末次 alloc（fail_index=n-1）时 out 仍持上一缓冲 →
+// 旧形必泄、leaked 栈指认。
+test "D51（第 107 轮）localizeRunner 增长失败须回滚已累积译文（泄漏族·可确定性注入）" {
+    const back = std.testing.allocator;
+    const sample = "expected type 'u32', found pointer, expected statement, dependency loop detected";
+
+    // 校准跑：同配置只数不杀，alloc 总数 n 即注入跑可杀槽位数。
+    var cal = std.testing.FailingAllocator.init(back, .{ .resize_fail_index = 0 });
+    const ok = try localizeRunner(cal.allocator(), sample);
+    back.free(ok);
+    const n = cal.alloc_index;
+    try std.testing.expect(n >= 2); // 自锚：多次 alloc 存在，杀末次才有已累积缓冲可泄
+
+    // 注入跑：杀最后一次 alloc（旧缓冲仍在手）——旧形 errdefer 缺席、已累积 out 泄；修复后回滚干净。
+    var fa = std.testing.FailingAllocator.init(back, .{ .fail_index = n - 1, .resize_fail_index = 0 });
+    try std.testing.expectError(error.OutOfMemory, localizeRunner(fa.allocator(), sample));
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {
