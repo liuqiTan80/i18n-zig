@@ -171,3 +171,36 @@ test "D37：readWhole 编码封口错误路径不泄已分配缓冲（裸 testin
     defer std.testing.allocator.free(ok);
     try std.testing.expectEqualStrings("合法 utf8 内容", ok);
 }
+
+// 护栏（第 122 轮证伪落位）：readWhole 的超限封口 error.SourceTooLarge（L18 `error.StreamTooLong` 转换臂）
+// 此前零测——头注 L9-11 明文承诺「超过 max_source_bytes（10MB）在读取边界以 error.SourceTooLarge 反馈」，
+// 但无任何测构造超限文件 fired 该分支。此支 load-bearing：readFileRaw 用 .unlimited，若 readWhole 的
+// `Io.Limit.limited(max_source_bytes)` 被误抄成 `.unlimited` → 超限源静默全量读入（内存失控）而非以母语提示拒；
+// 若删 switch 的 StreamTooLong 转换臂 → 裸 Zig StreamTooLong 上抛、main 侧按 SourceTooLarge 的母语映射失配。
+test "readWhole 超限封口（B5/max_source_bytes）：限内放行、超限 1 字节即拒为 SourceTooLarge（非静默全读、非裸 StreamTooLong，第 122 轮证伪落位）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const probe = ".zig-cache/zzc_fileio_size_probe.txt";
+    defer std.Io.Dir.cwd().deleteFile(io, probe) catch {};
+
+    // ① 恰在限内（max_source_bytes - 1）：正常读取、内容等长（证 .limited 不误拦边界内）。
+    const ok = try gpa.alloc(u8, max_source_bytes - 1);
+    defer gpa.free(ok);
+    @memset(ok, 'x');
+    try writeWhole(io, probe, ok);
+    const read_ok = try readWhole(io, gpa, probe);
+    try std.testing.expectEqual(max_source_bytes - 1, read_ok.len);
+
+    // ② 超 1 字节（max_source_bytes + 1）：读取边界拒为 error.SourceTooLarge。误改 .unlimited → 此处会成功读回而红。
+    const big = try gpa.alloc(u8, max_source_bytes + 1);
+    defer gpa.free(big);
+    @memset(big, 'x');
+    try writeWhole(io, probe, big);
+    try std.testing.expectError(error.SourceTooLarge, readWhole(io, gpa, probe));
+}
