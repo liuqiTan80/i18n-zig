@@ -293,5 +293,47 @@ Remove-Item -Recurse -Force $gb46 -ErrorAction SilentlyContinue
 if ($d46Ok) { Write-Output "  [PASS] d46 guard: post-intern failure exits (check error, eject .fail) persist symbols faithfully" }
 else { $fail = $fail + 1 }
 
+# --- eject `.no_zig` branch e2e guard (round 102; round-60 manual verification is
+# hereby automated): with zig ABSENT from PATH, `zzc eject` must still exit 0, the
+# graduation artifacts must be complete (build.zig + zon WITHOUT fingerprint), and
+# both notices must stay in native wording (no raw error-name leak). Spawn failure
+# of a missing argv[0] is deterministic on Windows/Linux alike; the section skips
+# itself when zig is not on PATH at all (nothing to strip, outer build needs zig too).
+# Script stays pure ASCII: notice strings built from code points for assertions.
+Write-Output "== eject no-zig guard =="
+$zigCmd = Get-Command zig -ErrorAction SilentlyContinue
+if ($zigCmd) {
+    $zigDir = Split-Path -Parent $zigCmd.Source
+    $gz = Join-Path $root ".zig-cache/nozig_guard"
+    if (Test-Path $gz) { Remove-Item -Recurse -Force $gz }
+    New-Item -ItemType Directory -Force -Path (Join-Path $gz "src") | Out-Null
+    $gzSrc = "$N_pub $N_fn $N_main() $N_void { }`n"
+    [System.IO.File]::WriteAllText((Join-Path $gz "src\main.zz"), $gzSrc, $encNoBom)
+    $savedPath = $env:PATH
+    $env:PATH = ($savedPath -split ';' | Where-Object { $_ -ne $zigDir -and $_ -ne "" }) -join ';'
+    $gzp = Start-Process -FilePath $zzc -ArgumentList "eject out" -NoNewWindow -Wait -PassThru `
+        -WorkingDirectory $gz -RedirectStandardOutput (Join-Path $gz "o.txt") -RedirectStandardError (Join-Path $gz "e.txt")
+    $env:PATH = $savedPath
+    $gzOk = $true
+    if ($gzp.ExitCode -ne 0) { Write-Output ("  [FAIL] nozig guard: expected exit 0 on .no_zig path, got " + $gzp.ExitCode); $gzOk = $false }
+    if (-not (Test-Path (Join-Path $gz "out\build.zig"))) { Write-Output "  [FAIL] nozig guard: build.zig not written on .no_zig path"; $gzOk = $false }
+    $zonTxt = ""
+    $zonP = Join-Path $gz "out\build.zig.zon"
+    if (Test-Path $zonP) { $zonTxt = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($zonP)) } else { Write-Output "  [FAIL] nozig guard: build.zig.zon not written"; $gzOk = $false }
+    if ($zonTxt.Contains("fingerprint")) { Write-Output "  [FAIL] nozig guard: zon carries fingerprint despite no zig to probe a legal value"; $gzOk = $false }
+    # assertions: stdout must contain "wei-jian-ce-dao" (not-detected); stderr must NOT leak ASCII 'zzc:'-free raw names,
+    # and must contain "wei-neng-xiang" (could-not-query) native hint.
+    $oTxt = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((Join-Path $gz "o.txt")))
+    $eTxt = [System.IO.File]::ReadAllBytes((Join-Path $gz "e.txt"))
+    $sTxt = if ($eTxt.Length -gt 0) { [System.Text.Encoding]::UTF8.GetString($eTxt) } else { "" }
+    if (-not $oTxt.Contains((Native 0x672A,0x68C0,0x6D4B,0x5230))) { Write-Output "  [FAIL] nozig guard: native not-detected notice missing from stdout"; $gzOk = $false }
+    if (-not $sTxt.Contains((Native 0x672A,0x80FD,0x5411))) { Write-Output "  [FAIL] nozig guard: native could-not-query fingerprint hint missing from stderr"; $gzOk = $false }
+    if ($gzOk) { Write-Output "  [PASS] nozig guard: zig-absent eject exits 0 with complete artifacts and native notices" }
+    else { $fail = $fail + 1 }
+    Remove-Item -Recurse -Force $gz -ErrorAction SilentlyContinue
+} else {
+    Write-Output "  [SKIP] nozig guard: zig not on PATH (nothing to strip)"
+}
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
