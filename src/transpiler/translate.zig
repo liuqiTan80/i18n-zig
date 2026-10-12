@@ -823,7 +823,14 @@ pub fn findEnglishWordForms(
         defer hits.deinit(gpa);
         var it = lang.keywords.iterator();
         while (it.next()) |kv| {
-            if (std.mem.eql(u8, kv.value_ptr.*, full)) try hits.append(gpa, kv.key_ptr.*);
+            if (std.mem.eql(u8, kv.value_ptr.*, full)) {
+                // D49（第 105 轮）：hits 增长 OOM 时 full 已分配、尚未移交——裸 try 返错即泄；
+                // 与本函数 join/viol.append 的 catch 回滚同形（三处 OOM 路径须对称）。
+                hits.append(gpa, kv.key_ptr.*) catch {
+                    gpa.free(full);
+                    return error.OutOfMemory;
+                };
+            }
         }
         // 未命中 / 命中但在豁免位：本词形无需报告，释放 full 后继续（命中且需报告时下方移交 viol 持有）。
         const dot_operand = i > 0 and toks[i - 1].kind == .punct and std.mem.eql(u8, toks[i - 1].text(body), ".");
@@ -1076,4 +1083,73 @@ test "D48（第 104 轮）init 脚手架模板须零违例通过自家纯母语�
     defer table.deinit();
     const res = try translate(gpa, cli.initTemplate, lang, &table);
     try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "pub fn main() !void {") != null);
+}
+
+// TEMP-PROBE R105 已坐实假说并删除：全范围注入 k=0..7 仅 hits 桶槽（dupe 紧邻分配）产生
+// leaked [len: 5]（= dupe("const") 的 full），join/viol.append 槽因既有 catch 零泄漏——
+// 同一函数三处 OOM 路径唯独 hits.append 裸 try（不对称即铁证）。固定为下方正式测。
+
+test "D49（第 105 轮）findEnglishWordForms hits 增长失败须回收 full（D26/D29/D37 泄漏族·可确定性注入）" {
+    // 背景：违例词串 full（dupe/allocPrint）分配后、移交 viol 前有一段裸 try 窗口：`try hits.append`
+    // 若 OOM 直接返错无人回收 full（生产走 arena 被整段回吞掩盖、历轮直测全用 arena 包裹故未暴——
+    // 同 D27/D37 盲区先例）。修法 = 同函数 join/viol.append 已有的 catch 回滚同形。
+    // 注入槽零魔法数：计数跑枚举全部分配，拿 len==违例词字节数的槽（即 dupe full），目标 = 紧邻其后
+    // 的分配（hits 桶增长——dupe 后第一笔分配就是它）；槽形断言防漂移。
+    const Counter = struct {
+        backing: std.mem.Allocator,
+        lens: [64]usize = undefined,
+        count: usize = 0,
+        fn alloc(ctx: *anyopaque, len: usize, a: std.mem.Alignment, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            if (self.count < self.lens.len) self.lens[self.count] = len;
+            self.count += 1;
+            return self.backing.rawAlloc(len, a, ra);
+        }
+        fn resize(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, nl: usize, ra: usize) bool {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawResize(m, a, nl, ra);
+        }
+        fn remap(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, nl: usize, ra: usize) ?[*]u8 {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            return self.backing.rawRemap(m, a, nl, ra);
+        }
+        fn free(ctx: *anyopaque, m: []u8, a: std.mem.Alignment, ra: usize) void {
+            const self: *@This() = @ptrCast(@alignCast(ctx));
+            self.backing.rawFree(m, a, ra);
+        }
+        fn allocator(self: *@This()) std.mem.Allocator {
+            return .{ .ptr = self, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+        }
+    };
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const setup = arena.allocator();
+    var lang = try Pack.parse(setup, zh_pack);
+    defer lang.deinit();
+
+    const src = "const 数量 = 10;\n";
+    const back = std.testing.allocator;
+    var ca = Counter{ .backing = back };
+    const cgpa = ca.allocator();
+    var w0 = try findEnglishWordForms(cgpa, lang, src);
+    w0.deinit();
+    try std.testing.expect(ca.count <= ca.lens.len); // 计数数组未溢出（溢出则槽分析失真）
+
+    // 唯一 len==5（"const"）的分配即 dupe full；违例词改长串须同步此锚，不属互操作面。
+    var dupe_idx: ?usize = null;
+    for (ca.lens[0..ca.count], 0..) |l, i| {
+        if (l == 5) {
+            try std.testing.expect(dupe_idx == null); // 锚须唯一，防多笔同长分配偷换槽位
+            dupe_idx = i;
+        }
+    }
+    const target = (dupe_idx orelse return error.AnchorNotFound) + 1;
+    try std.testing.expect(target < ca.count); // 紧随其后的分配（hits 桶）必存在
+    try std.testing.expect(ca.lens[target] >= 16); // 槽形：hits 存串切片，一槽至少 16 字节
+
+    // 注入跑：full 成功、杀 hits 桶——旧形漏 full（测毕 testing.allocator 报 leaked 红，
+    // 本轮探针实证 leaked len:5）；修复形回滚后无泄漏、错仍上传。
+    var failing = std.testing.FailingAllocator.init(back, .{ .fail_index = target });
+    try std.testing.expectError(error.OutOfMemory, findEnglishWordForms(failing.allocator(), lang, src));
 }
