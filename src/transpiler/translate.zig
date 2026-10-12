@@ -746,6 +746,28 @@ fn expectNoEnglishSentence(text: []const u8) !void {
     }
 }
 
+// 护栏（第 117 轮证伪落位）：`expectNoEnglishSentence` 系「防英文泄漏」词表规范守卫二的判定核，
+// 仅经 L707-708 对 pack 每条 message/tip 间接调用、其自身边界此前零直调覆盖——≥ 3 恰等阈值、
+// 反引号代码引用豁免、空白不断链 vs 标点/CJK 重置、单词只计一次（词首检测）全无人钉。若阈值/
+// 豁免/重置被误改，守卫会静默假阴（放过真英文泄漏）或假阳（误杀合法反引号码引），而 pack 消息
+// 测仍全绿。本测直调钉住。
+test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁免 + 空白不断链 vs 标点/CJK 重置 + 单词计一（词表规范守卫二判定核，第 117 轮）" {
+    // ① 恰三个空白分隔英文词 → 判为未译句（≥ 3 阈值下界命中；空白不重置计数）。
+    try std.testing.expectError(error.UntranslatedEnglishSentence, expectNoEnglishSentence("foo bar baz"));
+    // ② 恰两个英文词 → 放行（阈值须 >=3、证非 >=2）。
+    try expectNoEnglishSentence("foo bar");
+    // ③ 反引号包裹的代码引用即便含 ≥3 英文词亦豁免（合法码引不误杀）。
+    try expectNoEnglishSentence("`unused local variable`");
+    // ④ 单个多字母词只计一次（词首检测：仅字母且前非字母才 run+1）。
+    try expectNoEnglishSentence("untranslatedsentence");
+    // ⑤ 句点等标点重置计数（非字母且非空白 → run=0）：x.y.z 三段不误判为三词句。
+    try expectNoEnglishSentence("x.y.z");
+    // ⑥ 纯 CJK（含空格分隔）无 ASCII 字母 → 恒放行。
+    try expectNoEnglishSentence("变量 数量 名称");
+    // ⑦ CJK 夹在中间重置连词计数：foo 变量 bar baz 仅 tail 两词连、不达 3。
+    try expectNoEnglishSentence("foo 变量 bar baz");
+}
+
 // ---------------------------------------------------------------------------
 // 纯母语强制（第 99 轮）：.zz 方言源必须 100% 母语词形。
 // AI 生成方言代码时常混入英文关键字/类型词（`const 数量 = 10;`、`主函数() !void`、
