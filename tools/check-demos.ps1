@@ -528,5 +528,71 @@ Remove-Item -Force $od, $ed -ErrorAction SilentlyContinue
 if ($dkOk) { Write-Output "  [PASS] dispatch guard: unknown/typo subcommands exit 2 with native hint (stdout clean); help-flags/bare/version exit 0 with usage on stdout" }
 else { $fail = $fail + 1 }
 
+# --- `zzc build` exit-code / artifact / native-hint contract guard (round 132): the
+# .build branch of cmdBuild (main.zig L536-616, OUTSIDE the unit-test graph) had ZERO
+# e2e coverage -- the demos main chain only runs `run`/`check`/`eject`, and d46 pins
+# the exit-1 bail shape only for check/eject failures. `error: Failed` non-leak was
+# asserted only on the r9g external-pack path. Two faces pinned here: (A) a clean
+# source builds with exit 0, a NATIVE artifact hint on stdout ("chan-wu"), and the
+# produced .zzc/bin exe is real and runs standalone; (B) a semantic-error source
+# exits 1 (not 0 = anti-CI-misjudge, not 2 = not a usage error), localizes the diag
+# natively on stderr ("cuo-wu" prefix), keeps stdout clean, leaks no raw error name,
+# and emits no artifact. Script stays pure ASCII; native words from code points.
+Write-Output "== build exit-code & artifact guard =="
+$bldOk = $true
+$N_chanhao = Native 0x4EA7,0x7269          # chan-wu (artifact), native success hint
+$N_cuowu   = Native 0x9519,0x8BEF          # cuo-wu (error), native diag prefix
+# (A) clean source -> exit 0 + native hint on stdout + runnable artifact
+$bA = Join-Path $root ".zig-cache/bldA_guard"
+if (Test-Path $bA) { Remove-Item -Recurse -Force $bA }
+New-Item -ItemType Directory -Force -Path (Join-Path $bA "src") | Out-Null
+$bSrcA = @"
+$N_const std = $N_import("std");
+
+$N_pub $N_fn $N_main() $N_void {
+    std.debug.print("ok132", .{});
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $bA "src\main.zz"), $bSrcA, $encNoBom)
+$bAo = Join-Path $bA "a.out"; $bAe = Join-Path $bA "a.err"
+$bpA = Start-Process -FilePath $zzc -ArgumentList "build" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $bA -RedirectStandardOutput $bAo -RedirectStandardError $bAe
+if ($bpA.ExitCode -ne 0) { Write-Output ("  [FAIL] build A: clean build expected exit 0, got " + $bpA.ExitCode); $bldOk = $false }
+if (-not (Read-T $bAo).Contains($N_chanhao)) { Write-Output "  [FAIL] build A: native 'chan-wu' artifact hint missing from stdout"; $bldOk = $false }
+$bExe = Join-Path $bA ".zzc\bin\main.exe"
+if (-not (Test-Path $bExe)) { Write-Output "  [FAIL] build A: artifact missing under .zzc/bin (emit-bin wiring broken)"; $bldOk = $false }
+else {
+    $beo = Join-Path $bA "exe.out"; $bee = Join-Path $bA "exe.err"
+    $pe = Start-Process -FilePath $bExe -NoNewWindow -Wait -PassThru -RedirectStandardOutput $beo -RedirectStandardError $bee
+    if ($pe.ExitCode -ne 0) { Write-Output ("  [FAIL] build A: built artifact exited " + $pe.ExitCode + " standalone (corrupt/unrunnable)"); $bldOk = $false }
+}
+Remove-Item -Recurse -Force $bA -ErrorAction SilentlyContinue
+# (B) semantic-error source -> exit 1 + native diag + stdout clean + no raw leak + no artifact
+$bB = Join-Path $root ".zig-cache/bldB_guard"
+if (Test-Path $bB) { Remove-Item -Recurse -Force $bB }
+New-Item -ItemType Directory -Force -Path (Join-Path $bB "src") | Out-Null
+$bJia = Native 0x7532
+$bZi = Native 0x5B57,0x8282
+$bSrcB = @"
+$N_const ${bJia}: $bZi = 300;
+
+$N_pub $N_fn $N_main() $N_void {
+    _ = ${bJia};
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $bB "src\main.zz"), $bSrcB, $encNoBom)
+$bBo = Join-Path $bB "b.out"; $bBe = Join-Path $bB "b.err"
+$bpB = Start-Process -FilePath $zzc -ArgumentList "build" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $bB -RedirectStandardOutput $bBo -RedirectStandardError $bBe
+$tbBo = Read-T $bBo; $tbBe = Read-T $bBe
+if ($bpB.ExitCode -ne 1) { Write-Output ("  [FAIL] build B: semantic error expected exit 1 (not 0=CI-misjudge, not 2=usage), got " + $bpB.ExitCode); $bldOk = $false }
+if (-not $tbBe.Contains($N_cuowu)) { Write-Output "  [FAIL] build B: native 'cuo-wu' diagnostic missing from stderr"; $bldOk = $false }
+if ($tbBo.Trim().Length -ne 0) { Write-Output "  [FAIL] build B: failure leaked text to stdout (hint must be stderr-only)"; $bldOk = $false }
+if ($tbBe.Contains("error: Failed") -or $tbBo.Contains("error: Failed")) { Write-Output "  [FAIL] build B: raw error name / stack trace leaked (silent bail shape required)"; $bldOk = $false }
+if (Test-Path (Join-Path $bB ".zzc\bin\main.exe")) { Write-Output "  [FAIL] build B: artifact emitted despite compile failure"; $bldOk = $false }
+Remove-Item -Recurse -Force $bB -ErrorAction SilentlyContinue
+if ($bldOk) { Write-Output "  [PASS] build guard: clean build exits 0 with native artifact hint and runnable exe; failed build exits 1 with native diag only, no raw error-name leak, no artifact" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
