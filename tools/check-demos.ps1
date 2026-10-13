@@ -53,6 +53,9 @@ $N_fn     = Native 0x51FD,0x6570            # han-shu
 $N_main   = Native 0x4E3B,0x51FD,0x6570     # zhu-han-shu (main)
 $N_void   = Native 0x7A7A                   # kong  (void)
 $N_embed  = Native 0x5D4C,0x5165,0x6587,0x4EF6 # qian-ru-wen-jian (@embedFile)
+$N_int32  = Native 0x4E2D,0x6574,0x6570     # zhong-zheng-shu (i32)
+$N_ret    = Native 0x8FD4,0x56DE            # fan-hui (return)
+$N_dezhi  = Native 0x5F97,0x503C            # de-zhi (identifier: library fn name; must not be a keyword form)
 
 function Read-B([string]$p) {
     if (Test-Path $p) { return [System.IO.File]::ReadAllBytes($p) } else { return @() }
@@ -680,6 +683,86 @@ if ($tpAe.Trim().Length -ne 0) { Write-Output "  [FAIL] test A: 'zzc test' leake
 if (Test-Path (((Join-Path $tA ".zzc/bin/main") + $ext))) { Write-Output "  [FAIL] test A: 'zzc test' emitted a binary artifact (no-emit-bin contract broken)"; $tOk = $false }
 Remove-Item -Recurse -Force $tA -ErrorAction SilentlyContinue
 if ($tOk) { Write-Output "  [PASS] test guard: clean 'zzc test' exits 0 with native 'zig test passed' hint on stdout, no 'artifact' conflation, no stderr leak, emits no binary" }
+else { $fail = $fail + 1 }
+
+# --- `zzc check` success-path contract guard (round 136): cmdCheck ends with the zzc-owned
+# native hint "jian-ch-a tong-guo: N fang-yan wen-jian ..." (main.zig L531); main.zig is OUTSIDE
+# the unit-test graph. The demos loop already exits-0-checks `zzc check` per demo (that catch
+# covers the multi-file build-exe-shape regression only); NO guard ever asserts the success
+# MESSAGE itself -- deleting L531 would be caught nowhere else. The fail path (exit 1 + native
+# diag + stdout-clean + no 'error: Failed') is already pinned by the build guard B (round 132,
+# same collect/translate/zigCompile chain) -- not re-pinned here. Sabotage L531 -> hint gone ->
+# only this guard turns red while the 187-test graph stays green.
+Write-Output "== check success-path contract guard =="
+$kOk = $true
+$N_fangyanwenjian = Native 0x65B9,0x8A00,0x6587,0x4EF6   # fang-yan wen-jian (dialect files), part of the check hint
+$kA = Join-Path $root ".zig-cache/chkA_guard"
+if (Test-Path $kA) { Remove-Item -Recurse -Force $kA }
+New-Item -ItemType Directory -Force -Path (Join-Path $kA "src") | Out-Null
+$kSrcMain = @"
+$N_const std = $N_import("std");
+
+$N_pub $N_fn $N_main() $N_void {
+    $N_const lib = $N_import("lib.zz");
+    std.debug.print("{d}", .{lib.$N_dezhi()});
+}
+"@
+$kSrcLib = @"
+$N_pub $N_fn $N_dezhi() $N_int32 {
+    $N_ret 136;
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $kA "src/main.zz"), $kSrcMain, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $kA "src/lib.zz"), $kSrcLib, $encNoBom)
+$koA = Join-Path $kA "k.out"; $keA = Join-Path $kA "k.err"
+$kpA = Start-Process -FilePath $zzc -ArgumentList "check" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $kA -RedirectStandardOutput $koA -RedirectStandardError $keA
+$koAt = Read-T $koA; $keAt = Read-T $keA
+if ($kpA.ExitCode -ne 0) { Write-Output ("  [FAIL] check A: clean 'zzc check' expected exit 0, got " + $kpA.ExitCode); $kOk = $false }
+if (-not $koAt.Contains($N_tongguo)) { Write-Output "  [FAIL] check A: native 'tong-guo' success hint missing from stdout (cmdCheck L531 hint dropped)"; $kOk = $false }
+if (-not $koAt.Contains($N_fangyanwenjian)) { Write-Output "  [FAIL] check A: hint lacks 'fang-yan wen-jian' phrasing (message degraded)"; $kOk = $false }
+if ($keAt.Trim().Length -ne 0) { Write-Output "  [FAIL] check A: 'zzc check' leaked text to stderr (success hint must be stdout-only)"; $kOk = $false }
+Remove-Item -Recurse -Force $kA -ErrorAction SilentlyContinue
+if ($kOk) { Write-Output "  [PASS] check guard: clean two-file project 'zzc check' exits 0 with native success hint on stdout, no stderr leak" }
+else { $fail = $fail + 1 }
+
+# --- `zzc lang` info-line consistency guard (round 136): the detail line prints Pack fields
+# (main.zig L972, OUTSIDE the unit-test graph) whose truth source is the pack file itself
+# ($name/$code in src/lang/packs/Chinese.txt) -- the SAME display/manifest dual-copy pattern the
+# version guard (round 134) pinned for version_str vs build.zig.zon. Drift here makes `zzc lang`
+# lie about the loaded pack (user picks a name that does not exist). Also asserts the native
+# section headers exist (dropping the registerable-pack list would leave users without action).
+Write-Output "== lang info-consistency guard =="
+$lOk = $true
+$N_zhongwen = Native 0x4E2D,0x6587                     # zhong-wen: pack filename stem AND default $name value
+$N_dangqian = Native 0x5F53,0x524D,0x8BED,0x8A00,0x5305 # dang-qian yu-yan-bao (current language pack)
+$N_kezhuce = Native 0x53EF,0x6CE8,0x518C,0x5305         # ke-zhu-ce-bao (registerable packs)
+$colonF = [string][char]0xFF1A                          # fullwidth colon used by the detail line
+$packPath = Join-Path $root ("src/lang/packs/" + $N_zhongwen + ".txt")
+$packRaw = [System.IO.File]::ReadAllText($packPath, [System.Text.Encoding]::UTF8)
+$mName = [regex]::Match($packRaw, '(?m)^\$name\s*=\s*(.+?)\s*$')
+$mCode = [regex]::Match($packRaw, '(?m)^\$code\s*=\s*(.+?)\s*$')
+if (-not $mName.Success) { Write-Output "  [FAIL] lang guard: could not parse \$name from the embedded pack"; $lOk = $false }
+if (-not $mCode.Success) { Write-Output "  [FAIL] lang guard: could not parse \$code from the embedded pack"; $lOk = $false }
+$lo = Join-Path $root ".zig-cache/lgd.out"; $le = Join-Path $root ".zig-cache/lgd.err"
+$pl = Start-Process -FilePath $zzc -ArgumentList "lang" -NoNewWindow -Wait -PassThru -RedirectStandardOutput $lo -RedirectStandardError $le
+$loT = Read-T $lo; $leT = Read-T $le
+if ($pl.ExitCode -ne 0) { Write-Output ("  [FAIL] lang guard: 'zzc lang' expected exit 0, got " + $pl.ExitCode); $lOk = $false }
+if ($leT.Trim().Length -ne 0) { Write-Output "  [FAIL] lang guard: 'zzc lang' leaked text to stderr (info must be stdout-only)"; $lOk = $false }
+if (-not $loT.Contains($N_dangqian)) { Write-Output "  [FAIL] lang guard: native 'dang-qian yu-yan-bao' detail header missing"; $lOk = $false }
+if (-not $loT.Contains($N_kezhuce)) { Write-Output "  [FAIL] lang guard: native 'ke-zhu-ce-bao' registerable-list header missing (users left without action)"; $lOk = $false }
+if ($mName.Success) {
+    $shown = [regex]::Match($loT, [regex]::Escape($N_dangqian + $colonF) + '(.+?)\(').Groups[1].Value
+    if ($shown -ne $mName.Groups[1].Value) { Write-Output ("  [FAIL] lang guard: displayed pack name '" + $shown + "' != pack \$name '" + $mName.Groups[1].Value + "' (drift -- 'zzc lang' lies)"); $lOk = $false }
+}
+if ($mCode.Success) {
+    $shownCode = [regex]::Match($loT, [regex]::Escape($N_dangqian + $colonF) + '.+?\(([^)]*)\)').Groups[1].Value
+    if ($shownCode -ne $mCode.Groups[1].Value) { Write-Output ("  [FAIL] lang guard: displayed pack code '" + $shownCode + "' != pack \$code '" + $mCode.Groups[1].Value + "'"); $lOk = $false }
+    $after = $loT.Substring($loT.IndexOf($N_kezhuce) + $N_kezhuce.Length)
+    if (-not $after.Contains($mCode.Groups[1].Value + "(")) { Write-Output ("  [FAIL] lang guard: registerable list omits key '" + $mCode.Groups[1].Value + "' (list empty or degraded)"); $lOk = $false }
+}
+Remove-Item -Force $lo, $le -ErrorAction SilentlyContinue
+if ($lOk) { Write-Output "  [PASS] lang guard: 'zzc lang' exits 0, stdout-only, detail name/code match the embedded pack, registerable list carries the default key" }
 else { $fail = $fail + 1 }
 
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
