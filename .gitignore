@@ -12,3 +12,4 @@ logs/
 
 # zzc eject 毕业输出目录（可由 `zzc eject` 再生）
 **/standard/
+/_probe/
