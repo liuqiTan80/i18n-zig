@@ -220,3 +220,27 @@ test "toNative/toStd lo==0 恒等：空 map 与首条目之前查询原样返回
     try std.testing.expectEqual(@as(usize, 9), map.toStd(9));
     try std.testing.expectEqual(@as(usize, 12), map.toNative(10));
 }
+
+// 护栏（第 124 轮证伪落位）：lineColOf/lineText 的 CRLF（Windows）行尾源行为此前零直测——既有防御边界测（L175 族）
+// 全用纯 \n，74 轮 CRLF 回映测只经 LF/CRLF 两形一致比较间接兜底、绝对行列值与 lineText 行文本从未直钉；而 CRLF 源真可达形同 121 轮（记事本/autocrlf）。
+// 两条真行为须钉：① lineColOf 仅在 '\n' 分行——\r\n 只进一次行号（若「顺手修复」成也认 '\r' 即行号双进、
+// 报错行号全漂移）；② lineText 返回含尾随 \r 的行（下游 renderDiag 直拼 "  | {s}\n"、终端无害但勿误改）。
+test "lineColOf/lineText CRLF 行尾源：\\r\\n 只计一次换行、列自 '\\n' 后重起、lineText 含行尾 \\r 真行为钉（第 124 轮证伪落位）" {
+    // ① 首行内查询：行号 1；off 指向 \r 本身（字节 2）列按普通字符计为 3。
+    try std.testing.expectEqual(@as(usize, 1), lineColOf("ab\r\ncd", 0).line);
+    try std.testing.expectEqual(@as(usize, 1), lineColOf("ab\r\ncd", 0).col);
+    try std.testing.expectEqual(@as(usize, 3), lineColOf("ab\r\ncd", 2).col);
+    // ② 第二行查询：行号恰 2（\r\n 只当一次换行——本护栏核心钉）、列自 '\n' 后重起不含尾 \r。
+    const lc2 = lineColOf("ab\r\ncd", 4);
+    try std.testing.expectEqual(@as(usize, 2), lc2.line);
+    try std.testing.expectEqual(@as(usize, 1), lc2.col);
+    try std.testing.expectEqual(@as(usize, 2), lineColOf("ab\r\ncd", 5).col);
+    // ③ 混尾源（首行 \r\n、次行 \n）：逐行各进一次，第三行行号 3 非 4。
+    const lc3 = lineColOf("a\r\nb\ncd", 5);
+    try std.testing.expectEqual(@as(usize, 3), lc3.line);
+    try std.testing.expectEqual(@as(usize, 1), lc3.col);
+    // ④ lineText：首行含尾随 \r（真行为、非 \n）、第二行不含；混尾行中段取 "b"。
+    try std.testing.expectEqualStrings("ab\r", lineText("ab\r\ncd", 0));
+    try std.testing.expectEqualStrings("cd", lineText("ab\r\ncd", 4));
+    try std.testing.expectEqualStrings("b", lineText("a\r\nb\ncd", 3));
+}
