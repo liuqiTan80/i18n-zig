@@ -1,0 +1,16 @@
+# 行尾真相源（第 139 轮·用户拍板项③）
+#
+# 动机：zig 工具链的 fmt 门禁只认 LF 工作树——core.autocrlf=true 的克隆（Windows 贡献者
+# 默认、以及第 133 轮本地实捕的 CI runner 形）会把提交区的 LF 检出成 CRLF，于是
+# `zig fmt --check` 把整库 .zig 报成漂移、门禁无端全红。此前防护只写在流水线步骤里
+# （.gitcode/workflows/ci.yml 的临时 `git config core.autocrlf false` 三步），属「步骤级
+# 局部配置」而非仓库级声明：任何本机直跑四绿门禁或另建 CI 的人都会重新踩这个坑。
+# 本文件把该约束升为仓库真相源，令检出形制与提交区一致、与人本地 git 配置无关。
+
+# 工具链输入：.zig/.zon 必须 LF（fmt/build/ast-check 与提交区一致）
+*.zig text eol=lf
+*.zon text eol=lf
+
+# 行式语言包与方言源不在此声明：第 139 轮实测坐实，`.zz` 的行尾会进入用户可见诊断
+# （CRLF 源回显的源码引用行尾随 \r、LF 源无）——改其检出形制等于改转译行为，须另轮
+# 连同 demo 快照一起评估，不夹带进行尾配置变更。

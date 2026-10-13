@@ -812,5 +812,37 @@ Remove-Item -Force $goC, $geC -ErrorAction SilentlyContinue
 if ($gOk) { Write-Output "  [PASS] flag guard: --lang zh selects+echoes the pack, unknown names exit 2 with native hint (stdout clean), and the flag is stripped before argv reaches zig" }
 else { $fail = $fail + 1 }
 
+# --- EOL truth-source guard (round 139, user decision #3): the fmt gate above only proves
+# the CURRENT working tree is LF; it cannot see the declaration that KEEPS it LF. Measured
+# A/B on fresh clones (system core.autocrlf=true, the default Windows contributor/runner
+# shape): without .gitattributes every tracked .zig/.zon checks out CRLF and the repo-wide
+# fmt gate turns red on all 15 files with zero code changes; with it, checkout is LF and
+# the gate is green. So the declaration is load-bearing for every green gate elsewhere in
+# this script, yet it lives outside the unit-test graph and nothing pinned its existence.
+# Second assert pins the round-139 boundary: `.zz` is deliberately NOT normalized because
+# input EOL is observable (a CRLF dialect source keeps a trailing CR inside the rendered
+# source-line snippet of diagnostics, an LF one does not -- byte-diffed this round), so
+# normalizing it would silently refresh demo snapshots = a behavior change, own round only.
+Write-Output "== eol truth-source guard =="
+$eOk = $true
+$gaPath = Join-Path $root ".gitattributes"
+if (-not (Test-Path $gaPath)) {
+    Write-Output "  [FAIL] eol guard: .gitattributes missing -- the repo-level EOL declaration that keeps a fresh CRLF-defaulting clone out of the fmt gate was dropped"
+    $eOk = $false
+} else {
+    $gaTxt = [System.IO.File]::ReadAllText($gaPath)
+    if ($gaTxt -match '(?m)^\*\.zz\b') { Write-Output "  [FAIL] eol guard: .zz is now normalized by .gitattributes -- input EOL is observable in diagnostics and demo snapshots; this must be decided as its own round, not smuggled in"; $eOk = $false }
+}
+$rows = @(git ls-files --eol 2>$null | Where-Object { $_ -match '\.(zig|zon)$' })
+if ($rows.Count -eq 0) {
+    Write-Output "  [FAIL] eol guard: 'git ls-files --eol' yielded no .zig/.zon rows (git unavailable or repo shape changed -- this guard would idle silently)"
+    $eOk = $false
+}
+foreach ($r in $rows) {
+    if ($r -notmatch 'eol=lf') { Write-Output ("  [FAIL] eol guard: tracked source not pinned to LF checkout: " + $r); $eOk = $false }
+}
+if ($eOk) { Write-Output ("  [PASS] eol guard: repo-level EOL declaration present, all " + $rows.Count + " tracked .zig/.zon pinned to LF, dialect sources left EOL-transparent as measured") }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
