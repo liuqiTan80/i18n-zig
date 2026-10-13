@@ -8,9 +8,29 @@
 #   2) `zzc eject standard` export a standalone standard-Zig project
 #   3) `zig build` inside it and run the produced executable, capturing raw bytes
 # Compare bytes (encoding-independent) to prove dialect == graduated pure Zig.
+#
+# Cross-platform (round 133, D52): runs under powershell 5.1 (Windows) AND pwsh
+# on Linux, matching the CI matrix. All relative path fragments below use POSIX
+# "/" through Join-Path -- on Unix pwsh a backslash is a LITERAL FILENAME
+# character, so "src/main.zz" would create/read a single stray file and the
+# out-of-root containment asserts would silently never fire (false green).
 
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+
+# Repo-wide fmt gate (round 133): closes the round-83 blind spot where every
+# green-gate run only checked touched files under src/, so build.zig formatting
+# drift survived 70+ rounds UNCAUGHT and ci.yml had no fmt step at all. Scans
+# every tracked-source .zig/.zon while excluding generated caches and the probe
+# sandbox (round-133 self-capture: a fresh-test --cache-dir under _probe holds
+# non-formatted generated .zig and would trip the gate as a false positive).
+Write-Output "== fmt gate (repo-wide, caches excluded) =="
+$fmtTargets = Get-ChildItem -Recurse -File -Include *.zig,*.zon | Where-Object {
+    $f = $_.FullName -replace '\\', '/'
+    $f -notmatch '/(#?\.git|\.zig-cache|zig-out|\.zzc|_probe)(/|$)'
+}
+zig fmt --check $fmtTargets.FullName
+if ($LASTEXITCODE -ne 0) { throw "zig fmt --check failed: repo formatting drift" }
 
 Write-Output "== build zzc =="
 zig build
@@ -123,13 +143,13 @@ $N_pub $N_fn $N_main() !$N_void {
     std.process.exit(7);
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $g "src\main.zz"), $gsrc, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText((Join-Path $g "src/main.zz"), $gsrc, (New-Object System.Text.UTF8Encoding($false)))
 $go = Join-Path $g "o.txt"; $ge = Join-Path $g "e.txt"
 $gp = Start-Process -FilePath $zzc -ArgumentList "run" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $g -RedirectStandardOutput $go -RedirectStandardError $ge
 $guardOk = $true
 if ($gp.ExitCode -ne 7) { Write-Output ("  [FAIL] d38 guard: expected faithful exit code 7, got " + $gp.ExitCode); $guardOk = $false }
-$symFile = Join-Path $g ".zzc\symbols.txt"
+$symFile = Join-Path $g ".zzc/symbols.txt"
 if (-not (Test-Path $symFile)) {
     Write-Output "  [FAIL] d38 guard: symbols.txt missing after run with non-zero user exit (third exit path swallowed saveSymbols)"
     $guardOk = $false
@@ -161,7 +181,7 @@ $ga = Join-Path $root ".zig-cache/embedA_guard"
 if (Test-Path $ga) { Remove-Item -Recurse -Force $ga }
 New-Item -ItemType Directory -Force -Path (Join-Path $ga "src") | Out-Null
 $assetBytes = $encNoBom.GetBytes("EMBED-ASSET-CONTENT-12345") # 25 bytes, ASCII for stable comparison
-[System.IO.File]::WriteAllBytes((Join-Path $ga ("src\" + $assetName)), $assetBytes)
+[System.IO.File]::WriteAllBytes((Join-Path $ga ("src/" + $assetName)), $assetBytes)
 $gaSrc = @"
 $N_const std = $N_import("std");
 
@@ -171,7 +191,7 @@ $N_pub $N_fn $N_main() $N_void {
     std.debug.print("{d}\n", .{embedA.len});
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $ga "src\main.zz"), $gaSrc, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $ga "src/main.zz"), $gaSrc, $encNoBom)
 $gao = Join-Path $ga "o.txt"; $gae = Join-Path $ga "e.txt"
 $gap = Start-Process -FilePath $zzc -ArgumentList "run" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $ga -RedirectStandardOutput $gao -RedirectStandardError $gae
@@ -182,7 +202,7 @@ if ($gap.ExitCode -ne 0) { Write-Output ("  [FAIL] embedA guard: run of in-tree 
 $txtA = ""
 foreach ($f in @($gao, $gae)) { if (Test-Path $f) { $ba = [System.IO.File]::ReadAllBytes($f); if ($ba.Length -gt 0) { $txtA += [System.Text.Encoding]::UTF8.GetString($ba) } } }
 if ($txtA.Trim() -ne "25") { Write-Output ("  [FAIL] embedA guard: embedded content not faithful (output=" + $txtA.Trim() + ", expected 25)"); $guardOk = $false }
-$mirror = Join-Path $ga (".zzc\gen\src\" + $assetName)
+$mirror = Join-Path $ga (".zzc/gen/src/" + $assetName)
 if (-not (Test-Path $mirror)) {
     Write-Output "  [FAIL] embedA guard: in-tree asset NOT mirrored into gen tree (staging broke)"
     $guardOk = $false
@@ -201,7 +221,7 @@ Remove-Item -Recurse -Force $ga -ErrorAction SilentlyContinue
 $gb = Join-Path $root ".zig-cache/embedB_guard"
 if (Test-Path $gb) { Remove-Item -Recurse -Force $gb }
 New-Item -ItemType Directory -Force -Path (Join-Path $gb "src") | Out-Null
-$escSide = Join-Path $root (".zig-cache\" + $escName)
+$escSide = Join-Path $root (".zig-cache/" + $escName)
 [System.IO.File]::WriteAllBytes($escSide, $encNoBom.GetBytes("OUTSIDE"))
 $gbSrc = @"
 $N_const std = $N_import("std");
@@ -212,14 +232,14 @@ $N_pub $N_fn $N_main() $N_void {
     std.debug.print("{d}\n", .{embedB.len});
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $gb "src\main.zz"), $gbSrc, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $gb "src/main.zz"), $gbSrc, $encNoBom)
 $gbp = Start-Process -FilePath $zzc -ArgumentList "run" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $gb -RedirectStandardOutput (Join-Path $gb "o.txt") -RedirectStandardError (Join-Path $gb "e.txt")
 if ($gbp.ExitCode -eq 0) { Write-Output "  [FAIL] embedB guard: out-of-root embed unexpectedly exited 0"; $guardOk = $false }
 # NB: inside @(...) the comma operator binds TIGHTER than +, so each element must
 # carry its own parentheses; without them both strings collapse into one array
 # element and the containment check silently never runs (round 91 violation probe).
-foreach ($leak in @((".zzc\" + $escName), (".zzc\gen\" + $escName))) {
+foreach ($leak in @((".zzc/" + $escName), (".zzc/gen/" + $escName))) {
     if (Test-Path -LiteralPath (Join-Path $gb $leak)) {
         Write-Output ('  [FAIL] embedB guard: out-of-root embed WAS staged to ' + $leak + ' (containment guard missing)')
         $guardOk = $false
@@ -255,11 +275,11 @@ $N_pub $N_fn $N_main() $N_void {
     _ = ${gA};
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $ga46 "src\main.zz"), $g46SrcA, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $ga46 "src/main.zz"), $g46SrcA, $encNoBom)
 $gp46a = Start-Process -FilePath $zzc -ArgumentList "check" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $ga46 -RedirectStandardOutput (Join-Path $ga46 "o.txt") -RedirectStandardError (Join-Path $ga46 "e.txt")
 if ($gp46a.ExitCode -ne 1) { Write-Output ("  [FAIL] d46 guard A: expected exit 1 on semantic error, got " + $gp46a.ExitCode); $d46Ok = $false }
-$sym46a = Join-Path $ga46 ".zzc\symbols.txt"
+$sym46a = Join-Path $ga46 ".zzc/symbols.txt"
 if (-not (Test-Path $sym46a)) {
     Write-Output "  [FAIL] d46 guard A: symbols.txt missing after check failure (bail swallowed saveSymbols)"
     $d46Ok = $false
@@ -279,11 +299,11 @@ $gb46 = Join-Path $root ".zig-cache/d46B_guard"
 if (Test-Path $gb46) { Remove-Item -Recurse -Force $gb46 }
 New-Item -ItemType Directory -Force -Path (Join-Path $gb46 "src") | Out-Null
 $g46SrcB = "$N_pub $N_fn $N_main() $N_void { $N_var_g $gA = $gB; }`n"
-[System.IO.File]::WriteAllText((Join-Path $gb46 "src\main.zz"), $g46SrcB, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $gb46 "src/main.zz"), $g46SrcB, $encNoBom)
 $gp46b = Start-Process -FilePath $zzc -ArgumentList "eject out" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $gb46 -RedirectStandardOutput (Join-Path $gb46 "o.txt") -RedirectStandardError (Join-Path $gb46 "e.txt")
 if ($gp46b.ExitCode -ne 1) { Write-Output ("  [FAIL] d46 guard B: expected exit 1 on eject verify failure, got " + $gp46b.ExitCode); $d46Ok = $false }
-$sym46b = Join-Path $gb46 ".zzc\symbols.txt"
+$sym46b = Join-Path $gb46 ".zzc/symbols.txt"
 if (-not (Test-Path $sym46b)) {
     Write-Output "  [FAIL] d46 guard B: symbols.txt missing after eject .fail (bail swallowed saveSymbols)"
     $d46Ok = $false
@@ -308,17 +328,21 @@ if ($zigCmd) {
     if (Test-Path $gz) { Remove-Item -Recurse -Force $gz }
     New-Item -ItemType Directory -Force -Path (Join-Path $gz "src") | Out-Null
     $gzSrc = "$N_pub $N_fn $N_main() $N_void { }`n"
-    [System.IO.File]::WriteAllText((Join-Path $gz "src\main.zz"), $gzSrc, $encNoBom)
+    [System.IO.File]::WriteAllText((Join-Path $gz "src/main.zz"), $gzSrc, $encNoBom)
+    # PATH entries are split on the platform separator: on Linux it is ':' while
+    # ';' is part of every single entry -- hard-coding ';' would leave zig on PATH
+    # and the whole .no_zig branch would silently never be exercised (D52).
+    $psSep = [System.IO.Path]::PathSeparator
     $savedPath = $env:PATH
-    $env:PATH = ($savedPath -split ';' | Where-Object { $_ -ne $zigDir -and $_ -ne "" }) -join ';'
+    $env:PATH = ($savedPath -split [regex]::Escape($psSep) | Where-Object { $_ -ne $zigDir -and $_ -ne "" }) -join $psSep
     $gzp = Start-Process -FilePath $zzc -ArgumentList "eject out" -NoNewWindow -Wait -PassThru `
         -WorkingDirectory $gz -RedirectStandardOutput (Join-Path $gz "o.txt") -RedirectStandardError (Join-Path $gz "e.txt")
     $env:PATH = $savedPath
     $gzOk = $true
     if ($gzp.ExitCode -ne 0) { Write-Output ("  [FAIL] nozig guard: expected exit 0 on .no_zig path, got " + $gzp.ExitCode); $gzOk = $false }
-    if (-not (Test-Path (Join-Path $gz "out\build.zig"))) { Write-Output "  [FAIL] nozig guard: build.zig not written on .no_zig path"; $gzOk = $false }
+    if (-not (Test-Path (Join-Path $gz "out/build.zig"))) { Write-Output "  [FAIL] nozig guard: build.zig not written on .no_zig path"; $gzOk = $false }
     $zonTxt = ""
-    $zonP = Join-Path $gz "out\build.zig.zon"
+    $zonP = Join-Path $gz "out/build.zig.zon"
     if (Test-Path $zonP) { $zonTxt = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($zonP)) } else { Write-Output "  [FAIL] nozig guard: build.zig.zon not written"; $gzOk = $false }
     if ($zonTxt.Contains("fingerprint")) { Write-Output "  [FAIL] nozig guard: zon carries fingerprint despite no zig to probe a legal value"; $gzOk = $false }
     # assertions: stdout must contain "wei-jian-ce-dao" (not-detected); stderr must NOT leak ASCII 'zzc:'-free raw names,
@@ -343,7 +367,7 @@ if ($zigCmd) {
 # C `--lang` + `--lang-file` mutual exclusion exits 2. Fixture data lives in
 # tools/fixtures (outside the packs/ auto-discovery scan, never in the registry).
 Write-Output "== external lang-pack guard =="
-$fx = Join-Path $root "tools\fixtures"
+$fx = Join-Path $root "tools/fixtures"
 $gr = Join-Path $root ".zig-cache/r9g_guard"
 if (Test-Path $gr) { Remove-Item -Recurse -Force $gr }
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $gr) | Out-Null
@@ -353,7 +377,7 @@ $r9Ok = $true
 $pA = Start-Process -FilePath $zzc -ArgumentList @("check", "--lang-file", (Join-Path $fx "external-min.txt")) -NoNewWindow -Wait -PassThru -WorkingDirectory $gr `
     -RedirectStandardOutput (Join-Path $gr "a.o.txt") -RedirectStandardError (Join-Path $gr "a.e.txt")
 if ($pA.ExitCode -ne 0) { Write-Output ("  [FAIL] r9g A: external pack check expected exit 0, got " + $pA.ExitCode); $r9Ok = $false }
-$genZig = Join-Path $gr ".zzc\gen\src\main.zig"
+$genZig = Join-Path $gr ".zzc/gen/src/main.zig"
 $genTxt = if (Test-Path $genZig) { [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($genZig)) } else { "" }
 # 行首断言而非任意子串：源注释里若含目标字面串会随透传混进 gen 使 Contains 假命中（反证轮实捕的静默空转形）。
 $hasMainFn = (@($genTxt -split "`n" | Where-Object { $_.StartsWith("pub fn main(") -or $_.StartsWith("fn main(") }).Count -gt 0)
@@ -390,7 +414,7 @@ $igOk = $true
 $pA = Start-Process -FilePath $zzc -ArgumentList @("init", "probe_proj") -NoNewWindow -Wait -PassThru -WorkingDirectory $ig `
     -RedirectStandardOutput (Join-Path $ig "a.o.txt") -RedirectStandardError (Join-Path $ig "a.e.txt")
 if ($pA.ExitCode -ne 0) { Write-Output ("  [FAIL] init A: expected exit 0, got " + $pA.ExitCode); $igOk = $false }
-$tmpl = Join-Path $ig "probe_proj\src\main.zz"
+$tmpl = Join-Path $ig "probe_proj/src/main.zz"
 if (-not (Test-Path $tmpl)) { Write-Output "  [FAIL] init A: src/main.zz not written"; $igOk = $false }
 $aOut = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes((Join-Path $ig "a.o.txt")))
 if (-not $aOut.Contains((Native 0x5DF2,0x521B,0x5EFA))) { Write-Output "  [FAIL] init A: native created-notice missing from stdout"; $igOk = $false }
@@ -416,7 +440,7 @@ $cTxt = if ($cErr.Length -gt 0) { [System.Text.Encoding]::UTF8.GetString($cErr) 
 if ($pC.ExitCode -ne 2) { Write-Output ("  [FAIL] init C: unsafe name expected exit 2, got " + $pC.ExitCode); $igOk = $false }
 if (-not $cTxt.Contains((Native 0x4E0D,0x5B89,0x5168))) { Write-Output "  [FAIL] init C: native unsafe-name hint missing from stderr"; $igOk = $false }
 # escape shape `init ..` would write ../src/main.zz, i.e. .zig-cache/src in the workspace parent
-if (Test-Path (Join-Path $root ".zig-cache\src")) { Write-Output "  [FAIL] init C: reject happened AFTER side effects (escape wrote src/ into the parent dir)"; $igOk = $false }
+if (Test-Path (Join-Path $root ".zig-cache/src")) { Write-Output "  [FAIL] init C: reject happened AFTER side effects (escape wrote src/ into the parent dir)"; $igOk = $false }
 if ($igOk) { Write-Output "  [PASS] init guard: scaffold passes own purity gate (D48), re-init non-destructive, unsafe names exit 2 before any write" }
 else { $fail = $fail + 1 }
 Remove-Item -Recurse -Force $ig -ErrorAction SilentlyContinue
@@ -447,7 +471,7 @@ $N_pub $N_fn $N_main(ini: std.process.Init) !$N_void {
     std.debug.print("argc={d}", .{arr.len});
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $ra "src\main.zz"), $raSrc, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $ra "src/main.zz"), $raSrc, $encNoBom)
 $raOk = $true
 
 # reads the argv count the user program echoed back through the inherited stderr
@@ -553,13 +577,16 @@ $N_pub $N_fn $N_main() $N_void {
     std.debug.print("ok132", .{});
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $bA "src\main.zz"), $bSrcA, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $bA "src/main.zz"), $bSrcA, $encNoBom)
 $bAo = Join-Path $bA "a.out"; $bAe = Join-Path $bA "a.err"
 $bpA = Start-Process -FilePath $zzc -ArgumentList "build" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $bA -RedirectStandardOutput $bAo -RedirectStandardError $bAe
 if ($bpA.ExitCode -ne 0) { Write-Output ("  [FAIL] build A: clean build expected exit 0, got " + $bpA.ExitCode); $bldOk = $false }
 if (-not (Read-T $bAo).Contains($N_chanhao)) { Write-Output "  [FAIL] build A: native 'chan-wu' artifact hint missing from stdout"; $bldOk = $false }
-$bExe = Join-Path $bA ".zzc\bin\main.exe"
+# artifact name is os-gated exactly like the product (main.zig L557:
+# builtin.os.tag == .windows ? .exe : ""); hard-coding main.exe would miss the
+# extension-less Linux artifact and turn both artifact asserts false (D52).
+$bExe = (Join-Path $bA ".zzc/bin/main") + $ext
 if (-not (Test-Path $bExe)) { Write-Output "  [FAIL] build A: artifact missing under .zzc/bin (emit-bin wiring broken)"; $bldOk = $false }
 else {
     $beo = Join-Path $bA "exe.out"; $bee = Join-Path $bA "exe.err"
@@ -580,7 +607,7 @@ $N_pub $N_fn $N_main() $N_void {
     _ = ${bJia};
 }
 "@
-[System.IO.File]::WriteAllText((Join-Path $bB "src\main.zz"), $bSrcB, $encNoBom)
+[System.IO.File]::WriteAllText((Join-Path $bB "src/main.zz"), $bSrcB, $encNoBom)
 $bBo = Join-Path $bB "b.out"; $bBe = Join-Path $bB "b.err"
 $bpB = Start-Process -FilePath $zzc -ArgumentList "build" -NoNewWindow -Wait -PassThru `
     -WorkingDirectory $bB -RedirectStandardOutput $bBo -RedirectStandardError $bBe
@@ -589,7 +616,7 @@ if ($bpB.ExitCode -ne 1) { Write-Output ("  [FAIL] build B: semantic error expec
 if (-not $tbBe.Contains($N_cuowu)) { Write-Output "  [FAIL] build B: native 'cuo-wu' diagnostic missing from stderr"; $bldOk = $false }
 if ($tbBo.Trim().Length -ne 0) { Write-Output "  [FAIL] build B: failure leaked text to stdout (hint must be stderr-only)"; $bldOk = $false }
 if ($tbBe.Contains("error: Failed") -or $tbBo.Contains("error: Failed")) { Write-Output "  [FAIL] build B: raw error name / stack trace leaked (silent bail shape required)"; $bldOk = $false }
-if (Test-Path (Join-Path $bB ".zzc\bin\main.exe")) { Write-Output "  [FAIL] build B: artifact emitted despite compile failure"; $bldOk = $false }
+if (Test-Path (((Join-Path $bB ".zzc/bin/main") + $ext))) { Write-Output "  [FAIL] build B: artifact emitted despite compile failure"; $bldOk = $false }
 Remove-Item -Recurse -Force $bB -ErrorAction SilentlyContinue
 if ($bldOk) { Write-Output "  [PASS] build guard: clean build exits 0 with native artifact hint and runnable exe; failed build exits 1 with native diag only, no raw error-name leak, no artifact" }
 else { $fail = $fail + 1 }

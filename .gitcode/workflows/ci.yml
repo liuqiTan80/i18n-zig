@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一 ref 上取消旧的在跑任务，节省 CI 配额
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test-eject:
+    name: 构建 / 测试 / 毕业链路（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      # D17（第 56 轮在册）：原 .github/workflows/ci.yml 在唯一远端 gitcode.com
+      # 上从不被执行——GitCode 流水线只识别 .gitcode/workflows/ 目录、插件写官方
+      # 目录名（非 GitHub marketplace 三段式）。第 133 轮经用户拍板整体迁移至此。
+      - name: 检出源码
+        uses: checkout-action@0.0.1
+
+      # fmt 门禁依赖工作区为 LF：Git 默认 autocrlf 在 Windows runner 会把 LF 提交
+      # 区检出成 CRLF 工作区，zig fmt --check 视其为漂移（第 133 轮本地实捕形）。
+      - name: 统一行尾为 LF（防检出侧 autocrlf 污染 fmt 门禁）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config core.autocrlf false
+          git rm --cached -r -q .
+          git reset --hard
+
+      # 不依赖第三方 setup 插件（GitCode 插件目录是否有 zig 未证实、不臆造），
+      # 直接从 ziglang.org 官方发行位手动安装钉死的 0.17.0。
+      - name: 安装 Zig 0.17（Linux）
+        if: runner.os == 'Linux'
+        run: |
+          curl -sLO https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
+          tar -xf zig-x86_64-linux-0.17.0.tar.xz
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+
+      - name: 安装 Zig 0.17（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $v = '0.17.0'
+          Invoke-WebRequest "https://ziglang.org/download/$v/zig-x86_64-windows-$v.zip" -OutFile zig.zip
+          $dst = Join-Path $env:RUNNER_TEMP "zig"
+          Expand-Archive zig.zip -DestinationPath $dst
+          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $dst "zig-x86_64-windows-$v")
+
+      - name: 构建 zzc
+        run: zig build
+
+      - name: 单元与快照测试
+        run: zig build test --summary all
+
+      - name: 端到端基线校验（fmt 门禁 + zzc run ↔ eject 后纯 zig build 逐字节一致 + e2e 守卫族）
+        shell: pwsh
+        run: ./tools/check-demos.ps1
