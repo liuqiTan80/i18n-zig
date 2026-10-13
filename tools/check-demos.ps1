@@ -421,5 +421,62 @@ if ($igOk) { Write-Output "  [PASS] init guard: scaffold passes own purity gate 
 else { $fail = $fail + 1 }
 Remove-Item -Recurse -Force $ig -ErrorAction SilentlyContinue
 
+# --- `zzc run -- <prog_args>` argument-forwarding e2e guard (round 130): the `--`
+# split lives in cmdBuild (main.zig, OUTSIDE the unit-test graph). Everything after
+# `--` is routed into the user program's argv and the `--` itself is consumed; the
+# built exe is spawned with stdio .inherit (dialect stdout streams straight through).
+# No existing guard ever feeds prog_args -- d38 runs a bare `zzc run` and the four
+# byte-identity demos pass no `--`. So a regression that DROPS the forwarding (argc
+# pinned at 1) or LEAKS `--` into argv (argc off-by-one) is invisible to every current
+# check. Pin two shapes e2e via the program's own argv count: bare run -> argc=1;
+# `run -- alpha beta gamma` -> argc=4 (three words forwarded, the `--` consumed).
+# The reader program takes the Zig 0.17 `std.process.Init` param and calls
+# `ini.minimal.args.toSlice(...)` (Init exposes args only under `.minimal`, not flat).
+# Script stays pure ASCII: native keyword forms built from code points (PS 5.1 -File
+# misreads BOM-less UTF-8 as GBK); `try` is a purity-gated keyword so it must be native.
+Write-Output "== run prog_args forwarding guard =="
+$N_try_r = Native 0x5C1D,0x8BD5              # chang-shi (try)
+$ra = Join-Path $root ".zig-cache/runargs_guard"
+if (Test-Path $ra) { Remove-Item -Recurse -Force $ra }
+New-Item -ItemType Directory -Force -Path (Join-Path $ra "src") | Out-Null
+$raSrc = @"
+$N_const std = $N_import("std");
+
+$N_pub $N_fn $N_main(ini: std.process.Init) !$N_void {
+    $N_const arr = $N_try_r ini.minimal.args.toSlice(ini.arena.allocator());
+    std.debug.print("argc={d}", .{arr.len});
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $ra "src\main.zz"), $raSrc, $encNoBom)
+$raOk = $true
+
+# reads the argv count the user program echoed back through the inherited stderr
+function Argc-Of([string]$f) {
+    if (-not (Test-Path $f)) { return -1 }
+    $t = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($f))
+    $m = [regex]::Match($t, "argc=(\d+)")
+    if ($m.Success) { return [int]$m.Groups[1].Value } else { return -1 }
+}
+
+# (A) bare run: argv holds only the program name -> argc == 1
+$raAe = Join-Path $ra "a.err"; $raAo = Join-Path $ra "a.out"
+$pA = Start-Process -FilePath $zzc -ArgumentList "run" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $ra -RedirectStandardOutput $raAo -RedirectStandardError $raAe
+$argcA = Argc-Of $raAe
+if ($pA.ExitCode -ne 0) { Write-Output ("  [FAIL] runargs A: bare run exited " + $pA.ExitCode); $raOk = $false }
+if ($argcA -ne 1) { Write-Output ("  [FAIL] runargs A: bare run expected argc=1 (program name only), got " + $argcA); $raOk = $false }
+
+# (B) `run -- alpha beta gamma`: three words forwarded and the `--` consumed -> argc == 4
+$raBe = Join-Path $ra "b.err"; $raBo = Join-Path $ra "b.out"
+$pB = Start-Process -FilePath $zzc -ArgumentList @("run","--","alpha","beta","gamma") -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $ra -RedirectStandardOutput $raBo -RedirectStandardError $raBe
+$argcB = Argc-Of $raBe
+if ($pB.ExitCode -ne 0) { Write-Output ("  [FAIL] runargs B: run with prog_args exited " + $pB.ExitCode); $raOk = $false }
+if ($argcB -ne 4) { Write-Output ("  [FAIL] runargs B: expected argc=4 (name + 3 forwarded, the `--` consumed), got " + $argcB); $raOk = $false }
+
+if ($raOk) { Write-Output "  [PASS] runargs guard: bare run argc=1; `zzc run -- a b c` forwards prog_args (argc=4) and consumes the `--` (stdio .inherit stream reaches parent)" }
+else { $fail = $fail + 1 }
+Remove-Item -Recurse -Force $ra -ErrorAction SilentlyContinue
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
