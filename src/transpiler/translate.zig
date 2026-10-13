@@ -1116,32 +1116,71 @@ test "D47 入口词形在 keywords 段：fn 声明位避让不得把 main 映射
     // 若日后真有 `定数 メイン関数 = 5`（常量名叫入口词形）属包作者命名冲突，避让哲学不变。
 }
 
-test "D48（第 104 轮）init 脚手架模板须零违例通过自家纯母语门：工具不得拒自家产物" {
-    // 缺陷面：99 轮 D44 纯度门升格后 dogfood 清单只扫 demo/守卫内嵌源，漏了 main.zig cmdInit
-    // 硬编码模板的 ASCII `void`（`空 = void` 是包映射值 → 被拦）——`zzc init` 建的项目出生即
-    // `zzc check`/`zzc run` 不过，新手第一步就碰「纯母语: 英文 void 请改用 空」。探针实锤后
-    // 模板下沉 cli.initTemplate（main 不入测试图、既有约束）并由本测钉住：模板恒须零违例。
+test "D48（第 104 轮）/第 142 轮：init 模板按包生成——中外语两包皆零违例过自家门、产物皆真入口" {
+    // 缺陷面（历两层）：99 轮 D44 纯度门升格后 dogfood 漏了旧模板 ASCII `void`（D48）；旧模板又是
+    // 中文常量形，选外语包时中文词元全被 intern、出生即碎码（第 142 轮探针 T2：check 报
+    // 「期望 ',' after field」退 1）——本测两包两面钉死：任何合格包下模板恒零违例且产 `pub fn main(`。
     const cli = @import("../cli/args.zig");
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
 
+    // 面 A：中文包（默认路径，与 104 轮同断言面）。
     var lang = try Pack.parse(gpa, zh_pack);
     defer lang.deinit();
+    const zh_tmpl = try cli.buildInitTemplate(gpa, lang);
 
-    // 面一：纯母语门零违例（先红形：`!void` 被坐实时本断言抓红）
-    var v = try findEnglishWordForms(gpa, lang, cli.initTemplate);
+    var v = try findEnglishWordForms(gpa, lang, zh_tmpl);
     defer v.deinit();
     if (v.items.len != 0) {
         std.debug.print("init 模板混入英文词形: {s}（母语形应为 {s}）\n", .{ v.items[0].word, v.items[0].native });
         return error.TestUnexpectedResult;
     }
 
-    // 面二：翻译行为侧模板产物真含顶层入口（防 D47 同族静默浅检另一形：模板若撞入口避让也不产 main）
     var table = Mangle.init(gpa);
     defer table.deinit();
-    const res = try translate(gpa, cli.initTemplate, lang, &table);
+    const res = try translate(gpa, zh_tmpl, lang, &table);
     try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "pub fn main() !void {") != null);
+    // 中文包全词形齐备（非降级路径）：方言形必在产物里、ASCII 兜底形不得泄漏。
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "std.debug.print(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "常数") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "标准库.打印") != null);
+    // 串内 `\n` 必为字面两字符（第 142 轮实现期自捕：生成器误落真换行字节，zig 拒
+    // 「string literal contains invalid byte」——模板串跨全部包共用，单点钉住即可）。
+    try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "结果是 {d}\\n") != null);
+
+    // 面 B：外语包——只具 B6 契约 13 值（无 pub/void/i64/std/打印 映射，第 142 轮探针包形）：
+    // 降级链全走——产物仍合法零违例、仍经 main_def_pos/别名链两径产真入口。
+    const ja_pack =
+        "$format = 1\n" ++
+        "$code = ja\n$name = 探针语\n[keywords]\n" ++
+        "定数 = const\n変数 = var\n関数 = fn\n条件 = if\n代替 = else\n" ++
+        "戻り = return\n構造 = struct\n列挙 = enum\n結合 = union\n選択 = switch\n" ++
+        "取込 = @import\n埋込 = @embedFile\n契約 = main\n";
+    var jlang = try Pack.parse(gpa, ja_pack);
+    defer jlang.deinit();
+    const ja_tmpl = try cli.buildInitTemplate(gpa, jlang);
+
+    var v2 = try findEnglishWordForms(gpa, jlang, ja_tmpl);
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v2.items.len); // 降级 ASCII 形对本包不可坐实、天然零违例
+
+    var table2 = Mangle.init(gpa);
+    defer table2.deinit();
+    const jres = try translate(gpa, ja_tmpl, jlang, &table2);
+    // 真行为（第 142 轮探针复跑自捕二）：zig 硬要求 `pub fn main`（非公开入口编译拒
+    // 「'main' is not marked 'pub'」）——ja 包无 `pub` 映射时 w_pub 降级 ASCII 直通，产物仍
+    // `pub fn main() !void {`；入口词形取契约值 `契約`(=main)，修饰符/返回类型走 ASCII 兜底。
+    try std.testing.expect(std.mem.indexOf(u8, jres.zig_str, "pub fn main() !void {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, jres.zig_str, "契約") == null); // 契约值 main 被翻译、不外泄
+    // 外语包侧必用包词形，且中文形不得泄漏（旧缺陷形：恒为中文常量）。
+    try std.testing.expect(std.mem.indexOf(u8, ja_tmpl, "定数") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ja_tmpl, "常数") == null);
+    try std.testing.expect(std.mem.indexOf(u8, ja_tmpl, "std.debug.print(") != null); // 打印降级 ASCII 直通形
+    // 探针复跑自捕三：ja 包无 `i64` 映射→类型注降级 ASCII 直通（缺注会产 `var 数 = 10` 零宽
+    // comptime_int、再赋值 zig 拒「must be given an explicit fixed-size number type」）——钉住兜底形存在。
+    try std.testing.expect(std.mem.indexOf(u8, ja_tmpl, ": i64 = 10;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, jres.zig_str, ": i64 = 10;") != null);
 }
 
 // TEMP-PROBE R105 已坐实假说并删除：全范围注入 k=0..7 仅 hits 桶槽（dupe 紧邻分配）产生

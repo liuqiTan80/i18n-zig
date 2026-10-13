@@ -444,7 +444,23 @@ if ($pC.ExitCode -ne 2) { Write-Output ("  [FAIL] init C: unsafe name expected e
 if (-not $cTxt.Contains((Native 0x4E0D,0x5B89,0x5168))) { Write-Output "  [FAIL] init C: native unsafe-name hint missing from stderr"; $igOk = $false }
 # escape shape `init ..` would write ../src/main.zz, i.e. .zig-cache/src in the workspace parent
 if (Test-Path (Join-Path $root ".zig-cache/src")) { Write-Output "  [FAIL] init C: reject happened AFTER side effects (escape wrote src/ into the parent dir)"; $igOk = $false }
-if ($igOk) { Write-Output "  [PASS] init guard: scaffold passes own purity gate (D48), re-init non-destructive, unsafe names exit 2 before any write" }
+# D (round 142, template i18n): a NON-default language pack must still yield a scaffold that
+# passes the tool's OWN check at birth. Pre-142 the template was a hardcoded Chinese constant, so
+# `init --lang-file <ja pack>` interned every Chinese token and the fresh project failed `check`
+# at birth (probe T2: "expected ',' after field", exit 1). external-min.txt is a B6-contract ja
+# pack WITHOUT void/i64/std/print mappings -> scaffold must ASCII-fallback those slots and still
+# be born-legal. Script stays pure ASCII: the pack lives in tools/fixtures (data, not literals).
+$fxMin = Join-Path $fx "external-min.txt"
+$pD = Start-Process -FilePath $zzc -ArgumentList @("init", "probe_foreign", "--lang-file", $fxMin) -NoNewWindow -Wait -PassThru -WorkingDirectory $ig `
+    -RedirectStandardOutput (Join-Path $ig "d.o.txt") -RedirectStandardError (Join-Path $ig "d.e.txt")
+if ($pD.ExitCode -ne 0) { Write-Output ("  [FAIL] init D: foreign-pack init expected exit 0, got " + $pD.ExitCode); $igOk = $false }
+$dTmpl = Join-Path $ig "probe_foreign/src/main.zz"
+if (-not (Test-Path $dTmpl)) { Write-Output "  [FAIL] init D: foreign-pack src/main.zz not written"; $igOk = $false }
+$dProj = Join-Path $ig "probe_foreign"
+$pD2 = Start-Process -FilePath $zzc -ArgumentList @("check", "src/main.zz", "--lang-file", $fxMin) -NoNewWindow -Wait -PassThru -WorkingDirectory $dProj `
+    -RedirectStandardOutput (Join-Path $ig "d2.o.txt") -RedirectStandardError (Join-Path $ig "d2.e.txt")
+if ($pD2.ExitCode -ne 0) { Write-Output ("  [FAIL] init D: foreign-pack freshly-init-ed project fails its own check (exit " + $pD2.ExitCode + ") - template not generated per selected pack"); $igOk = $false }
+if ($igOk) { Write-Output "  [PASS] init guard: scaffold passes own purity gate (D48), re-init non-destructive, unsafe names exit 2 before any write, foreign-pack scaffold born-legal (142)" }
 else { $fail = $fail + 1 }
 Remove-Item -Recurse -Force $ig -ErrorAction SilentlyContinue
 

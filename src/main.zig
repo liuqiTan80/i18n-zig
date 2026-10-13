@@ -658,7 +658,7 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
     }
 }
 
-fn cmdInit(name: []const u8) !void {
+fn cmdInit(name: []const u8, lang: Pack) !void {
     // 先验工程名：空/`.`/`..`/上溯/绝对名会在预期外的位置建目录写文件（实测 `zzc init ..`
     // 静默把工程建到父目录）。拒绝在任何 createDirPath/writeWhole 副作用之前。给出精确消息+exit 2
     // （与无名字 init 的 error.Usage 退出码一致）；std.process.exit 跳过 defer 刷写，故先显式 flush。
@@ -679,9 +679,11 @@ fn cmdInit(name: []const u8) !void {
         return;
     }
     try std.Io.Dir.cwd().createDirPath(io_, name);
-    // 模板下沉 cli.initTemplate（D48，第 104 轮）：进测试图被零违例纯测钉住，防再被历轮
-    // 契约升格（如 99 轮纯度门）漏 dogfood 而「工具拒自家脚手架」。
-    try writeWhole(main_zz, cli.initTemplate);
+    // 模板生成器 cli.buildInitTemplate（D48 第 104 轮下沉 + 第 142 轮按包组词 i18n）：进测试图被
+    // 零违例纯测钉住，防再被历轮契约升格漏 dogfood 而「工具拒自家脚手架」；旧常量形恒为中文词，
+    // 选外语包时出生即碎码（探针 T2 实锤）——现在全部词形取自所选包、缺则安全降级。
+    const tmpl_src = try cli.buildInitTemplate(gpa_, lang);
+    try writeWhole(main_zz, tmpl_src);
     printOut("已创建工程 {s}（src/main.zz）。进入目录后运行：zzc run", .{name});
 }
 
@@ -1044,7 +1046,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (std.mem.eql(u8, cmd, "init")) {
         if (argv.len < 1) bail(error.Usage);
-        cmdInit(argv[0]) catch |e| bail(e);
+        cmdInit(argv[0], lang) catch |e| bail(e);
         return;
     }
 

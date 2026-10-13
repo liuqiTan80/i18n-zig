@@ -310,9 +310,42 @@ pub fn keywordFormsFor(gpa: std.mem.Allocator, lang: Pack, want: []const u8) ![]
     return list.toOwnedSlice(gpa);
 }
 
+/// 首个映射为 `want` 的方言词（先 keywords 后 aliases，多形并存时取先入表形、同包同构建确定）。
+/// 供模板脚手架按包组词（第 142 轮）：工具侧不硬编码任何方言词，判据全取自包——与 D44
+/// 反查同一语言无关原则。未命中 null（调用方自行降级：ASCII 直通形或整行省略）。
+/// aliases 多段键（如 `标准库.打印`）可整体作点分链使用——翻译第 1 步贪心链匹配跨非 ASCII 段。
+pub fn firstKeywordFor(lang: Pack, want: []const u8) ?[]const u8 {
+    var it = lang.keywords.iterator();
+    while (it.next()) |e| {
+        if (std.mem.eql(u8, e.value_ptr.*, want)) return e.key_ptr.*;
+    }
+    var it2 = lang.aliases.iterator();
+    while (it2.next()) |e| {
+        if (std.mem.eql(u8, e.value_ptr.*, want)) return e.key_ptr.*;
+    }
+    return null;
+}
+
 /// `@embedFile` 的全部词形（ASCII 直通形 + 方言词，如 `嵌入文件`）。供原文预扫描（D2）。
 pub fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
     return keywordFormsFor(gpa, lang, "@embedFile");
+}
+
+test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优先、aliases 兼容多段链键、未命中 null" {
+    const gpa = std.testing.allocator;
+    var lang = try parse(gpa, @embedFile("packs/中文.txt"));
+    defer lang.deinit();
+
+    // keywords 段命中：结构词反查形与真包一致。
+    try std.testing.expectEqualStrings("常数", lang.firstKeywordFor("const").?);
+    try std.testing.expectEqualStrings("函数", lang.firstKeywordFor("fn").?);
+    try std.testing.expectEqualStrings("导入", lang.firstKeywordFor("@import").?);
+    // aliases 段命中（keywords 未映射时兼容）：单段入口名与多段叶子链键——多段键整体可作点分链用。
+    try std.testing.expectEqualStrings("主函数", lang.firstKeywordFor("main").?);
+    try std.testing.expectEqualStrings("标准库", lang.firstKeywordFor("std").?);
+    try std.testing.expectEqualStrings("标准库.打印", lang.firstKeywordFor("std.debug.print").?);
+    // 未命中：包无任何映射值等于它——调用方自行降级，不得 panic。
+    try std.testing.expectEqual(@as(?[]const u8, null), lang.firstKeywordFor("nonexistent.value"));
 }
 
 test "keywordFormsFor/embedWordForms（第 61 轮下沉真测）：ASCII 直通形居首 + 真实 zh 包方言词形被枚举" {

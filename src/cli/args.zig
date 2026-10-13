@@ -1,6 +1,7 @@
 //! 命令行参数解析：从 `[文件.zz] [zig 旗标…]` 里分离方言入口与透传给 zig 的其余参数。
 
 const std = @import("std");
+const Pack = @import("../lang/pack.zig").Pack; // 第 142 轮：模板生成器按包组词需 Pack 反查面
 
 pub const EntryPick = struct {
     /// 方言入口文件路径（缺省为 src/main.zz）
@@ -306,21 +307,67 @@ test "ejectDestHitsSourceTree：拒绝会毁源的目标，放行独立子目录
     try std.testing.expect(!ejectDestHitsSourceTree("my/src")); // src 不是首段 → 与源码树不相交
 }
 
-/// `zzc init` 写出的脚手架入口模板（内置 zh 方言形）。
-/// D48（第 104 轮）：自 main.zig cmdInit 下沉至此进测试图——模板恒须通过自家
+/// 模板逐段 emit 助手：zig 0.17 禁局部 fn，而 `串 ++ 运行期切片` 又不可编译（++ 要两侧
+/// comptime 已知）——本模块唯一的运行期拼接通道，按片段序列依序 append。
+fn appendTemplateSegs(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), segs: []const []const u8) !void {
+    for (segs) |seg| try buf.appendSlice(gpa, seg);
+}
+
+/// `zzc init` 写出的脚手架入口模板生成器（按所选语言包组词）。
+/// D48（第 104 轮）：模板自 main.zig cmdInit 下沉至此进测试图——模板恒须通过自家
 /// 纯母语门（findEnglishWordForms 零违例，有测钉住）；旧位在 main（不入图）历轮 dogfood
 /// 清单漏网，模板硬编码 ASCII `void` 被 99 轮纯度门拒——工具自建脚手架出生即自检不过。
-pub const initTemplate: []const u8 =
-    \\// zzc 母语工程模板 —— 在本目录运行 `zzc run` 即可
-    \\常数 标准库 = 导入("std");
-    \\
-    \\公开 函数 主函数() !空 {
-    \\    变量 数量: 整数 = 10;
-    \\    数量 = 数量 + 1;
-    \\    标准库.打印("数量是：{d}\n", .{数量});
-    \\}
-    \\
-;
+///
+/// 第 142 轮（拍板项⑤模板脚手架 i18n）：常量 `initTemplate` 改为生成器 `buildInitTemplate(lang)`。
+/// 缺陷形：旧常量恒为中文词形，选非中文包时 `zzc init` 出生即碎码（探针实锤：`zzc init pj
+/// --lang-file 外语包` 后 `zzc check` 报「期望 ',' after field」退 1——中文词元全被 intern、
+/// `const z_1 z_2 = ...` 非法）——D48 同根因跨包另一形。原则：**工具侧不硬编码任何方言词、
+/// 判据全取自包**（与 D44 反查同一语言无关原则）：结构词只用 B6 契约 13 值（必可反查）；
+/// 非契约词缺则降级——`pub` 缺则 ASCII 直通（zig 硬性要求 `pub fn main`，探针实锤非公开入口
+/// 编译拒「'main' is not marked 'pub'」——降级 ASCII 是唯一合法兜底，而纯度门对其天然不拦）；
+/// `void` 缺则 ASCII 直通（无映射即不可坐实、纯度门天然不拦）；名字/入口/打印词反查
+/// `std`/`main`/`std.debug.print`（keywords ∪ aliases，多段 alias 键整体作点分链可用），
+/// 未命中落 ASCII 直通形/逐段回退链。演示文案取大白话（用户口径 142）；注释/串不参与翻译。
+/// 降级到 ASCII 属可用性优先：碎码不是合法兜底项（探针 T2 坐实旧行为即碎码）。
+pub fn buildInitTemplate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
+    // 非 ASCII 词元可直通 intern 成名（跨文件一致）——名字槽位用方言词兜 ASCII 皆合法。
+    const w_const = Pack.firstKeywordFor(lang, "const") orelse "const";
+    const w_var = Pack.firstKeywordFor(lang, "var") orelse w_const; // 无 var 词形则退常宣声明（literal 推导合法）
+    const w_fn = Pack.firstKeywordFor(lang, "fn") orelse "fn";
+    const w_import = Pack.firstKeywordFor(lang, "@import") orelse "@import";
+    const w_pub = Pack.firstKeywordFor(lang, "pub") orelse "pub"; // 入口必 pub（zig 硬要求），缺则 ASCII 直通
+    const w_main = Pack.firstKeywordFor(lang, "main") orelse "main";
+    const w_std = Pack.firstKeywordFor(lang, "std") orelse "std";
+    const w_void = Pack.firstKeywordFor(lang, "void") orelse "void";
+    // 类型注必存在：`var 名 = 10` 无显式定宽类型→zig 视其为 comptime_int、再赋值拒
+    // 「must be given an explicit fixed-size number type」（探针复跑自捕三）——缺则 ASCII
+    // 直通 `i64`（与 pub/void 同定③：降级 ASCII 是唯一合法兜底、纯度门对其天然不拦）。
+    const w_i64 = Pack.firstKeywordFor(lang, "i64") orelse "i64";
+    // 打印调用三形择优：叶子别名（值恰为 std.debug.print）> 模块链（std→std.debug 两段皆方言、
+    // 链止于 ASCII 成员 print 逐段回退）> ASCII 全链。注意 w_std 已兑 ASCII、不可用作「包真有
+    // std 方言名」判据——初版以 `w_std != null` 判系把已 orelse 兑底的量当可选比较，编译即拒。
+    const opt_std = Pack.firstKeywordFor(lang, "std");
+    const opt_std_dbg = Pack.firstKeywordFor(lang, "std.debug");
+    const print_callee = if (Pack.firstKeywordFor(lang, "std.debug.print")) |w| w else if (opt_std != null and opt_std_dbg != null)
+        std.fmt.allocPrint(gpa, "{s}.{s}", .{ opt_std.?, opt_std_dbg.? }) catch return error.OutOfMemory
+    else
+        "std.debug.print";
+    const count_name = "数"; // 大白话名（任意包的合法方言标识符，intern 稳定）
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    const A = appendTemplateSegs;
+    try A(gpa, &out, &.{"// zzc 方言工程模板 —— 进入目录后运行 `zzc run` 即可\n\n"});
+    try A(gpa, &out, &.{ w_const, " ", w_std, " = ", w_import, "(\"std\");\n\n" });
+    try A(gpa, &out, &.{ w_pub, " ", w_fn, " ", w_main, "() !", w_void, " {\n" });
+    try A(gpa, &out, &.{ "    ", w_var, " ", count_name, ": ", w_i64, " = 10;\n" });
+    try A(gpa, &out, &.{ "    ", count_name, " = ", count_name, " + 1;\n" });
+    // 串内 `{d}\n` 必为**字面两字符**（旧模板多行字面量形即如此；zig 拒绝串字面量里的真换行字节——
+    // 初版误写 `\n` 落成真换行，探针复跑 check 坐实「string literal contains invalid byte: '\n'」自捕）。
+    try A(gpa, &out, &.{ "    ", print_callee, "(\"结果是 {d}\\n\", .{", count_name, "});\n" });
+    try A(gpa, &out, &.{"}\n"});
+    return out.toOwnedSlice(gpa);
+}
 
 /// 判断 `init` 的工程名是否不安全（会在预期之外的位置建目录/写文件）。
 /// 不安全：空、以分隔符开头（根相对/绝对）、含 `:`（盘符或非法目录名）、任一 `.` 或 `..` 段
