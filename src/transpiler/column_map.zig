@@ -244,3 +244,33 @@ test "lineColOf/lineText CRLF 行尾源：\\r\\n 只计一次换行、列自 '\\
     try std.testing.expectEqualStrings("cd", lineText("ab\r\ncd", 4));
     try std.testing.expectEqualStrings("b", lineText("a\r\nb\ncd", 3));
 }
+
+// 护栏（第 125 轮证伪落位）：R6 头注 L60-62 声明「entries 按 nat_off 与 std_off 双双升序且不重叠、
+// 此不变量由差分对照测钉住」——但差分测输入恒为 translate 扫描序生成，无序输入域的最小反例
+// 从未直钉：乱序时二分与线性参照分叉的确切形制、以及 add 纯保插入序无排序无拒的事实（调用方
+// 保序系 load-bearing 责任）。本测钉最小反例：若未来有人给 add 静默加排序或将二分改全扫（契约
+// 变更），分叉钉立即抓红提醒同步头注与调用方责任。坐标设计：B(std 10..15→nat 12..18)、A(std 0..3→nat 0..3)。
+test "add 保插入序无防御 + 乱序条目下二分/线性分叉最小反例直钉：R6 有序前提系调用方责任（第 125 轮证伪落位）" {
+    const gpa = std.testing.allocator;
+    var map = init(gpa);
+    defer map.deinit(gpa);
+    // 乱序插入（先 B 后 A）：add 无排序无拒——锤钉 insertion order 原样保留。
+    try map.add(gpa, .{ .nat_off = 12, .nat_len = 6, .std_off = 10, .std_len = 5 });
+    try map.add(gpa, .{ .nat_off = 0, .nat_len = 3, .std_off = 0, .std_len = 3 });
+    try std.testing.expectEqual(@as(usize, 10), map.entries.items[0].std_off);
+    // ① toNative(13)（真属 B 命中域）：二分取末条 A（delta 0）→ 13 错映；线性先扫中 B → 12。
+    try std.testing.expectEqual(@as(usize, 13), map.toNative(13));
+    try std.testing.expectEqual(@as(usize, 12), toNativeLinear(map.entries.items, 13));
+    // ② toStd(13)（真属 B 命中域）：二分末条 A → 13；线性先中 B → 10。对称分叉形。
+    try std.testing.expectEqual(@as(usize, 13), map.toStd(13));
+    try std.testing.expectEqual(@as(usize, 10), toStdLinear(map.entries.items, 13));
+    // ③ 有序对照：同两条按坐标升序重加，二分==线性==正确值（此即差分测守护的定义域）。
+    var ok = init(gpa);
+    defer ok.deinit(gpa);
+    try ok.add(gpa, .{ .nat_off = 0, .nat_len = 3, .std_off = 0, .std_len = 3 });
+    try ok.add(gpa, .{ .nat_off = 12, .nat_len = 6, .std_off = 10, .std_len = 5 });
+    try std.testing.expectEqual(@as(usize, 12), ok.toNative(13));
+    try std.testing.expectEqual(@as(usize, 12), toNativeLinear(ok.entries.items, 13));
+    try std.testing.expectEqual(@as(usize, 10), ok.toStd(13));
+    try std.testing.expectEqual(@as(usize, 10), toStdLinear(ok.entries.items, 13));
+}
