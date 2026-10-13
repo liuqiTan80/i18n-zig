@@ -5,6 +5,7 @@ pub const Mangle = @import("transpiler/mangle.zig");
 pub const ColumnMap = @import("transpiler/column_map.zig");
 pub const Pack = @import("lang/pack.zig");
 pub const registry = @import("lang/registry.zig");
+pub const userpack = @import("lang/userpack.zig");
 pub const fullwidth = @import("diag/fullwidth.zig");
 pub const diag = @import("diag/translate.zig");
 pub const cli = @import("cli/args.zig");
@@ -19,6 +20,7 @@ test {
     _ = ColumnMap;
     _ = Pack;
     _ = registry;
+    _ = userpack;
     _ = fullwidth;
     _ = diag;
     _ = cli;

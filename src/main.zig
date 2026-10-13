@@ -7,7 +7,7 @@
 //!   zzc run   [文件.zz]     编译并运行，`--` 之后为程序参数
 //!   zzc test  [文件.zz]     翻译 -> zig test
 //!   zzc eject [目录]        导出标准 Zig 工程（毕业路径）
-//!   zzc lang                列出内置语言包
+//!   zzc lang                列出当前语言包与可注册包；`lang add` 装入外部包（R9g 第二档）
 //!   zzc version             版本信息
 //!
 //! 语法骨架保持 ASCII（() {} !T ?T @builtin），仅词法单元母语化；
@@ -28,6 +28,7 @@ const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslate
 const cli = @import("cli/args.zig");
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
+const userpack = @import("lang/userpack.zig");
 
 const version_str = "0.1.0";
 const zh_pack = @embedFile("lang/packs/中文.txt");
@@ -482,6 +483,47 @@ fn loadExternalPack(path: []const u8) !Pack {
 
 // ---------------------------------------------------------------- 子命令
 
+/// R9g 第二档（第 140 轮）：`zzc lang add <文件> [--as 注册名]`——把校验通过的外部包**装进当前工程**
+/// （`.zzc/lang/<名>.txt`），此后 `--lang <名>` 免重编译直接命中。装载与契约校验复用第一档同一真相源
+/// （`loadExternalPack` + `validate`，贡献者向母语消息）；策略面（注册名白名单/防覆盖/原样落位/
+/// 穿越拒读）在测试图内的 `lang/userpack.zig`——main 不入测试图，放这里的代码一行也不会被单测跑到，
+/// 故本函数只做参数拆解、消息与退出码。
+/// 副作用顺序：拆参 → 装载校验（零写盘）→ 注册名封口（零写盘）→ install。坏包/坏名一律不留半个文件。
+fn cmdLangAdd(args: []const []const u8) void {
+    const file = if (args.len > 0) args[0] else {
+        printErr("zzc: lang add 需要语言包文件：`zzc lang add <文件> [--as 注册名]`。", .{});
+        werr.flush() catch {};
+        std.process.exit(2); // 用法错与未知包/未知动词同码（与 error.Usage 一致）
+    };
+    var pk = loadExternalPack(file) catch |e| bail(e); // 不存在/$format 过新/语法错均已在源头母语报出
+    defer pk.deinit();
+    // B6 契约硬门：不合格包装进来后只在 `--lang` 选中它时才在流程深处报缺——将“坏包”变成工程内的
+    // 定时炸弹，故装前即拒（与第一档加载时 validate 同一判据、同一消息形制）。
+    pk.validate() catch |e| {
+        printErr("zzc: 外部语言包「{s}」不完整：{s}", .{ file, describePackError(e) });
+        werr.flush() catch {};
+        bail(error.Failed); // noreturn：退 1、不外泄 error 名与栈帧
+    };
+    const key = cli.findFlag(args, "--as") orelse pk.code; // 缺省取包内 $code（与内置注册名同源）
+    if (!userpack.keyIsSafe(key)) {
+        printErr("zzc: 注册名「{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
+        werr.flush() catch {};
+        std.process.exit(2);
+    }
+    // 二次读同一文件：校验用的是 Pack 结构、落位用原字节（包体不得被加工——第一档装载器同样吃它）。
+    const bytes = readWhole(file) catch |e| bail(e);
+    userpack.install(io_, gpa_, userpack.default_dir, key, bytes) catch |e| switch (e) {
+        error.BadKey => unreachable, // 上面已拦
+        error.AlreadyInstalled => {
+            printErr("zzc: 本工程内已装有语言包「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
+            werr.flush() catch {};
+            std.process.exit(2); // 与 init 防覆盖形制一致：退 2 且原文件逐字节不动
+        },
+        else => bail(e), // 权限/IsDir/超限等：bail 的 localizeFsErr 母语兜底既有形
+    };
+    printOut("✔ 已装入语言包「{s}({s})」→ {s}/{s}.txt；用 `--lang {s}` 选用（免重编译，仅本工程可见）。", .{ pk.name, key, userpack.default_dir, key, key });
+}
+
 fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const entry = cli.pickEntry(args).entry;
     const proj = try collectAndTranslate(entry, lang, table);
@@ -918,6 +960,9 @@ pub fn main(init: std.process.Init) !void {
         werr.flush() catch {};
         std.process.exit(2); // 用法错与未知包同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }
+    // R9g 第二档（第 140 轮）：命名来源标——内置注册表 / 工程级已装包（.zzc/lang）。仅用于
+    // 把“契约不完整”消息归位：已装包被手工改坏不能报成“工具自身缺陷”（内置包的措辞）。
+    var installed_src: ?[]const u8 = null;
     var lang: Pack = if (lang_file) |fp|
         // 失败走 bail 而非 `return error.Failed`：main 带错返回会由 Zig 运行时打 `error: Failed`
         // + 栈帧（泄 std 绝对路径、D 族历史形）；母语消息已在源头报出，bail(Failed) 静默退 1。
@@ -925,6 +970,12 @@ pub fn main(init: std.process.Init) !void {
     else blk: {
         const chosen: registry.Entry = if (lang_name) |n|
             registry.lookup(n) orelse {
+                // R9g 第二档：内置未命中先查工程级已装包，命中即交回第一档同一装载真相源
+                // （免重编译）；仍不命中才落原“未知语言包”提示（第 137 轮守卫钉的形制不动）。
+                if (userpack.installedFile(io_, gpa_, userpack.default_dir, n)) |ip| {
+                    installed_src = ip;
+                    break :blk loadExternalPack(ip) catch |e| bail(e);
+                }
                 printErr("zzc: 未知语言包「{s}」。当前可用：", .{n});
                 for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
                 printErr("\n", .{});
@@ -958,6 +1009,8 @@ pub fn main(init: std.process.Init) !void {
     lang.validate() catch |e| {
         if (lang_file) |fp|
             printErr("zzc: 外部语言包「{s}」不完整：{s}", .{ fp, describePackError(e) })
+        else if (installed_src) |ip|
+            printErr("zzc: 已装语言包「{s}」不完整（装后又被改坏了？）：{s}", .{ ip, describePackError(e) })
         else
             printErr("zzc: 语言包不完整：{s}", .{describePackError(e)});
         bail(error.Failed); // 静默退 1：不外泄 error 名与栈帧（探针实锤形，第 103 轮）
@@ -968,13 +1021,26 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
     if (std.mem.eql(u8, cmd, "lang")) {
-        // R9：反映注册表——除当前选定包详情外，列出可注册的包名（多包加载面可见）。
-        printOut("当前语言包：{s}({s}) —— 关键字 {d} 条 / 路径别名 {d} 条 / 报错模式 {d} 条\n可注册包：", .{
-            lang.name, lang.code, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
-        });
-        for (registry.entries) |p| printOut("{s}({s}) ", .{ p.key, p.display });
-        printOut("\n", .{});
-        return;
+        // R9g 第二档（第 140 轮）：`lang` 由“只读详情”升为带动词，但**无参形制逐字不动**（第 136 轮
+        // 守卫钉的详情行 + 可注册段）。本轮探针实捕旧行为：多余 argv 被整体忽略——`zzc lang add x.txt`
+        // 也只打印一次详情退 0，用户以为装好了（“该拒绝未拒绝”形），故未知动词必递退 2。
+        const verb = if (argv.len > 0) argv[0] else "";
+        if (verb.len == 0) {
+            // R9：反映注册表——除当前选定包详情外，列出可注册的包名（多包加载面可见）。
+            printOut("当前语言包：{s}({s}) —— 关键字 {d} 条 / 路径别名 {d} 条 / 报错模式 {d} 条\n可注册包：", .{
+                lang.name, lang.code, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
+            });
+            for (registry.entries) |p| printOut("{s}({s}) ", .{ p.key, p.display });
+            printOut("\n", .{});
+            return;
+        }
+        if (std.mem.eql(u8, verb, "add")) {
+            cmdLangAdd(argv[1..]);
+            return;
+        }
+        printErr("zzc: lang 只有 add 子命令：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与可注册包）；「{s}」不是有效子命令。", .{verb});
+        werr.flush() catch {};
+        std.process.exit(2); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }
     if (std.mem.eql(u8, cmd, "init")) {
         if (argv.len < 1) bail(error.Usage);

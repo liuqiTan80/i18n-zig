@@ -418,6 +418,7 @@ pub const usage_text =
     \\  zzc test   [文件.zz]   翻译 -> zig test
     \\  zzc eject  [目录]      导出标准 Zig 工程（默认 standard/）
     \\  zzc lang               列出当前语言包与可注册包
+    \\  zzc lang add <文件>   装入外部语言包到本工程（--as 注册名 可选；免重编译）
     \\  zzc version            版本与当前语言包
     \\选项：
     \\  --lang <名>            选择语言包（如 zh / 中文；缺省为中文；该旗标不透传 zig）

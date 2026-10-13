@@ -844,5 +844,73 @@ foreach ($r in $rows) {
 if ($eOk) { Write-Output ("  [PASS] eol guard: repo-level EOL declaration present, all " + $rows.Count + " tracked .zig/.zon pinned to LF, dialect sources left EOL-transparent as measured") }
 else { $fail = $fail + 1 }
 
+# --- `zzc lang add` install + runtime-selection e2e guard (round 140, user-delegated
+# design). Measured this round on a fresh tree: dropping a pack into src/lang/packs does
+# NOT rerun build.zig's scan step (R9f/D45 -- stale cache hides it; only swapping the
+# cache-dir makes it appear), so any "write packs + recompile hint" design would ship a
+# lie. The shipped design installs into the project-level .zzc/lang/<key>.txt and the
+# --lang selector falls back to it at RUNTIME. Unit tests (userpack.zig) cover keyIsSafe/
+# install/installedFile with real IO, but the two pieces living in main.zig -- the
+# selector fallback and the verb dispatch (including the round-136 pinned bare `zzc lang`
+# shape staying byte-identical, and unknown verbs now exiting 2 where old code silently
+# ignored extra argv) -- are OUTSIDE the unit-test graph and only this e2e section can
+# catch their regression. Fixture: tools/fixtures/external-min.txt ($code = tst-ja).
+Write-Output "== lang add install guard =="
+$laOk = $true
+$lp = Join-Path $root ".zig-cache/guard_langadd_140"
+function Run-LA([string[]]$cmdArgs) {
+    $o = Join-Path $root ".zig-cache/la.out"; $e = Join-Path $root ".zig-cache/la.err"
+    $p = Start-Process -FilePath $zzc -ArgumentList $cmdArgs -NoNewWindow -Wait -PassThru -WorkingDirectory $lp -RedirectStandardOutput $o -RedirectStandardError $e
+    $t = Read-T $o; $r = Read-T $e
+    Remove-Item -Force $o, $e -ErrorAction SilentlyContinue
+    return @($p.ExitCode, $t, $r)
+}
+if (Test-Path $lp) { Remove-Item -Recurse -Force $lp }
+New-Item -ItemType Directory -Force $lp | Out-Null
+$fxm = Join-Path $root "tools/fixtures/external-min.txt"
+$N_azhuang = Native 0x5DF2,0x88C5,0x5165     # yi-zhuang-ru ("installed"), success marker
+$N_bukeyong = Native 0x6CE8,0x518C,0x540D,0x300C # zhu-ce-ming + open bracket (unsafe-key rejection marker; "bu-ke-yong" follows the quoted key, not the bracket)
+$N_yizhuang = Native 0x672C,0x5DE5,0x7A0B,0x5185,0x5DF2,0x88C5,0x6709 # ben-gong-cheng-nei-yi-zhuang-you (dup rejection marker)
+$installed = Join-Path $lp ".zzc/lang/g140x.txt"
+# A: add --as g140x -> exit 0, file lands byte-identical, success line on stdout
+$res = Run-LA @("lang", "add", $fxm, "--as", "g140x")
+if ($res[0] -ne 0) { Write-Output ("  [FAIL] langadd A: 'lang add --as g140x' expected exit 0, got " + $res[0] + " stderr: " + $res[2].Trim()); $laOk = $false }
+if (-not $res[1].Contains($N_azhuang)) { Write-Output "  [FAIL] langadd A: success line 'yi-zhuang-ru' missing from stdout"; $laOk = $false }
+if (-not (Test-Path $installed)) { Write-Output "  [FAIL] langadd A: .zzc/lang/g140x.txt not written into the project"; $laOk = $false }
+else {
+    if (-not (Same-Bytes ([System.IO.File]::ReadAllBytes($fxm)) ([System.IO.File]::ReadAllBytes($installed)))) { Write-Output "  [FAIL] langadd A: installed bytes differ from the fixture (pack body was altered on install)"; $laOk = $false }
+}
+# B: --lang g140x selects it at RUNTIME -- no recompile happened nor is needed
+$res = Run-LA @("version", "--lang", "g140x")
+if ($res[0] -ne 0) { Write-Output ("  [FAIL] langadd B: 'version --lang g140x' on a runtime-installed pack expected exit 0 (selection fallback dropped), got " + $res[0] + " stderr: " + $res[2].Trim()); $laOk = $false }
+if ($res[1].Trim().Length -eq 0) { Write-Output "  [FAIL] langadd B: version printed nothing -- fallback matched nothing"; $laOk = $false }
+# C: duplicate add -> exit 2, original bytes untouched (anti-overwrite contract)
+$before = [System.IO.File]::ReadAllBytes($installed)
+$res = Run-LA @("lang", "add", $fxm, "--as", "g140x")
+if ($res[0] -ne 2) { Write-Output ("  [FAIL] langadd C: duplicate add expected exit 2, got " + $res[0]); $laOk = $false }
+if (-not $res[2].Contains($N_yizhuang)) { Write-Output "  [FAIL] langadd C: dup rejection missing 'ben-gong-cheng-nei-yi-zhuang-you' hint on stderr"; $laOk = $false }
+if (-not (Same-Bytes $before ([System.IO.File]::ReadAllBytes($installed)))) { Write-Output "  [FAIL] langadd C: rejected duplicate still altered the installed file"; $laOk = $false }
+# D: invalid pack -> exit 1 and NOTHING written (validate gate precedes any IO side-effect)
+$res = Run-LA @("lang", "add", (Join-Path $root "tools/fixtures/external-partial.txt"), "--as", "g140d")
+if ($res[0] -ne 1) { Write-Output ("  [FAIL] langadd D: bad pack expected exit 1 (contract hard gate), got " + $res[0]); $laOk = $false }
+if (Test-Path (Join-Path $lp ".zzc/lang/g140d.txt")) { Write-Output "  [FAIL] langadd D: rejected bad pack still left a file behind"; $laOk = $false }
+# E: path-escape --as -> exit 2, nothing written outside the project lang dir
+$res = Run-LA @("lang", "add", $fxm, "--as", "../evil140")
+if ($res[0] -ne 2) { Write-Output ("  [FAIL] langadd E: '--as ../evil140' expected exit 2 (key whitelist), got " + $res[0]); $laOk = $false }
+if (-not $res[2].Contains($N_bukeyong)) { Write-Output "  [FAIL] langadd E: unsafe-key rejection missing native 'zhu-ce-ming bu-ke-yong' hint"; $laOk = $false }
+if (Test-Path (Join-Path $lp ".zzc/lang/evil140.txt")) { Write-Output "  [FAIL] langadd E: traversal key escaped the whitelist and wrote next to it"; $laOk = $false }
+# F: unknown verb -> exit 2 + clean stdout (OLD behavior measured this round: extra argv
+# was wholly ignored, `zzc lang add x.txt` printed the detail block and exited 0 -- a lie)
+$res = Run-LA @("lang", "unknowverb140")
+if ($res[0] -ne 2) { Write-Output ("  [FAIL] langadd F: unknown verb expected exit 2 (the round-140 verb seal), got " + $res[0]); $laOk = $false }
+if ($res[1].Trim().Length -ne 0) { Write-Output "  [FAIL] langadd F: unknown verb leaked text to stdout (old buggy shape printed info+exit 0?)"; $laOk = $false }
+# G: bare `zzc lang` unchanged -> exit 0 + clean stderr (136-pinned shape must survive verb dispatch)
+$res = Run-LA @("lang")
+if ($res[0] -ne 0) { Write-Output ("  [FAIL] langadd G: bare 'zzc lang' expected exit 0, got " + $res[0]); $laOk = $false }
+if ($res[2].Trim().Length -ne 0) { Write-Output "  [FAIL] langadd G: bare 'zzc lang' leaked to stderr after the verb-dispatch refactor"; $laOk = $false }
+Remove-Item -Recurse -Force $lp -ErrorAction SilentlyContinue
+if ($laOk) { Write-Output "  [PASS] lang add guard: install byte-exact, runtime --lang selection without recompile, dup->2/bytes kept, bad pack->1/zero writes, traversal->2, unknown verb->2 (stdout clean), bare lang shape preserved" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
