@@ -357,3 +357,97 @@ test "词类划分行为钉：@ 与后随 ASCII 词分开成词元；换行终�
         try expectTok(t2, s2, 1, .ascii_word, "n");
     }
 }
+
+// 护栏（第 128 轮）：空白集声明面（L56「空白：不属于任何词元」恰 6 成员）此前从未有测喂入
+// 0x0B/0x0C——VT/FF 若从集中失守即落入 punct 分支，词元流凭空多出 punct 使上层
+// isImportOperand 的 toks[i-1/i-2/i-3] 回溯下标链移位、`.zz→.zig` 改写静默失效（既有零测可挡）；
+// 反向钉 NUL/0x7F 系集外成员须成 punct（不多吞）。test 内不可写 doc 注释，声明以 // 注释承载。
+test "空白集精确成员行为钉：0x0B/0x0C 与常规空白同不吞词元，NUL/0x7F 则成 punct（第 128 轮）" {
+    const gpa = std.testing.allocator;
+
+    // VT/FF 夹在母语词与 ASCII 之间：不属于任何词元，两侧各自成词（与空格同形）。
+    {
+        const s = "甲\x0B\x0C乙";
+        const toks = try scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 2), toks.len);
+        try expectTok(toks, s, 0, .nonascii_word, "甲");
+        try expectTok(toks, s, 1, .nonascii_word, "乙");
+        const s2 = "a\x0Bb";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try std.testing.expectEqual(@as(usize, 2), t2.len);
+        try expectTok(t2, s2, 0, .ascii_word, "a");
+        try expectTok(t2, s2, 1, .ascii_word, "b"); // VT 断 ASCII 词（非词内字符）
+    }
+    // 全空白源零词元；集外单字节 NUL/0x7F 走 punct 分支各成一词元。
+    {
+        const ws = "\x0B\x0C \t\r\n";
+        const toks = try scan(gpa, ws);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 0), toks.len);
+        const s1 = "\x00";
+        const t1 = try scan(gpa, s1);
+        defer gpa.free(t1);
+        try expectTok(t1, s1, 0, .punct, "\x00");
+        const s2 = "\x7F";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try expectTok(t2, s2, 0, .punct, "\x7F");
+    }
+}
+
+// 护栏（第 128 轮）：D33 测钉死 string/char/symbol 未闭合「吞至 EOF、len==src.len」，但
+// comment/multiline 的 `orelse src.len` 同臂全库零值钉（截断测只钉边界不变量不钉 kind/len）；
+// 且 CRLF 源形（Windows 外部工程真形）下「`\r` 在注释/多行串体内、`\n` 不入词元」零钉。
+// 另钉 `i + 1 < src.len` 守卫界：裸 @、单反斜杠、\x 各落 punct。
+test "comment/multiline 吞至 EOF 与 CRLF 包 \r 值钉；裸 @/单反斜杠守卫界 punct（第 128 轮）" {
+    const gpa = std.testing.allocator;
+
+    // 无换行尾：两类词元吞至 src 尾恰成一词元（与 D33 测 string/char/symbol 同形）。
+    {
+        const s = "// 到尾";
+        const toks = try scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 1), toks.len);
+        try std.testing.expectEqual(s.len, toks[0].len); // orelse src.len 臂值钉
+        try expectTok(toks, s, 0, .comment, "// 到尾");
+        const s2 = "\\\\ 到尾";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try std.testing.expectEqual(@as(usize, 1), t2.len);
+        try std.testing.expectEqual(s2.len, t2[0].len);
+        try expectTok(t2, s2, 0, .multiline, "\\\\ 到尾");
+    }
+    // CRLF 形：`\r` 属词元体、`\n` 终止且不入词元（剥 \r 即红——下行对照形钉死）。
+    {
+        const s = "// c\r\n";
+        const toks = try scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 1), toks.len);
+        try expectTok(toks, s, 0, .comment, "// c\r");
+        const s2 = "\\\\ m\r\n甲";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try std.testing.expectEqual(@as(usize, 2), t2.len);
+        try expectTok(t2, s2, 0, .multiline, "\\\\ m\r");
+        try expectTok(t2, s2, 1, .nonascii_word, "甲");
+    }
+    // 守卫界：`@`/`\` 作末字节不再前瞻，各自落 punct；`\x` 不成 multiline 拆两词元。
+    {
+        const s1 = "@";
+        const t1 = try scan(gpa, s1);
+        defer gpa.free(t1);
+        try expectTok(t1, s1, 0, .punct, "@");
+        const s2 = "\\";
+        const t2 = try scan(gpa, s2);
+        defer gpa.free(t2);
+        try expectTok(t2, s2, 0, .punct, "\\");
+        const s3 = "\\x";
+        const t3 = try scan(gpa, s3);
+        defer gpa.free(t3);
+        try std.testing.expectEqual(@as(usize, 2), t3.len);
+        try expectTok(t3, s3, 0, .punct, "\\");
+        try expectTok(t3, s3, 1, .ascii_word, "x");
+    }
+}
