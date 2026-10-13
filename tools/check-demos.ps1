@@ -646,5 +646,41 @@ Remove-Item -Force $vo, $ve -ErrorAction SilentlyContinue
 if ($vOk) { Write-Output "  [PASS] version guard: 'zzc version' exits 0, stdout-only, and self-reports exactly the build.zig.zon .version" }
 else { $fail = $fail + 1 }
 
+# --- `zzc test` success-path contract guard (round 135): cmdBuild's `.test_` branch (main.zig
+# L564 zig-test step, L566 suppress -femit-bin, L579 native "zig test tong-guo(passed)" hint) is a DISTINCT
+# exit-contract surface that never enters the unit-test graph. The build guard (round 132) pins
+# only `.build`/`.run`; no existing guard ever invokes `zzc test`. Probe-confirmed real behavior:
+# clean dialect project -> `zzc test` exit 0 + stdout exactly "\u2714 zig test \u901a\u8fc7" + NO .zzc/bin artifact.
+# A semantic-error source is deliberately NOT a fail-form here: `zig test` lazy-analyzes and prunes
+# the unreferenced decls, so an error project passes VACUOUSLY (exit 0) -- asserting exit 1 would be
+# a fabricated pin, honestly excluded. Sabotage L579 hint -> success message missing -> only this
+# guard turns red while the 187-test graph stays green (regression invisible to unit tests).
+Write-Output "== test success-path contract guard =="
+$tOk = $true
+$N_tongguo = Native 0x901A,0x8FC7             # tong-guo (passed), native test success hint
+$tA = Join-Path $root ".zig-cache/tstA_guard"
+if (Test-Path $tA) { Remove-Item -Recurse -Force $tA }
+New-Item -ItemType Directory -Force -Path (Join-Path $tA "src") | Out-Null
+$tSrcA = @"
+$N_const std = $N_import("std");
+
+$N_pub $N_fn $N_main() $N_void {
+    std.debug.print("ok135", .{});
+}
+"@
+[System.IO.File]::WriteAllText((Join-Path $tA "src/main.zz"), $tSrcA, $encNoBom)
+$toA = Join-Path $tA "a.out"; $teA = Join-Path $tA "a.err"
+$tpA = Start-Process -FilePath $zzc -ArgumentList "test" -NoNewWindow -Wait -PassThru `
+    -WorkingDirectory $tA -RedirectStandardOutput $toA -RedirectStandardError $teA
+$tpAo = Read-T $toA; $tpAe = Read-T $teA
+if ($tpA.ExitCode -ne 0) { Write-Output ("  [FAIL] test A: clean 'zzc test' expected exit 0, got " + $tpA.ExitCode); $tOk = $false }
+if (-not $tpAo.Contains($N_tongguo)) { Write-Output "  [FAIL] test A: native 'tong-guo' success hint missing from stdout (.test_ hint dropped)"; $tOk = $false }
+if ($tpAo.Contains($N_chanhao)) { Write-Output "  [FAIL] test A: stdout carries 'chan-wu' artifact hint -- .test_ branch conflated with .build"; $tOk = $false }
+if ($tpAe.Trim().Length -ne 0) { Write-Output "  [FAIL] test A: 'zzc test' leaked text to stderr (success hint must be stdout-only)"; $tOk = $false }
+if (Test-Path (((Join-Path $tA ".zzc/bin/main") + $ext))) { Write-Output "  [FAIL] test A: 'zzc test' emitted a binary artifact (no-emit-bin contract broken)"; $tOk = $false }
+Remove-Item -Recurse -Force $tA -ErrorAction SilentlyContinue
+if ($tOk) { Write-Output "  [PASS] test guard: clean 'zzc test' exits 0 with native 'zig test passed' hint on stdout, no 'artifact' conflation, no stderr leak, emits no binary" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
