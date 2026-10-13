@@ -204,3 +204,47 @@ test "readWhole 超限封口（B5/max_source_bytes）：限内放行、超限 1 
     try writeWhole(io, probe, big);
     try std.testing.expectError(error.SourceTooLarge, readWhole(io, gpa, probe));
 }
+
+// 护栏（第 129 轮证伪落位）：两条头注声明面此前零真 fired 直钉——
+// ① writeWhole L36「必要时先建父目录」：既有全部测 probe 父目录恒为 `.zig-cache/`（zig build
+//   先于 test 必然已建），createDirPath 只走幂等已存在臂；「父目录缺失→真建」与多级嵌套
+//   语义零钉——删建目录调用/误写单级形，既有测无一能红（生产链 main 的 .zzc/bin 与 init 名
+//   恰是多级真需求）。② pathExists L50「不区分文件/目录」：既有断言只碰文件与不存在路径，
+//   目录形回 true 零钉——后人「改进」为只检文件即 init 防覆盖/eject 已存在目录判定静默回退。
+// test 内不可写 doc 注释，声明以 // 注释承载。
+test "writeWhole 必要时建父目录声明面：二级缺失嵌套真建可写读回 + 嵌套覆盖；pathExists 目录形回 true（不区分文件/目录）（第 129 轮）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const root = ".zig-cache/zzc_r129_deep";
+    const sub = root ++ "/sub";
+    const deep = sub ++ "/probe.txt";
+    // 先清历史异常残留，使前置「缺失」断言确定性成立（正常 defer 已清，本行为双保险）。
+    std.Io.Dir.cwd().deleteTree(io, root) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, root) catch {};
+
+    // ① 前置：目录与目标文件均不存在（pathExists 对不存在回 false 既有测已钉，此处为后文证伪锤）。
+    try std.testing.expect(!pathExists(io, root));
+    try std.testing.expect(!pathExists(io, deep));
+
+    // ② 声明面核心：父目录缺失二级（root/sub）嵌套写——createDirPath 真建分支 fired、
+    //   误删即 FileNotFound、误写单级/上溯一级形即末级仍缺（S1/S2 点位）。
+    try writeWhole(io, deep, "nested write");
+    const back = try readWhole(io, gpa, deep);
+    try std.testing.expectEqualStrings("nested write", back);
+
+    // ③ 目录存在亦回 true（「不区分文件/目录」声明面直钉，S3 点位）。
+    try std.testing.expect(pathExists(io, root));
+    try std.testing.expect(pathExists(io, sub));
+    try std.testing.expect(pathExists(io, deep));
+
+    // ④ 嵌套路径下覆盖形：同 deep 再写换内容（覆盖面既有单级已兜、此形顺手钉住不另设点位）。
+    try writeWhole(io, deep, "overwritten");
+    const back2 = try readWhole(io, gpa, deep);
+    try std.testing.expectEqualStrings("overwritten", back2);
+}
