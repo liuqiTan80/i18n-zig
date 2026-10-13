@@ -478,5 +478,55 @@ if ($raOk) { Write-Output "  [PASS] runargs guard: bare run argc=1; `zzc run -- 
 else { $fail = $fail + 1 }
 Remove-Item -Recurse -Force $ra -ErrorAction SilentlyContinue
 
+# --- top-level dispatch exit-code contract guard (round 131): the command router lives
+# in main.zig (OUTSIDE the unit-test graph), so no unit test can see a regression here.
+# Two twin faces are pinned: (A) an unknown/typo'd subcommand (e.g. `zzc runn`) MUST fail
+# with exit 2 and a native hint on stderr and nothing on stdout -- the old `return`->exit 0
+# (main.zig L1000-1003) let CI/scripts misjudge a typo as success; (B) its twin: help flags
+# (--help/-h/-?/help), a bare invocation and `version` MUST exit 0 with usage/info on stdout
+# and never fall through to the unknown-subcommand exit 2 (removing the help branch would
+# silently turn `zzc --help` into exit 2). Existing guards test exit 2 only for --lang
+# mutual exclusion and unsafe init names, never the unknown-subcommand path nor help->0.
+Write-Output "== dispatch exit-code contract guard =="
+$dkOk = $true
+function Read-T([string]$f) {
+    if (-not (Test-Path $f)) { return "" }
+    return [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($f))
+}
+$N_zimling = Native 0x5B50,0x547D,0x4EE4   # zi-ming-ling (sub-command), from the native usage hint
+# (A) unknown/typo subcommands -> exit 2, native hint on stderr, stdout clean
+foreach ($bad in @("runn", "bulid", "chekc")) {
+    $oa = Join-Path $root (".zig-cache/dkA_" + $bad + ".out"); $ea = Join-Path $root (".zig-cache/dkA_" + $bad + ".err")
+    $pa = Start-Process -FilePath $zzc -ArgumentList $bad -NoNewWindow -Wait -PassThru -RedirectStandardOutput $oa -RedirectStandardError $ea
+    $ta = Read-T $ea; $sa = Read-T $oa
+    if ($pa.ExitCode -ne 2) { Write-Output ("  [FAIL] dispatch A: unknown subcommand '" + $bad + "' expected exit 2 (anti-CI-misjudge), got " + $pa.ExitCode); $dkOk = $false }
+    if (-not $ta.Contains($N_zimling)) { Write-Output ("  [FAIL] dispatch A: unknown '" + $bad + "' missing native 'zi-ming-ling' hint on stderr"); $dkOk = $false }
+    if ($sa.Trim().Length -ne 0) { Write-Output ("  [FAIL] dispatch A: unknown '" + $bad + "' leaked text to stdout (hint must be stderr-only)"); $dkOk = $false }
+    Remove-Item -Force $oa, $ea -ErrorAction SilentlyContinue
+}
+# (B) help flags -> exit 0 + usage on stdout (twin of the unknown->2 branch)
+foreach ($good in @("--help", "-h", "-?", "help")) {
+    $ob = Join-Path $root ".zig-cache/dkB.out"; $eb = Join-Path $root ".zig-cache/dkB.err"
+    $pb = Start-Process -FilePath $zzc -ArgumentList $good -NoNewWindow -Wait -PassThru -RedirectStandardOutput $ob -RedirectStandardError $eb
+    $sb = Read-T $ob
+    if ($pb.ExitCode -ne 0) { Write-Output ("  [FAIL] dispatch B: help flag '" + $good + "' expected exit 0 (must not fall through to unknown->2), got " + $pb.ExitCode); $dkOk = $false }
+    if ($sb.Trim().Length -eq 0) { Write-Output ("  [FAIL] dispatch B: help flag '" + $good + "' printed empty stdout usage"); $dkOk = $false }
+    Remove-Item -Force $ob, $eb -ErrorAction SilentlyContinue
+}
+# (C) bare invocation (no args) -> exit 0 + usage on stdout
+$oc = Join-Path $root ".zig-cache/dkC.out"; $occ = Join-Path $root ".zig-cache/dkC.err"
+$pc = Start-Process -FilePath $zzc -NoNewWindow -Wait -PassThru -RedirectStandardOutput $oc -RedirectStandardError $occ
+if ($pc.ExitCode -ne 0) { Write-Output ("  [FAIL] dispatch C: bare invocation expected exit 0, got " + $pc.ExitCode); $dkOk = $false }
+if ((Read-T $oc).Trim().Length -eq 0) { Write-Output "  [FAIL] dispatch C: bare invocation printed empty stdout usage"; $dkOk = $false }
+Remove-Item -Force $oc, $occ -ErrorAction SilentlyContinue
+# (D) version -> exit 0 + non-empty stdout
+$od = Join-Path $root ".zig-cache/dkD.out"; $ed = Join-Path $root ".zig-cache/dkD.err"
+$pd = Start-Process -FilePath $zzc -ArgumentList "version" -NoNewWindow -Wait -PassThru -RedirectStandardOutput $od -RedirectStandardError $ed
+if ($pd.ExitCode -ne 0) { Write-Output ("  [FAIL] dispatch D: version expected exit 0, got " + $pd.ExitCode); $dkOk = $false }
+if ((Read-T $od).Trim().Length -eq 0) { Write-Output "  [FAIL] dispatch D: version printed empty stdout"; $dkOk = $false }
+Remove-Item -Force $od, $ed -ErrorAction SilentlyContinue
+if ($dkOk) { Write-Output "  [PASS] dispatch guard: unknown/typo subcommands exit 2 with native hint (stdout clean); help-flags/bare/version exit 0 with usage on stdout" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
