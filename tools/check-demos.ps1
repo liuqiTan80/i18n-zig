@@ -621,5 +621,30 @@ Remove-Item -Recurse -Force $bB -ErrorAction SilentlyContinue
 if ($bldOk) { Write-Output "  [PASS] build guard: clean build exits 0 with native artifact hint and runnable exe; failed build exits 1 with native diag only, no raw error-name leak, no artifact" }
 else { $fail = $fail + 1 }
 
+# --- version self-report / manifest consistency guard (round 134): `zzc version`
+# prints main.zig's `version_str` (main.zig is OUTSIDE the unit-test graph) while the
+# package manifest build.zig.zon declares its own `.version`. These are two independent
+# hardcoded copies of the same truth; a release that bumps one and forgets the other makes
+# `zzc version` lie about the running build (CI/release tooling reads the wrong number).
+# No unit test ties them and dispatch D only pins version non-empty -- so pin the value.
+# Sabotage L32 version_str -> runtime token != manifest -> this guard fails while the test
+# graph stays green (regression invisible to unit tests).
+Write-Output "== version manifest-consistency guard =="
+$vOk = $true
+$zonRaw = [System.IO.File]::ReadAllText((Join-Path $root "build.zig.zon"), [System.Text.Encoding]::UTF8)
+$zonM = [regex]::Match($zonRaw, '\.version\s*=\s*"([^"]+)"')
+if (-not $zonM.Success) { Write-Output "  [FAIL] version guard: could not parse .version from build.zig.zon"; $vOk = $false }
+$vo = Join-Path $root ".zig-cache/vg.out"; $ve = Join-Path $root ".zig-cache/vg.err"
+$pv = Start-Process -FilePath $zzc -ArgumentList "version" -NoNewWindow -Wait -PassThru -RedirectStandardOutput $vo -RedirectStandardError $ve
+$vOut = Read-T $vo; $vErr = Read-T $ve
+if ($pv.ExitCode -ne 0) { Write-Output ("  [FAIL] version guard: 'zzc version' expected exit 0, got " + $pv.ExitCode); $vOk = $false }
+if ($vErr.Trim().Length -ne 0) { Write-Output "  [FAIL] version guard: 'zzc version' leaked text to stderr (info must be stdout-only)"; $vOk = $false }
+$runM = [regex]::Match($vOut, '\d+\.\d+\.\d+')
+if (-not $runM.Success) { Write-Output ("  [FAIL] version guard: 'zzc version' stdout carries no version token: [" + $vOut.Trim() + "]"); $vOk = $false }
+elseif ($zonM.Success -and $runM.Value -ne $zonM.Groups[1].Value) { Write-Output ("  [FAIL] version guard: self-reported version '" + $runM.Value + "' != build.zig.zon .version '" + $zonM.Groups[1].Value + "' (drift -- 'zzc version' lies)"); $vOk = $false }
+Remove-Item -Force $vo, $ve -ErrorAction SilentlyContinue
+if ($vOk) { Write-Output "  [PASS] version guard: 'zzc version' exits 0, stdout-only, and self-reports exactly the build.zig.zon .version" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
