@@ -594,6 +594,43 @@ test "关键字/别名超串标识符：整词不拆分，别名仅对完整词�
     try std.testing.expectEqualStrings("返回值", table.unmangle("z_3").?);
 }
 
+test "标准库全量别名：模块级名 + ASCII 成员全链展开与未列名逐段回退（第 141 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    const src =
+        \\公开 函数 主函数() 空 {
+        \\    标准库.调试.print("hi", .{});
+        \\    标准库.调试.assert(1 > 0);
+        \\    常数 甲 = 标准库.网络;
+        \\    常数 乙 = 标准库.交换文本;
+        \\    常数 丙 = 标准库.联载格式;
+        \\    常数 丁 = 标准库.mem.eql;
+        \\    常数 戊 = 标准库.ArrayList;
+        \\}
+        \\
+    ;
+    const o = (try translate(gpa, src, lang, &table)).zig_str;
+    // 模块级别名 + ASCII 成员：整链展开为 std.<模块>.<成员>（链止于 ASCII 成员、成员原样保留）
+    try std.testing.expect(std.mem.indexOf(u8, o, "std.debug.print(\"hi\", .{})") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o, "std.debug.assert") != null);
+    // 纯模块级名（无成员）：命中本轮新增的全量别名
+    try std.testing.expect(std.mem.indexOf(u8, o, "= std.http;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o, "= std.json;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o, "= std.elf;") != null);
+    // 未起中文名的原生路径：逐段回退（标准库 -> std，ASCII 成员原样透传）——中文别名是增益、非唯一路径
+    try std.testing.expect(std.mem.indexOf(u8, o, "= std.mem.eql;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, o, "= std.ArrayList;") != null);
+    // 反向不变量：母语模块名命中别名链第 1 步即短路，绝不会被 intern 成 std.z_（落标识符转码即别名失效）
+    try std.testing.expect(std.mem.indexOf(u8, o, "std.z_") == null);
+}
+
 test "CRLF 归一：Windows 行尾的方言源 -> 纯 LF 标准 Zig" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

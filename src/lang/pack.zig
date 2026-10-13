@@ -376,6 +376,39 @@ test "语言包解析" {
     try std.testing.expectEqualStrings("MyType", pack.whitelist.items[1]);
 }
 
+test "内置中文包别名表不变量（第 141 轮）：键除 `.` 分隔外须纯非 ASCII、新模块名到位、全量覆盖" {
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    // 不变量一：别名键除 `.`（词元切分的句读分隔符）外不得含任何 ASCII 字节。
+    // 依据：matchAliasChain 仅跨 `.nonascii_word` 词元；若键内混入 ASCII 字母段（如 `标准库.elf`），
+    // 词法器会把 `elf` 切成 ascii_word、链永不命中——该别名将成为写了也永不生效的死词条（静默）。
+    var it = p.aliases.iterator();
+    var n: usize = 0;
+    while (it.next()) |e| {
+        n += 1;
+        for (e.key_ptr.*) |b| {
+            if (b == '.') continue;
+            try std.testing.expect(b >= 0x80);
+        }
+    }
+    // 不变量二：全量覆盖——std.zig 顶层 pub 名基本都应有母语别名（本轮由 ~32 扩至 ≥100）。
+    try std.testing.expect(n >= 100);
+
+    // 不变量三：代表性新模块别名确到位（值保留英文原路径不受限）。
+    try std.testing.expectEqualStrings("std.debug", p.aliases.get("标准库.调试").?);
+    try std.testing.expectEqualStrings("std.http", p.aliases.get("标准库.网络").?);
+    try std.testing.expectEqualStrings("std.json", p.aliases.get("标准库.交换文本").?);
+    try std.testing.expectEqualStrings("std.elf", p.aliases.get("标准库.联载格式").?);
+    try std.testing.expectEqualStrings("std.ArrayListUnmanaged", p.aliases.get("标准库.列表裸").?);
+    // 既有高频条目不得因重排而丢失（回归防线）。
+    try std.testing.expectEqualStrings("std", p.aliases.get("标准库").?);
+    try std.testing.expectEqualStrings("std.process", p.aliases.get("标准库.过程").?);
+    try std.testing.expectEqualStrings("std.debug.print", p.aliases.get("标准库.打印").?);
+}
+
 test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全量通过" {
     const gpa = std.testing.allocator;
 
