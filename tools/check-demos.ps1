@@ -765,5 +765,52 @@ Remove-Item -Force $lo, $le -ErrorAction SilentlyContinue
 if ($lOk) { Write-Output "  [PASS] lang guard: 'zzc lang' exits 0, stdout-only, detail name/code match the embedded pack, registerable list carries the default key" }
 else { $fail = $fail + 1 }
 
+# --- `--lang` builtin-pack selection e2e guard (round 137): the flag chain lives in
+# main.zig L914-942 (OUTSIDE the unit-test graph). The r9g section pins --lang-file shapes
+# and the --lang x --lang-file mutual exclusion only; NO guard ever invokes a standalone
+# `--lang`. Three unpinned faces: (A) a valid builtin key selects the pack and the version
+# line reflects it (findLangFlag hit + registry.lookup success); (B) an unknown pack name
+# exits 2 with the native 'wei-zhi yu-yan-bao' hint and a clean stdout (L926-933 orelse
+# branch - its only exit-code responsibility); (C) the flag pair is stripped before the
+# command runs (stripLangFlag) -- if a regression leaked '--lang' into argv it would reach
+# zig as an unknown argument and break a real check, while A/B would stay green because
+# `version` never consumes argv. Script stays pure ASCII; native strings from code points.
+Write-Output "== lang flag selection guard =="
+$gOk = $true
+$N_yuyanbao = Native 0x8BED,0x8A00,0x5305              # yu-yan-bao (language pack), shown by the version line
+$N_weizhiyuyanbao = Native 0x672A,0x77E5,0x8BED,0x8A00,0x5305 # wei-zhi yu-yan-bao (unknown language pack), stderr hint
+# A: --lang zh positive selection on `version`
+$goA = Join-Path $root ".zig-cache/gfA.out"; $geA = Join-Path $root ".zig-cache/gfA.err"
+$gpA = Start-Process -FilePath $zzc -ArgumentList @("version", "--lang", "zh") -NoNewWindow -Wait -PassThru -RedirectStandardOutput $goA -RedirectStandardError $geA
+$goAt = Read-T $goA; $geAt = Read-T $geA
+if ($gpA.ExitCode -ne 0) { Write-Output ("  [FAIL] flag A: 'zzc version --lang zh' expected exit 0, got " + $gpA.ExitCode); $gOk = $false }
+if (-not $goAt.Contains($N_yuyanbao)) { Write-Output "  [FAIL] flag A: version line lacks the 'yu-yan-bao' pack echo (selection result not reported)"; $gOk = $false }
+if (-not $goAt.Contains($N_zhongwen)) { Write-Output "  [FAIL] flag A: selected pack name 'zhong-wen' not echoed (lookup hit not reflected)"; $gOk = $false }
+if ($geAt.Trim().Length -ne 0) { Write-Output "  [FAIL] flag A: 'version --lang zh' leaked text to stderr (info must be stdout-only)"; $gOk = $false }
+Remove-Item -Force $goA, $geA -ErrorAction SilentlyContinue
+# B: unknown pack name -> exit 2 + native hint on stderr + stdout clean
+$goB = Join-Path $root ".zig-cache/gfB.out"; $geB = Join-Path $root ".zig-cache/gfB.err"
+$gpB = Start-Process -FilePath $zzc -ArgumentList @("version", "--lang", "klingon") -NoNewWindow -Wait -PassThru -RedirectStandardOutput $goB -RedirectStandardError $geB
+$goBt = Read-T $goB; $geBt = Read-T $geB
+if ($gpB.ExitCode -ne 2) { Write-Output ("  [FAIL] flag B: unknown pack expected exit 2 (usage-error class), got " + $gpB.ExitCode); $gOk = $false }
+if (-not $geBt.Contains($N_weizhiyuyanbao)) { Write-Output "  [FAIL] flag B: native 'wei-zhi yu-yan-bao' hint missing from stderr"; $gOk = $false }
+if ($goBt.Trim().Length -ne 0) { Write-Output "  [FAIL] flag B: unknown-pack error leaked text to stdout (hint must be stderr-only)"; $gOk = $false }
+Remove-Item -Force $goB, $geB -ErrorAction SilentlyContinue
+# C: flag stripped from argv -- the true consumer is cmdBuild: main.zig L571-574 forwards
+# every leftover zig_arg to `zig build-exe`, while pickEntry only matches `.zz` suffixes, so
+# a leaked '--lang zh' pair would reach zig as unknown arguments and break the build. A
+# `check` shape CANNOT defend this (cmdCheck never forwards argv -- S2 round 137 measured
+# the leak passing every check assertion), hence the build form: demo/hello with --lang zh
+# must exit 0 with the native artifact hint; a leak exits 1 with zig's error on stderr.
+$goC = Join-Path $root ".zig-cache/gfC.out"; $geC = Join-Path $root ".zig-cache/gfC.err"
+$gpC = Start-Process -FilePath $zzc -ArgumentList @("build", "--lang", "zh", "src/main.zz") -NoNewWindow -Wait -PassThru -WorkingDirectory (Join-Path $root "demo/hello") -RedirectStandardOutput $goC -RedirectStandardError $geC
+$goCt = Read-T $goC; $geCt = Read-T $geC
+if ($gpC.ExitCode -ne 0) { Write-Output ("  [FAIL] flag C: 'zzc build --lang zh' on demo/hello expected exit 0 (flag must be stripped before argv reaches zig), got " + $gpC.ExitCode); $gOk = $false }
+if (-not $goCt.Contains($N_chanhao)) { Write-Output "  [FAIL] flag C: build hint 'chan-hao' missing -- --lang form silently degraded the build"; $gOk = $false }
+if ($geCt.Trim().Length -ne 0) { Write-Output "  [FAIL] flag C: leaked text to stderr on the --lang build path (zig got raw '--lang'?)"; $gOk = $false }
+Remove-Item -Force $goC, $geC -ErrorAction SilentlyContinue
+if ($gOk) { Write-Output "  [PASS] flag guard: --lang zh selects+echoes the pack, unknown names exit 2 with native hint (stdout clean), and the flag is stripped before argv reaches zig" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
