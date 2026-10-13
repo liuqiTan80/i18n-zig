@@ -644,3 +644,158 @@ test "fullwidthFormHint 三类划分（数字/拉丁字母/符号）与半角映
     try std.testing.expectEqual(null, fullwidthFormHint("\u{FF00}")); // 区下界外一格
     try std.testing.expectEqual(null, fullwidthFormHint("\u{FF5F}")); // 区上界外一格
 }
+
+// 护栏（第 126 轮证伪落位）：头注 L6-10 声明「白名单系显式码点区间表、非 Unicode Letter 属性」，
+// 但 isAllowedScalar 的**每条区间边界含端性**全库零直钉——D35 测只经 check 间接碰了西里尔内部的
+// р（0x440，非边界）与假名区间外的 α/组合符；假名下界 0x3040、各区间上界与界外一格从未被碰。
+// 区间被误改一格的两种翻转形须分别可拦：`>= 0x3040` 改 `>` → 真词元「ニ」被误拦（check 形抓）；
+// `<= 0xFAFF` 改小 → 界外假字被误放（仅直调抓）。本测直钉全部 10 条非 ASCII 区间的下界含端/
+// 上界含端/界外一格 + ASCII 白名单分支（字母数字下划线放行、空格 @ 及 Latin-1 À 泛拒）。
+// 注：0xFEFF 在 isAllowedScalar 为 false（白名单拒），而 check 链里它先被危险表/不可见网接住——
+// 两条函数语义不同、勿混。
+
+test "isAllowedScalar 区间边界直钉：10 条非 ASCII 区间含端性与界外一格 + ASCII 分支（显式区间表声明的行为根源，第 126 轮证伪落位）" {
+    // ① 假名 0x3040..0x30FF
+    try std.testing.expect(isAllowedScalar(0x3040));
+    try std.testing.expect(isAllowedScalar(0x30FF));
+    try std.testing.expect(!isAllowedScalar(0x303F)); // 假名区下界外（中文标点〿区）
+    try std.testing.expect(!isAllowedScalar(0x3100)); // 上界外（注音符号首部）
+    // ② CJK 扩展 A 0x3400..0x4DBF
+    try std.testing.expect(isAllowedScalar(0x3400));
+    try std.testing.expect(isAllowedScalar(0x4DBF));
+    try std.testing.expect(!isAllowedScalar(0x33FF));
+    try std.testing.expect(!isAllowedScalar(0x4DC0)); // 上界外：易经卜卦符号
+    // ③ CJK 统一汉字 0x4E00..0x9FFF
+    try std.testing.expect(isAllowedScalar(0x4E00));
+    try std.testing.expect(isAllowedScalar(0x9FFF));
+    try std.testing.expect(!isAllowedScalar(0x4DFF));
+    try std.testing.expect(!isAllowedScalar(0xA000)); // 上界外：彝文首部
+    // ④ CJK 兼容汉字 0xF900..0xFAFF（本区间是「误放界外」唯一仅靠直调可拦的点位）
+    try std.testing.expect(isAllowedScalar(0xF900));
+    try std.testing.expect(isAllowedScalar(0xFAFF));
+    try std.testing.expect(!isAllowedScalar(0xFEFF)); // 下界外：BOM（链路由不可见网接、函数层面仍拒）
+    try std.testing.expect(!isAllowedScalar(0xFB00)); // 上界外：拉丁连字 ﬀ
+    // ⑤ 谚文音节 0xAC00..0xD7AF
+    try std.testing.expect(isAllowedScalar(0xAC00));
+    try std.testing.expect(isAllowedScalar(0xD7AF));
+    try std.testing.expect(!isAllowedScalar(0xABFF));
+    try std.testing.expect(!isAllowedScalar(0xD7B0)); // 上界外：谚文兼容字母
+    // ⑥ 谚文字母 0x1100..0x11FF
+    try std.testing.expect(isAllowedScalar(0x1100));
+    try std.testing.expect(isAllowedScalar(0x11FF));
+    try std.testing.expect(!isAllowedScalar(0x10FF));
+    try std.testing.expect(!isAllowedScalar(0x1200)); // 上界外：埃塞俄比亚文
+    // ⑦ CJK 扩展 B-F 0x20000..0x2FA1F（平面 2+，多字节码点）
+    try std.testing.expect(isAllowedScalar(0x20000));
+    try std.testing.expect(isAllowedScalar(0x2FA1F));
+    try std.testing.expect(!isAllowedScalar(0x1FFFF)); // 下界外：平面 1 末
+    try std.testing.expect(!isAllowedScalar(0x2FA20)); // 上界外一格
+    // ⑧ 西里尔 0x0400..0x04FF（D35 测只碰过内部 0x440，边界零直钉）
+    try std.testing.expect(isAllowedScalar(0x0400));
+    try std.testing.expect(isAllowedScalar(0x04FF));
+    try std.testing.expect(!isAllowedScalar(0x03FF)); // 下界外：希腊扩展末
+    try std.testing.expect(!isAllowedScalar(0x0500)); // 上界外：西里尔补充（真边界！）
+    // ⑨ 阿拉伯 0x0600..0x06FF
+    try std.testing.expect(isAllowedScalar(0x0600));
+    try std.testing.expect(isAllowedScalar(0x06FF));
+    try std.testing.expect(!isAllowedScalar(0x05FF));
+    try std.testing.expect(!isAllowedScalar(0x0700)); // 上界外：叙利亚文
+    // ⑩ 泰文 0x0E00..0x0E7F
+    try std.testing.expect(isAllowedScalar(0x0E00));
+    try std.testing.expect(isAllowedScalar(0x0E7F));
+    try std.testing.expect(!isAllowedScalar(0x0DFF)); // 下界外：天城文末
+    try std.testing.expect(!isAllowedScalar(0x0E80)); // 上界外：老挝文首
+    // ⑪ 全角数字/字母/空格显式拦截（声明「非 Letter 全放」的锚点）：三条拦截段含端即拒，
+    // 段间隙也落不到任何合法区间同样泛拒（首跑自捕：臆造「间隙放行」系错，白名单对 FF01..FF5E 全拒）。
+    try std.testing.expect(!isAllowedScalar(0xFF10)); // 下界含端即拒
+    try std.testing.expect(!isAllowedScalar(0xFF19));
+    try std.testing.expect(!isAllowedScalar(0xFF21));
+    try std.testing.expect(!isAllowedScalar(0xFF3A));
+    try std.testing.expect(!isAllowedScalar(0xFF41));
+    try std.testing.expect(!isAllowedScalar(0xFF5A));
+    try std.testing.expect(!isAllowedScalar(0xFF20)); // 拦截段间隙（全角空格）：无任何区间命中 → 仍泛拒
+    try std.testing.expect(!isAllowedScalar(0xFF3F)); // 拦截段间隙（全角下划线）：同上
+    // ⑫ ASCII 分支：字母数字下划线放行、其余泛拒（0x00 与 0x7F 含端）
+    try std.testing.expect(isAllowedScalar('a'));
+    try std.testing.expect(isAllowedScalar('Z'));
+    try std.testing.expect(isAllowedScalar('9'));
+    try std.testing.expect(isAllowedScalar('_'));
+    try std.testing.expect(!isAllowedScalar(' '));
+    try std.testing.expect(!isAllowedScalar('@'));
+    try std.testing.expect(!isAllowedScalar(0x00));
+    try std.testing.expect(!isAllowedScalar(0x7F));
+    try std.testing.expect(!isAllowedScalar(0x80)); // 下界外一格（首跑自捕：`cp < 0x80` 含端即 ASCII 分支，0x80 落不到任何合法区间→泛拒；假名区下界才是 `>=` 含端）
+    try std.testing.expect(!isAllowedScalar(0xC0)); // Latin-1 补区首：非法码点亦泛拒（非 Letter 全放）
+
+    // ⑬ check 真词元形：假名下界字「ニ」（U+3042）合法放行——`>= 0x3040` 误改 `>` 则此处 0x3040 形翻红
+    {
+        const gpa = std.testing.allocator;
+        const src = "常数 \u{3042} = 1;";
+        const toks = try lexer.scan(gpa, src);
+        defer gpa.free(toks);
+        const vs = try check(gpa, src, toks);
+        defer gpa.free(vs);
+        try std.testing.expectEqual(@as(usize, 0), vs.len);
+    }
+    // ⑭ check 真词元形：假名上界「ヿ」（U+30FF）同样放行（钉 0x30FF 含端）
+    {
+        const gpa = std.testing.allocator;
+        const src = "常数 \u{30FF} = 1;";
+        const toks = try lexer.scan(gpa, src);
+        defer gpa.free(toks);
+        const vs = try check(gpa, src, toks);
+        defer gpa.free(vs);
+        try std.testing.expectEqual(@as(usize, 0), vs.len);
+    }
+}
+
+// 护栏（第 126 轮证伪落位）：L266 声明「审查所有 nonascii_word 词元……字符串/注释天然不参与」
+// ——此豁免面全库零断言：既有全部测的 src 串/注释内皆无全角字符，若有人把入口 kind 条件放宽
+//（如改只跳 .comment、或直接逐 token 全审），串内中文标点「说明，测试」会被当标识符审致工程
+// 无法编译——现存 180 测无一能红（零防线）。另 L294「避免同一位置重复报错」的首命中 break 短路
+//（每词元 ≤1 违规）亦无比照断言——现存测全用 >= 1 松形，删 break 后多危险符词元重复报错仍全绿；
+// 而若短路误改成「只审首字节」（indexOf 位序判断形），甲０，１ 的首命中 ０ 形会翻红。
+test "check 作用域与首命中短路：串/注释天然不参与、多危险符词元仅报首个（第 126 轮证伪落位）" {
+    const gpa = std.testing.allocator;
+    // ① 串与注释内的全角逗号/分号天然豁免：全词元合法 → 零违规（入口只审 nonascii_word）。
+    {
+        const src = "常数 甲 = \"说明，测试\"; // 备注，测试\n";
+        const toks = try lexer.scan(gpa, src);
+        defer gpa.free(toks);
+        var n_nonascii: usize = 0;
+        var n_other: usize = 0;
+        for (toks) |t| {
+            if (t.kind == .nonascii_word) n_nonascii += 1 else n_other += 1;
+        }
+        try std.testing.expect(n_other >= 2); // 串与注释确实成了词元（非被空白折叠掉）
+        const vs = try check(gpa, src, toks);
+        defer gpa.free(vs);
+        try std.testing.expectEqual(@as(usize, 0), vs.len);
+    }
+    // ② 同一词元内混含 danger 表字符与仅全角变体区字符（甲０，１）：０/１ 全角数字**不在** dangers 表、
+    // 而 ， 在 → danger 扫描优先命中 ，（非词元内位置序、非兼顾 fullwidthFormHint）——钉住「danger 表
+    // 优先于全角变体兜底网」的分层顺序（若有人把 fullwidthFormHint 提到 danger 环前、本形会改报全角数字）。
+    {
+        const src = "常数 \u{7532}\u{FF10}\u{FF0C}\u{FF11} = 1;";
+        const toks = try lexer.scan(gpa, src);
+        defer gpa.free(toks);
+        const vs = try check(gpa, src, toks);
+        defer gpa.free(vs);
+        try std.testing.expectEqual(@as(usize, 1), vs.len);
+        try std.testing.expectEqualStrings("全角逗号", vs[0].hint); // danger 扫描序命中 ，（非首字符 ０、非 fullwidthFormHint）
+        try std.testing.expectEqualStrings(",", vs[0].ascii);
+        try std.testing.expect(vs[0].danger != null);
+    }
+    // ③ 同词元含**两个 danger 表字符**（名；，）：首命中；（表内序：；在，前、L31<L32）即 break、仅报 1 条——钉 break 短路（
+    // 删 break 则 dangers 环续扫再命中 ， → 叠为 2 条→ 本形翻红；因②的 ０/１ 不在表、不足以钩 break、故新增本形）。
+    {
+        const src = "常数 \u{540d}\u{FF1B}\u{FF0C} = 1;"; // 名 + 全角分号 + 全角逗号
+        const toks = try lexer.scan(gpa, src);
+        defer gpa.free(toks);
+        const vs = try check(gpa, src, toks);
+        defer gpa.free(vs);
+        try std.testing.expectEqual(@as(usize, 1), vs.len); // 删 break 则此处 2 形翻红
+        try std.testing.expectEqualStrings("全角分号", vs[0].hint); // 表序：；(L31) 在 ，(L32) 前→首命中 ；
+        try std.testing.expectEqualStrings(";", vs[0].ascii);
+    }
+}
