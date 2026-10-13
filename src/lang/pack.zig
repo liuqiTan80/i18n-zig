@@ -622,3 +622,83 @@ test "$name 同层元数据封口：两行不同值拒、同值幂等放行、�
     defer defname.deinit();
     try std.testing.expectEqualStrings("未知语言", defname.name);
 }
+
+// 护栏（第 127 轮证伪落位）：头注 L4 声明「`#` 或 `//` 开头为注释行；空行跳过」，判据基于 L164
+// trim 后的 line（先剥行首尾空白、L165 再查首字符）——故「带前导缩进的注释行、纯空白似空行」
+// 同样被跳过。既有测注释恒居列 0、真包 中文.txt 零行首空白行（实测）——该声明线零直钉：若
+// 注释/空行判据回退为基于 raw（整理判据时常见 mutation），keywords 段的缩进注释会被当正文行拒
+// （误拒形）、whitelist 段的缩进注释会被当规则静默入表（误放形、不报错最危险）——两形旧测皆无测能拦。
+test "缩进注释与纯空白似空行按声明跳过为注释行：判据基于 trim 后 line 而非 raw（头注 L4 声明面零直钉，第 127 轮）" {
+    const gpa = std.testing.allocator;
+
+    // ① keywords 段：缩进 # / 缩进 // / 纯空白行三形夹在有效行间——解析过、表内仅真条目。
+    var pack = try parse(gpa, "$code = te\n" ++
+        "[keywords]\n" ++
+        "   # 缩进井号注释\n" ++
+        "\t// 缩进双斜杠注释\n" ++
+        "      \n" ++
+        "常数 = const\n" ++
+        "  \t # 混合缩进注释\n");
+    defer pack.deinit();
+    try std.testing.expectEqual(@as(usize, 1), pack.keywords.count());
+    try std.testing.expectEqualStrings("const", pack.keywords.get("常数").?);
+
+    // ② whitelist 段：缩进注释不得静默入表成规则（此形不报错、规则面被污染——误放形）。
+    var wl = try parse(gpa, "$code = te\n" ++
+        "[whitelist]\n" ++
+        "   # 这是注释不是规则\n" ++
+        "MyType\n");
+    defer wl.deinit();
+    try std.testing.expectEqual(@as(usize, 1), wl.whitelist.items.len);
+    try std.testing.expectEqualStrings("MyType", wl.whitelist.items[0]);
+}
+
+// 护栏（第 127 轮证伪落位）：L164 trim 集 " \t\r" 的 `\r` 独力承担 CRLF（Windows 行尾）语言包
+// 容错全链：空行 raw 为 "\r" 须剥后才跳（否则落入正段缺 `=` 误拒）、`$format = 1\r` 的 parseInt
+// 须剥后才不被误拒非数（R9g）、key/value/pattern/message/tip/whitelist 规则值须剥后才无尾 \r。
+// 本模块测题输入零 `\r`（grep 实锤全文件仅产品码一处）；既存「间接兜底」系环境依赖——本机工作树
+// 中文.txt 为 w/crlf（@embedFile 含 232 个 CR）使 zh 包测顺带 fired trim，但 git 记录 i/lf，
+// Linux/CI 检出即 LF 字节、兜底随之消失；且那些测从未断言值剥后确形。外部发行包（R9g
+// --lang-file）经 Windows 记事本编辑成 CRLF 天然可达（同 121 轮 mangle CRLF 形）——本测全库
+// 唯一确定性地钉住 CRLF 容错真行为。
+test "CRLF 行尾语言包容错：空 \\r 行被跳、$format 不被误拒、各段值无尾 \\r 确形（外部发行包形，第 127 轮）" {
+    const gpa = std.testing.allocator;
+
+    var pack = try parse(gpa, "$name = 测试语\r\n" ++
+        "$code = te\r\n" ++
+        "$format = 1\r\n" ++
+        "\r\n" ++
+        "[keywords]\r\n" ++
+        "常数 = const\r\n" ++
+        "\r\n" ++
+        "[diagnostics]\r\n" ++
+        "d1 = 模式|译文|提示\r\n" ++
+        "[whitelist]\r\n" ++
+        "MyType\r\n" ++
+        "@memcpy|备注\r\n");
+    defer pack.deinit();
+    // 元数据无尾 \r 确形（漏剥则 "te\r"!="te"；`$format` 的 "1\r" parseInt 误拒——上方 try parse 即红）。
+    try std.testing.expectEqualStrings("测试语", pack.name);
+    try std.testing.expectEqualStrings("te", pack.code);
+    // keywords：段头尾 \r 不影响切段、值仅干净形。
+    try std.testing.expectEqual(@as(usize, 1), pack.keywords.count());
+    try std.testing.expectEqualStrings("const", pack.keywords.get("常数").?);
+    // diagnostics：三段均无尾 \r（tip 居末段、直面行尾）。
+    try std.testing.expectEqual(@as(usize, 1), pack.diagnostics.items.len);
+    try std.testing.expectEqualStrings("模式", pack.diagnostics.items[0].pattern);
+    try std.testing.expectEqualStrings("译文", pack.diagnostics.items[0].message);
+    try std.testing.expectEqualStrings("提示", pack.diagnostics.items[0].tip);
+    // whitelist：规则体与备注剥离后之体均无 \r。
+    try std.testing.expectEqual(@as(usize, 2), pack.whitelist.items.len);
+    try std.testing.expectEqualStrings("MyType", pack.whitelist.items[0]);
+    try std.testing.expectEqualStrings("@memcpy", pack.whitelist.items[1]);
+
+    // 混尾源（\n 与 \r\n 混排、autocrlf 半转换形）：两形行均正确解析。
+    var mixed = try parse(gpa, "$code = te\n" ++
+        "[keywords]\r\n" ++
+        "常数 = const\r\n" ++
+        "变量 = var\n");
+    defer mixed.deinit();
+    try std.testing.expectEqualStrings("const", mixed.keywords.get("常数").?);
+    try std.testing.expectEqualStrings("var", mixed.keywords.get("变量").?);
+}
