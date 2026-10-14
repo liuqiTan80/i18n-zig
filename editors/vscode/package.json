@@ -1,0 +1,54 @@
+{
+  "name": "zzc-dialect",
+  "displayName": "Zig Dialect (\u4e2d\u6587)",
+  "description": "\u6bcd\u8bed Zig \u65b9\u8a00\u7f16\u8bd1\u5668\uff08zzc\uff09\u7684 VS Code \u96c6\u6210\uff1a\u8bed\u6cd5\u9ad8\u4eae\u3001\u6587\u4ef6\u5173\u8054\u3001\u95ee\u9898\u5339\u914d\u3002",
+  "version": "0.1.0",
+  "publisher": "zzc",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "zig-dialect",
+        "aliases": [
+          "Zig Dialect",
+          "zz"
+        ],
+        "extensions": [
+          ".zz"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "zig-dialect",
+        "scopeName": "source.zz",
+        "path": "./syntaxes/zz.tmLanguage.json"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "zzc-machine",
+        "owner": "zig-dialect",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^([^\\s:].*?):(\\d+):(\\d+): (\\S+): (.*)$",
+          "file": 1,
+          "location": 2,
+          "column": 3,
+          "code": 4,
+          "message": 5
+        },
+        "severity": "error"
+      }
+    ]
+  }
+}

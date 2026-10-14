@@ -147,6 +147,33 @@ pub fn findLangFileFlag(args: []const []const u8) ?[]const u8 {
     return findFlag(args, "--lang-file");
 }
 
+// ---------------------------------------------------------------------------
+// 布尔旗标（第 154 轮 · 编辑器/CI 机读集成）
+// 与带值旗标的分野：布尔旗标只认**单元素形** `--machine`。等号形 `--machine=1` 故意不识别、
+// 也不剔离——半截布尔语义（`0`/`false`/`no` 要不要算关？）无权威判据，交由下游 zig 明确报
+// 「未知参数」比 zzc 自作主张更诚实（同 R9g「旗标不得透传 zig」契约仅覆盖 zzc 真实消费的形）。
+// ---------------------------------------------------------------------------
+
+/// 布尔旗标在场判定：仅当参数列表里有**恰等于** `name` 的单元素时为真（纯查询、不改入参）。
+/// 全等匹配：`--machine` 不会误匹 `--machine-x`，也不会误匹 `--machine=1`（后者非全等、按上注不识别）。
+pub fn hasBoolFlag(args: []const []const u8, name: []const u8) bool {
+    for (args) |a| {
+        if (std.mem.eql(u8, a, name)) return true;
+    }
+    return false;
+}
+
+/// 剔离布尔旗标单元素形（zzc 层旗标不得透传 zig 契约）。无该旗标时返回逐元素等长的原样副本。
+pub fn stripBoolFlag(gpa: std.mem.Allocator, args: []const []const u8, name: []const u8) !std.ArrayList([]const u8) {
+    var out: std.ArrayList([]const u8) = .empty;
+    errdefer out.deinit(gpa);
+    for (args) |a| {
+        if (std.mem.eql(u8, a, name)) continue;
+        try out.append(gpa, a);
+    }
+    return out;
+}
+
 /// 从参数列表剔离 `--lang <name>`（两参形）/`--lang=<name>`（一参形），返回新 ArrayList（元素借用自 args、仅本体分配）。
 /// 目的：`--lang` 是 zzc 层旗标，不能透传给 zig。缺值的裸 `--lang`（末尾）一并剔离。无旗标时返回逐元素等长的原样副本。
 pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
@@ -470,6 +497,7 @@ pub const usage_text =
     \\选项：
     \\  --lang <名>            选择语言包（如 zh / 中文；缺省为中文；该旗标不透传 zig）
     \\  --lang-file <路径>     从外部文件加载语言包（第三方发行包、免重编译；与 --lang 互斥；不透传 zig）
+    \\  --machine              把母语报错压成单行机读形制 `路径:行:列: 种类: 消息（提示：…）`（编辑器/CI 逐行正则消费；不透传 zig）
     \\方言文件默认取 src/main.zz；错误标签与 std 错误名保持 ASCII 原样。
 ;
 
@@ -478,6 +506,32 @@ test "usage 文本列出全部子命令" {
     for ([_][]const u8{ "init", "check", "build", "run", "test", "eject", "lang" }) |sub| {
         try std.testing.expect(std.mem.indexOf(u8, usage_text, sub) != null);
     }
+}
+
+test "布尔旗标 hasBoolFlag/stripBoolFlag：单元素形识别与剔离、等号形与长名不误匹、usage 同步（第 154 轮）" {
+    const gpa = std.testing.allocator;
+    // ① 单元素形：在场即真，剔离后其余元素逐位不变。
+    const a = [_][]const u8{ "check", "src/main.zz", "--machine" };
+    try std.testing.expect(hasBoolFlag(&a, "--machine"));
+    var s = try stripBoolFlag(gpa, &a, "--machine");
+    defer s.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), s.items.len);
+    try std.testing.expectEqualStrings("check", s.items[0]);
+    try std.testing.expectEqualStrings("src/main.zz", s.items[1]);
+    // ② 不误匹：更长的同前缀名与等号形均不算布尔旗标在场（等号形按设记不识别、不剔离）。
+    const b = [_][]const u8{ "--machine-x", "--machine=1" };
+    try std.testing.expect(!hasBoolFlag(&b, "--machine"));
+    var s2 = try stripBoolFlag(gpa, &b, "--machine");
+    defer s2.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), s2.items.len); // 两元素原样透传
+    // ③ 无旗标：逐元素等长副本（不改变行为了可无条件调用）。
+    const c = [_][]const u8{ "build", "-O", "ReleaseFast" };
+    var s3 = try stripBoolFlag(gpa, &c, "--machine");
+    defer s3.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 3), s3.items.len);
+    try std.testing.expect(!hasBoolFlag(&c, "--machine"));
+    // ④ usage 文本同步防漂移：加了旗标却漏更帮助即红。
+    try std.testing.expect(std.mem.indexOf(u8, usage_text, "--machine") != null);
 }
 
 /// 从 `build.zig.zon` 文本里抽取 `.fingerprint = 0x....` 的十六进制串（含 `0x` 前缀）；

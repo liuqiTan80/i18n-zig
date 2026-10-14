@@ -182,6 +182,113 @@ pub fn renderDiag(
     return out.toOwnedSlice(gpa);
 }
 
+// ---------------------------------------------------------------------------
+// 机读单行化（第 154 轮 · 编辑器/CI 集成出口 `--machine`）
+// ---------------------------------------------------------------------------
+
+/// 渲染器提示行前缀（renderDiag 与 dependency-loop 块同源）。
+const tip_mark = "\u{1F4A1}";
+
+/// 块形制顶行判据：`<种类>: <消息>`，且 `<种类>` 恰为 kind_zh 值面之一。
+/// 词表取渲染器自身的 kind_zh（不新增硬编码词表，免 D34/D35 误注族）：顶格要求与渲染器一致；
+/// 已是单行的 `src/main.zz:4:21: 词法: …` 首个冒号后不是空格 → 不误判、原样透传。
+fn machineHead(line: []const u8) ?struct { kind: []const u8, msg: []const u8 } {
+    if (line.len == 0) return null;
+    if (line[0] == ' ' or line[0] == '\t') return null;
+    const colon = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+    if (colon == 0) return null;
+    if (line.len < colon + 2 or line[colon + 1] != ' ') return null;
+    const kind = line[0..colon];
+    for (kind_zh.values()) |v| {
+        if (std.mem.eql(u8, v, kind)) return .{ .kind = kind, .msg = line[colon + 2 ..] };
+    }
+    return null;
+}
+
+const MachinePending = struct {
+    kind: []const u8,
+    msg: []const u8,
+    loc: ?FrameLoc = null,
+    tip: ?[]const u8 = null,
+};
+
+/// 结算一个挂起块：有位置→`路径:行:列: 种类: 消息（提示：…）`；无位置→原样 `{种类}: {消息}`。
+fn flushMachine(gpa: std.mem.Allocator, out: *std.ArrayList(u8), maybe: ?MachinePending) !void {
+    const p = maybe orelse return;
+    if (p.loc) |L| {
+        if (p.tip) |tip| {
+            try appendPrintF(out, gpa, "{s}:{d}:{d}: {s}: {s}（提示：{s}）\n", .{ L.file, L.line, L.col, p.kind, p.msg, tip });
+        } else {
+            try appendPrintF(out, gpa, "{s}:{d}:{d}: {s}: {s}\n", .{ L.file, L.line, L.col, p.kind, p.msg });
+        }
+    } else {
+        try appendPrintF(out, gpa, "{s}: {s}\n", .{ p.kind, p.msg });
+    }
+}
+
+/// 把已回译的母语输出压成「每条诊断一行」的机读形制 `路径:行:列: 种类: 消息（提示：…）`，
+/// 与 main 直出的 `词法`/`纯母语` 行同构。
+///
+/// 为何需要（154 轮以真实输出 + node 实测为证）：块形制把消息与位置分在相邻两行，而 VS Code
+/// problemMatcher 的 pattern 数组状态**只向后传递**（首模式捕 file、后续模式补 line/message），
+/// 「消息在前、位置在后」捕不到（逐行正则对块形制 0/8 命中）；本出口把二者合一行后，
+/// 编辑器侧只需一条逐行正则即可覆盖全部诊断种类（也是后续 LSP/CI 消费的同一出口）。
+///
+/// 形制契约（判据全取自本模块自有渲染形制）：
+///   - `{种类}: …` 顶行 + `  --> 路径:行:列` + `  | 回显`（丢） + `  💡 提示`（并入）→ 合一并行；
+///   - 无位置的顶行（位置落 zig 内部/不可回映时渲染器本就省 `-->` 行）→ 原样一行（无路径、匹配器不采）；
+///   - 单独的 `  --> 路径:行:列`（zig test 失败栈帧位置）无消息可配 → 原样透传；
+///   - 已是单行的诊断（词法/纯母语）与透传行（用户程序 stderr 等）→ 逐字节原样输出。
+pub fn machineLines(gpa: std.mem.Allocator, text: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+
+    var pending: ?MachinePending = null;
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |seg| {
+        const raw = std.mem.trimEnd(u8, seg, "\r\n");
+        const t = std.mem.trimStart(u8, raw, " \t");
+
+        if (std.mem.startsWith(u8, t, "--> ")) {
+            if (pending) |*p| {
+                if (p.loc == null) p.loc = splitLoc(std.mem.trimEnd(u8, t[4..], " \t"));
+            } else {
+                try out.appendSlice(gpa, raw);
+                try out.append(gpa, '\n');
+            }
+            continue;
+        }
+        if (std.mem.startsWith(u8, t, "| ")) continue; // 源码回显行：单行制不需它、丢
+        if (std.mem.startsWith(u8, t, tip_mark)) {
+            if (pending) |*p| {
+                p.tip = std.mem.trim(u8, t[tip_mark.len..], " \t");
+            } else {
+                try out.appendSlice(gpa, raw);
+                try out.append(gpa, '\n');
+            }
+            continue;
+        }
+        if (machineHead(raw)) |h| {
+            try flushMachine(gpa, &out, pending); // 前一块先结算
+            pending = MachinePending{ .kind = h.kind, .msg = h.msg };
+            continue;
+        }
+        // 其余行（空行、透传行）：先结算挂起块，再原样输出本行。
+        try flushMachine(gpa, &out, pending);
+        pending = null;
+        try out.appendSlice(gpa, raw);
+        try out.append(gpa, '\n');
+    }
+    try flushMachine(gpa, &out, pending);
+    // 末尾幻影空段（splitScalar 对以 `\n` 结尾的输入多出的一段）与多余空行一并剪掉、只补回一个换行
+    //（同 translateStderr 出栈前的归一形制，保证输出恒以单 `\n` 结尾、不凭空造空行）。
+    while (out.items.len > 0 and out.items[out.items.len - 1] == '\n') {
+        out.shrinkRetainingCapacity(out.items.len - 1);
+    }
+    if (out.items.len > 0) try out.append(gpa, '\n');
+    return out.toOwnedSlice(gpa);
+}
+
 const NativeLoc = struct { path: []const u8, line: usize, col: usize, snippet: []const u8 };
 
 /// 若 file 命中某方言单元，返回其方言路径/行列/源码片段；否则 null（如 stdlib 帧）。
@@ -2566,6 +2673,96 @@ test "护栏：stderr 回译静态纯函数边界形——畸形输入不崩、�
     try std.testing.expect(!isInternalPath("src/main.zz"));
     try std.testing.expect(!isInternalPath("")); // 空路径不得误判内部（否则位置行被隐藏）
     try std.testing.expect(!isInternalPath("1a:bad")); // 首字符非字母的 `X:` 形不当盘符
+}
+
+// 机读单行化（第 154 轮 · 编辑器/CI 集成出口）：与真实渲染器对拍 + 形制表驱动 + 幂等不变量。
+// 为何与渲染器对拍：machineLines 吃的就是 renderDiag 的字面输出；若只喂手抄串，渲染器形制一改
+// （如 `  -->` 改成 `->`）本测仍绿而真输出已压不平——同 D34/D35「注与码自相矛盾」族的测面变体。
+test "machineLines：真实渲染器输出→单行恰一行、无 `-->` 漏留、提示并入（第 154 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    const rendered = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 5, 5, "error", "cannot assign to constant", &filter);
+    defer gpa.free(rendered);
+    // 前置：渲染器确实产块形制（否则本测的对比面为空、机读出口无从反证）。
+    try hasSub(rendered, "  --> src/main.zz:5:5");
+
+    const flat = try machineLines(gpa, rendered);
+    defer gpa.free(flat);
+    try hasSub(flat, "src/main.zz:5:5: 错误: ");
+    try hasSub(flat, "（提示："); // 提示行并入同一行
+    try noSub(flat, "-->"); // 位量行不再单列
+    try noSub(flat, "\u{1f4a1}"); // 图标不泄进机读面
+    // 恰一行：除行尾换行外无第二个 `\n`。
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, flat, "\n"));
+    try std.testing.expect(flat[flat.len - 1] == '\n');
+}
+
+test "machineLines：块/说明/已是单行/无位量块/孤立位量行/透传行表驱动逐字节形制（第 154 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    // 提示行以 `\u{1F4A1}` 转义形构造（源文件不落 astral 字符：码页写坏它就会静默弄坏
+    // “该行被识别为提示行”这个判据本身）。
+    const tip_body = "删除该变量，或以 `_ =` 显式丢弃。";
+    const in_head =
+        \\错误: 局部变量声明后未使用
+        \\  --> src/main.zz:6:8
+        \\  |     变量 未用: 字节 = 5;
+    ;
+    const in_tip = "  \u{1F4A1} " ++ tip_body ++ "\n";
+    const in_rest =
+        \\错误: 不可变常量被重新赋值
+        \\  --> src/main.zz:5:5
+        \\
+        \\说明: 建议改用不可变常量
+        \\src/main.zz:4:21: 词法: 全角分号，请改用半角 `;`
+        \\  --> src/lib.zz:2:3
+        \\程序输出的一行
+        \\
+    ;
+    const in = in_head ++ "\n" ++ in_tip ++ in_rest;
+    const want_head = "src/main.zz:6:8: 错误: 局部变量声明后未使用（提示：" ++ tip_body ++ "）\n";
+    const want_rest =
+        \\src/main.zz:5:5: 错误: 不可变常量被重新赋值
+        \\
+        \\说明: 建议改用不可变常量
+        \\src/main.zz:4:21: 词法: 全角分号，请改用半角 `;`
+        \\  --> src/lib.zz:2:3
+        \\程序输出的一行
+    ;
+    const want = want_head ++ want_rest ++ "\n";
+    const out1 = try machineLines(gpa, in);
+    defer gpa.free(out1);
+    try std.testing.expectEqualStrings(want, out1);
+    // 幂等：已是单行的输出再压一次逐字节不变（消费方可多次过线、不致越压越坏）。
+    const out2 = try machineLines(gpa, out1);
+    defer gpa.free(out2);
+    try std.testing.expectEqualStrings(want, out2);
+    // 空输入与无诊断输入：输出空串/逐字节原样（不凭空造行）。
+    const e = try machineLines(gpa, "");
+    defer gpa.free(e);
+    try std.testing.expectEqual(@as(usize, 0), e.len);
+    const p = try machineLines(gpa, "第一行\r\n第二行\r\n");
+    defer gpa.free(p);
+    try std.testing.expectEqualStrings("第一行\n第二行\n", p); // CRLF 归一 LF、不多出空行
+    // 无位量顶行（位置落 zig 内部时渲染器本就省 `-->`）：原样一行、不造伪路量。
+    const n = try machineLines(gpa, "内部错误: 编译器内部异常\n");
+    defer gpa.free(n);
+    try std.testing.expectEqualStrings("内部错误: 编译器内部异常\n", n);
+    // kind 词表取自 kind_zh 值面（不新增硬编码）：未收录的英文 `error:` 顶行不当块头、逐字节透传。
+    const k = try machineLines(gpa, "error: leaked english\n");
+    defer gpa.free(k);
+    try std.testing.expectEqualStrings("error: leaked english\n", k);
 }
 
 fn hasSub(hay: []const u8, needle: []const u8) !void {

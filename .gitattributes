@@ -14,3 +14,9 @@
 # 行式语言包与方言源不在此声明：第 139 轮实测坐实，`.zz` 的行尾会进入用户可见诊断
 # （CRLF 源回显的源码引用行尾随 \r、LF 源无）——改其检出形制等于改转译行为，须另轮
 # 连同 demo 快照一起评估，不夹带进行尾配置变更。
+
+# 编辑器生成物：check-editor-syntax 守卫以 readFileAlloc 读盘原始字节、与生成器产出
+# （纯 LF 多行 JSON）做 std.mem.eql 精确比对（第 154 轮）。Zig 读文件不做行尾转换，
+# 故 autocrlf=true 的克隆若把本文件检出成 CRLF，守卫会在 fresh clone 上无端翻红——
+# 同 .zig fmt 门禁教训，须仓库级钉 LF 令检出形制与生成器产出一致。
+editors/vscode/syntaxes/zz.tmLanguage.json text eol=lf

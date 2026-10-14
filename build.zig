@@ -49,6 +49,27 @@ pub fn build(b: *std.Build) void {
     // 测试可执行文件，避免同一 test block 被编入两个模块时符号重名。
     const test_step = b.step("test", "运行单元与快照测试");
     test_step.dependOn(&run_mod_tests.step);
+
+    // 第 154 轮：tmLanguage 语法高亮生成器（编辑器集成 MVP）。
+    const gen_tmlang_exe = b.addExecutable(.{
+        .name = "gen-tmlang",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/editor/gen_tmlang_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+
+    const gen_syntax_step = b.step("gen-editor-syntax", "生成 editors/vscode/syntaxes/zz.tmLanguage.json");
+    const gen_run = b.addRunArtifact(gen_tmlang_exe);
+    gen_run.addArg("emit");
+    gen_syntax_step.dependOn(&gen_run.step);
+
+    const check_syntax_step = b.step("check-editor-syntax", "校验 tmLanguage 与语言包同步（CI 守卫）");
+    const check_run = b.addRunArtifact(gen_tmlang_exe);
+    check_run.addArg("check");
+    check_syntax_step.dependOn(&check_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②）

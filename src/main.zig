@@ -64,6 +64,13 @@ var enc_warned_set: ?*std.StringHashMap(void) = null;
 /// 成功/bail 两条退出路径都覆盖（bail 直接 exit、后置代码不执行）。
 var untranslated_list: UntranslatedList = .{};
 
+/// 机读单行化开关（第 154 轮 · `--machine`）：把已回译的母语报错压成每条一行供
+/// 编辑器 problemMatcher / CI 逐行正则消费；默认关（人读块形制一字不变）。
+/// 取进程级变量形制（同 `untranslated_list`/`bail_table` 先例）：消费点 zigCompile 被多处
+/// 调用、为它多穿一层参只会把默认形制的调用点弄胖；main 不入测试图，压行本体逻辑
+/// （diag.machineLines）已在测试图内单测，本旗标只做接线（行为面由 demos e2e 守卫钉）。
+var machine_mode: bool = false;
+
 /// 落盘未翻译清单（F3）：空清单不建文件（防 CI 消费面把恒在的空文件误读为“零未译”信号——
 /// 缺失即“本次未发生过兜底”）。写失败是辅助信息面：母语提示但不改主流程退出码。
 fn flushUntranslated() void {
@@ -428,7 +435,13 @@ fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8
     var filter: ?PureFilter = PureFilter.init(gpa_, .{}, &untranslated_list) catch null;
     if (filter) |*f| f.applyPackRules(lang.whitelist.items) catch {};
     const native_errs = diag.translateStderr(gpa_, lang, table, units.items, res.stderr, seen, if (filter) |*f| f else null) catch res.stderr;
-    werr.writeAll(native_errs) catch |e| {
+    // 机读出口（第 154 轮 `--machine`）：只改写已回译的母语输出、不改退出码与去重逻辑；
+    // 压行失败即退回原形制（辅面异常不得吞主报错，同 flushUntranslated 落盘面形制）。
+    var out_txt: []const u8 = native_errs;
+    if (machine_mode) {
+        out_txt = diag.machineLines(gpa_, native_errs) catch native_errs;
+    }
+    werr.writeAll(out_txt) catch |e| {
         printErr("zzc: 写入错误信息失败：{s}", .{@errorName(e)});
     };
     try werr.flush();
@@ -943,6 +956,9 @@ pub fn main(init: std.process.Init) !void {
     const cmd = all_args[1];
     const args = all_args[2..];
 
+    // 第 154 轮：`--machine` 机读单行化旗标（编辑器/CI 消费）——在场即开、后续统一剔离不透传 zig。
+    machine_mode = cli.hasBoolFlag(args, "--machine");
+
     // 惯例帮助旗标：`--help`/`-h`/`-?`/`help` 都应打印用法并成功退出（而非当未知子命令报 EXIT=2）。
     // 放在解析语言包之前：用法文本静态、不依赖 lang。
     if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or
@@ -1004,7 +1020,12 @@ pub fn main(init: std.process.Init) !void {
         return e;
     };
     defer filtered.deinit(gpa_);
-    const argv = filtered.items;
+    var mach_stripped = cli.stripBoolFlag(gpa_, filtered.items, "--machine") catch |e| {
+        printErr("zzc: 参数处理失败（{s}）。", .{@errorName(e)});
+        return e;
+    };
+    defer mach_stripped.deinit(gpa_);
+    const argv = mach_stripped.items;
 
     // 契约面校验（B6）：登记的包理应恒通过（有单测锁定）；失败即工具缺陷，母语报错不外泄 error 名。
     // 外部包（R9g）失败则是贡献者缺陷，消息面向包作者携带路径可行动。
