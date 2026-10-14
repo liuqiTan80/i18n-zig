@@ -105,7 +105,9 @@ $code = zh
 导入 = @import
 嵌入文件 = @embedFile
 取类型 = @TypeOf
-类型 = @Type
+# 第 151 轮：删死映射 `类型 = @Type`（@Type 系旧 Zig 匿名类型构造内建、0.17 已移除，
+# 现由 @Struct/@Int/@Enum… 分立内建替代；保留 `类型` 作普通标识符，元类型请用 `数据类型 = type`）。
+# pack.zig「内建存在性不变量」测以 std.zig.BuiltinFn.list 为唯一真相源长效防回归，任何人再写死内建映射即红。
 最大 = @max
 最小 = @min
 # —— 数学内建方言词（第 146 轮·高频裸调用）——
@@ -151,6 +153,16 @@ $code = zh
 类型名 = @typeName
 标签名 = @tagName
 错误名 = @errorName
+# —— 第 151 轮·以编译器内建注册表（std.zig.BuiltinFn.list）为唯一真相源系统审计续补（用户拍板全部 5 词）——
+# 承 150 收官：逐值反查坐实「已登记内建全部存在」并揪出唯一死映射 `类型=@Type`（已删，护栏测长效防回归）；
+# 补除法族漏登第 6 员 @divCeil（向上取整，接 149 向下/截断、150 精确后的「向上」对称位）、
+# 精确移位族 @shlExact/@shrExact（@divExact「溢出即 panic」同族移位版）、类型元 @typeInfo/@This（build-obj 坐实存在）。
+# @truncate 需已知结果类型、非自然裸值形（承 150 排除）；@cmpxchg/@atomic*/@cVa*/@memcpy 等多参或互操作面，皆不登记。
+向上除法 = @divCeil
+精确左移 = @shlExact
+精确右移 = @shrExact
+类型信息 = @typeInfo
+本类型 = @This
 
 [aliases]
 # 标准库全量路径别名（覆盖 std.zig 全部顶层 pub 名，按类型分组）。

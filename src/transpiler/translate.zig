@@ -820,7 +820,7 @@ test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁�
 //   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
 //     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
 // `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
-// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`/`@mod`/`@rem`/`@divFloor`/`@divTrunc`/`@clz`/`@ctz`/`@popCount`/`@byteSwap`/`@bitReverse`/`@divExact`/`@sizeOf`/`@alignOf`/`@bitSizeOf`/`@typeName`/`@tagName`/`@errorName` 同样强制（第 146–150 轮逐族登记）；无映射者如 @pow/@memberCount/@byteOffsetOf（0.17 不存在）/@as/@intCast（需已知结果类型、非自然裸值形）依旧放行。
+// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`/`@mod`/`@rem`/`@divFloor`/`@divTrunc`/`@clz`/`@ctz`/`@popCount`/`@byteSwap`/`@bitReverse`/`@divExact`/`@sizeOf`/`@alignOf`/`@bitSizeOf`/`@typeName`/`@tagName`/`@errorName`/`@divCeil`/`@shlExact`/`@shrExact`/`@typeInfo`/`@This` 同样强制（第 146–151 轮逐族登记）；无映射者如 @pow/@memberCount/@byteOffsetOf（0.17 不存在）/@Type（0.17 已移除、第 151 轮删其死映射）/@as/@intCast/@truncate（需已知结果类型、非自然裸值形）依旧放行。
 // 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
 
 pub const EnglishWord = struct {
@@ -1210,6 +1210,63 @@ test "翻译 + 纯度门：除法族补全与类型元内建方言词登记（�
     try std.testing.expectEqualStrings("类型大小", v2.items[0].native);
     // 坐实不存在的 `@memberCount`（0.17 无此内建、须走 std.meta）混入仍放行 0 项——锁「强制面只盖真登记内建」。
     var v3 = try findEnglishWordForms(gpa, lang, "变量 结果 = @memberCount(乙);\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v3.items.len);
+}
+
+test "翻译 + 纯度门：除法族@divCeil·精确移位·类型元内建方言词登记（第 151 轮·编译器注册表系统审计续补、用户拍板全部 5 词）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 正向：除法族第 6 员 @divCeil（向上取整）+ 精确移位族 @shlExact/@shrExact + 类型元 @typeInfo/@This 逐字节快照。
+    // 本包为纯 token 替换、不跑 zig sema，故只需验方言词→内建名的整词映射、无需产物语义合法。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    变量 甲 = 6;
+        \\    变量 乙 = 3;
+        \\    变量 丙 = 向上除法(甲, 乙);
+        \\    变量 丁 = 精确左移(甲, 乙);
+        \\    变量 戊 = 精确右移(甲, 乙);
+        \\    变量 己 = 类型信息(整数);
+        \\    变量 庚 = 本类型();
+        \\}
+        \\
+    ;
+    const expect =
+        \\pub fn main() !void {
+        \\    var z_1 = 6;
+        \\    var z_2 = 3;
+        \\    var z_3 = @divCeil(z_1, z_2);
+        \\    var z_4 = @shlExact(z_1, z_2);
+        \\    var z_5 = @shrExact(z_1, z_2);
+        \\    var z_6 = @typeInfo(i64);
+        \\    var z_7 = @This();
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 反向：英文 `@divCeil`/`@typeInfo` 混入方言源被纯度门坐实、携母语建议形。
+    var v1 = try findEnglishWordForms(gpa, lang, "变量 结果 = @divCeil(6, 3);\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("@divCeil", v1.items[0].word);
+    try std.testing.expectEqualStrings("向上除法", v1.items[0].native);
+    var v2 = try findEnglishWordForms(gpa, lang, "变量 结果 = @typeInfo(整数);\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("@typeInfo", v2.items[0].word);
+    try std.testing.expectEqualStrings("类型信息", v2.items[0].native);
+    // 关键防回归：死映射 `类型=@Type` 已删，英文 `@Type` 混入不再被反查命中（放行 0 项）——
+    // 若有人重建 @Type 映射，本断言即红（与 pack.zig「内建存在性不变量」护栏同治）。
+    var v3 = try findEnglishWordForms(gpa, lang, "变量 结果 = @Type(整数);\n");
     defer v3.deinit();
     try std.testing.expectEqual(@as(usize, 0), v3.items.len);
 }

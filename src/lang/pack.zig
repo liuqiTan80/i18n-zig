@@ -459,6 +459,45 @@ test "别名键段数不变量（第 143 轮逐段镜像）：每条 alias 中�
     }
 }
 
+test "内置中文包 keywords 内建存在性不变量（第 151 轮·D53 防回归）：每个 @-前缀映射值必为 Zig 真实内建" {
+    // 依据（用户口径 151）：以编译器自带内建注册表 std.zig.BuiltinFn.list 为唯一真相源，
+    // 逐个反查语言包 keywords 段所有 `@`-前缀单 token 值；任一登记值不在注册表即红。
+    // 本测无硬编码词表、不随内建增删漂移，长效钉死「死内建映射」（如曾误登的 `类型 = @Type`，
+    // @Type 系旧 Zig 匿名类型构造内建、0.17 已移除），任何人再写不存在的内建映射即被此门拦下。
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    const BuiltinFn = std.zig.BuiltinFn;
+    var checked: usize = 0;
+    var it = p.keywords.iterator();
+    while (it.next()) |e| {
+        const v = e.value_ptr.*;
+        if (v.len < 2 or v[0] != '@') continue;
+        // 只检纯内建标识符（@ 后全为字母/数字/下划线）；带点分链或多 token 的非本轮面，跳过。
+        var single_token = true;
+        for (v[1..]) |b| {
+            const ok = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
+            if (!ok) {
+                single_token = false;
+                break;
+            }
+        }
+        if (!single_token) continue;
+        checked += 1;
+        if (!BuiltinFn.list.has(v)) {
+            std.debug.print("dead builtin mapping: {s} = {s}\n", .{ e.key_ptr.*, v });
+        }
+        try std.testing.expect(BuiltinFn.list.has(v));
+    }
+    // 覆盖面下限：内建登记族至少 35 员（146/147/149/150/151 累积），防误清空 keywords。
+    try std.testing.expect(checked >= 35);
+    // D53 精确锚点：死映射键 `类型` 必须已删（get 返 null）；近义 `取类型` 仍指向真实内建 @TypeOf。
+    try std.testing.expect(p.keywords.get("类型") == null);
+    try std.testing.expectEqualStrings("@TypeOf", p.keywords.get("取类型").?);
+}
+
 test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全量通过" {
     const gpa = std.testing.allocator;
 
