@@ -498,6 +498,55 @@ test "内置中文包 keywords 内建存在性不变量（第 151 轮·D53 防�
     try std.testing.expectEqualStrings("@TypeOf", p.keywords.get("取类型").?);
 }
 
+test "内置中文包 keywords 关键字存在性不变量（第 152 轮·D54 防回归）：每个 ASCII 单 token 映射值必为 Zig 真实关键字或预声明名" {
+    // 依据（用户口径 152·承 151 注册表方法论从内建面扩到关键字面）：以编译器自带的**两个**真相源
+    // `std.zig.Token.keywords`（0.17 共 46 员）⊕`std.zig.isPrimitive`（预声明类型/值名、含 iN/uN）
+    // 逐个反查 keywords 段所有「纯 ASCII 单 token、非 @-前缀」映射值；两者皆不命中即红。
+    // （只用单一关键字表会假红：`整数 = i64`、`数据类型 = type` 等系预声明名、不在关键字表——
+    // 152 轮审计探针首轮就实捕此形、70 项候选收敲为恰好 2 项真死映射。）
+    // 本测无硬编码词表、不随 Zig 关键字/预声明名增删漂移，长效钉死「死关键字映射」——曾误登的
+    // `异步 = async` / `等待 = await`（async/await 不在 0.17 关键字注册表、且语法层直接拒 parse），
+    // 保留即端到端产 `var z_1 = async f();` 非法码（D53 同族、该拒绝未拒绝）。
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    const Kw = std.zig.Token.keywords;
+    var checked: usize = 0;
+    var it = p.keywords.iterator();
+    while (it.next()) |e| {
+        const v = e.value_ptr.*;
+        if (v.len == 0 or v[0] == '@') continue; // @-前缀内建面由 151 轮测把关
+        // 只检单 token ASCII 标识符形；带空格/点分/括号的复合值（如 `[]const u8`）系类型表达式、
+        // 非单词关键字映射，本轮面外，跳过。
+        var single_token = true;
+        for (v) |b| {
+            const ok = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
+            if (!ok) {
+                single_token = false;
+                break;
+            }
+        }
+        if (!single_token) continue;
+        checked += 1;
+        if (!Kw.has(v) and !std.zig.isPrimitive(v)) {
+            std.debug.print("dead keyword mapping: {s} = {s}\n", .{ e.key_ptr.*, v });
+        }
+        try std.testing.expect(Kw.has(v) or std.zig.isPrimitive(v));
+    }
+    // 覆盖面下限：声明/控制流/类型族登记至少 60 员，防误清空 keywords 使本测空转永真。
+    try std.testing.expect(checked >= 60);
+    // D54 精确锚点：两死映射键必须已删（get 返 null）；同族活词 `挂起外` 仍指真实关键字 nosuspend。
+    try std.testing.expect(p.keywords.get("异步") == null);
+    try std.testing.expect(p.keywords.get("等待") == null);
+    try std.testing.expectEqualStrings("nosuspend", p.keywords.get("挂起外").?);
+    // 152 轮补登锚点：三个此前漏登记的真实关键字到位（注册表在场 + ast-check 0 + build-obj 0 三证皆活）。
+    try std.testing.expectEqualStrings("test", p.keywords.get("测试块").?);
+    try std.testing.expectEqualStrings("packed", p.keywords.get("紧实").?);
+    try std.testing.expectEqualStrings("noalias", p.keywords.get("无别名").?);
+}
+
 test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全量通过" {
     const gpa = std.testing.allocator;
 

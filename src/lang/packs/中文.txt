@@ -33,10 +33,19 @@ $code = zh
 对齐 = align
 允许零 = allowzero
 汇编 = asm
-异步 = async
-等待 = await
 挂起外 = nosuspend
 易变 = volatile
+# 第 152 轮关键字注册表审计：删死映射 `异步 = async` / `等待 = await`（D54）。
+# async/await 不在 0.17 关键字注册表（std.zig.Token.keywords）、且语法层直接拒 parse
+# （`expected ';' after statement`）；端到端复现：`变量 戊 = 异步 f();` 产非法码
+# `var z_3 = async f();`，属「该拒绝未拒绝」缺陷族在关键字存在性面（与 151 轮 D53 同族）。
+# 挂起外=nosuspend 经 ast-check/build-obj 双绿坐实仍活，保留；任意帧=anyframe 语法可达但
+# 0.17 编译器报「async has not been implemented」，系编译器实现缺口非语言移除，按用户拍板保留并在对照表留注。
+# —— 152 轮补登 3 个此前漏登记的真实关键字（注册表在场 + ast-check 0 + build-obj 0 三证皆活）——
+# 键名避让包内既有点分别名成员（标准库.测试 = std.testing、标准库.打包 = std.tar），取不撞的母语形。
+测试块 = test
+紧实 = packed
+无别名 = noalias
 
 # ---- 控制流 ----
 如果 = if

@@ -1271,6 +1271,84 @@ test "翻译 + 纯度门：除法族@divCeil·精确移位·类型元内建方�
     try std.testing.expectEqual(@as(usize, 0), v3.items.len);
 }
 
+test "翻译 + 纯度门：关键字方言词补登 测试块=test / 紧实=packed / 无别名=noalias（第 152 轮·关键字注册表审计、用户拍板避让既有键名）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 正向逐字节快照：三词各自在其句法位整词命中（紧实修饰 struct、无别名修饰参数、测试块开块）。
+    // 本形与 152 轮 `zzc check` 端到端实跑（fresh cache 刷新内联字节后）逐字一致、且 zig 真编译退 0。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\常数 位域 = 紧实 结构 { 甲: u1, 乙: u3 };
+        \\
+        \\函数 加一(无别名 指针: *字节) 空 {
+        \\    指针.* += 1;
+        \\}
+        \\测试块 "最小" {
+        \\    变量 数: 字节 = 1;
+        \\    加一(&数);
+        \\    常数 值 = 位域{ .甲 = 1, .乙 = 2 };
+        \\    _ = 值;
+        \\}
+        \\
+    ;
+    const expect =
+        \\const z_1 = packed struct { z_2: u1, z_3: u3 };
+        \\
+        \\fn z_4(noalias z_5: *u8) void {
+        \\    z_5.* += 1;
+        \\}
+        \\test "最小" {
+        \\    var z_6: u8 = 1;
+        \\    z_4(&z_6);
+        \\    const z_7 = z_1{ .z_2 = 1, .z_3 = 2 };
+        \\    _ = z_7;
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 声明名避让：新词形被用户当名字用时不查表（与 D1 哲学一致、不然 `常数 测试块 = 1;` 产 `const test = 1;`）。
+    var t2 = Mangle.init(gpa);
+    defer t2.deinit();
+    const avoided = try translate(gpa, "常数 测试块 = 1;\n", lang, &t2);
+    try std.testing.expectEqualStrings("const z_1 = 1;\n", avoided.zig_str);
+
+    // 反向：三个新登记词对应的英文关键字混入方言源均被纯度门坐实、携母语建议形
+    //（登记生效的同时就把该英文形纳入强制面——这是补词的行为副产品、与 D44 机制同源）。
+    var v1 = try findEnglishWordForms(gpa, lang, "常数 位域 = packed 结构 { 甲: u1 };\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("packed", v1.items[0].word);
+    try std.testing.expectEqualStrings("紧实", v1.items[0].native);
+    var v2 = try findEnglishWordForms(gpa, lang, "test \"赋值\" {}\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("test", v2.items[0].word);
+    try std.testing.expectEqualStrings("测试块", v2.items[0].native);
+    var v3 = try findEnglishWordForms(gpa, lang, "函数 甲(noalias 乙: *字节) 空 {}\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v3.items.len);
+    try std.testing.expectEqualStrings("noalias", v3.items[0].word);
+    try std.testing.expectEqualStrings("无别名", v3.items[0].native);
+
+    // 关键防回归（D54）：死映射 `异步=async` / `等待=await` 已删，英文 `async`/`await` 混入
+    // 不再被反查命中（放行 0 项）——若有人重建该两行映射，本断言即红（与 pack.zig
+    // 「关键字存在性不变量」护栏同治；放行者系「无母语映射的合法直通词」口径、非缺陷）。
+    var v4 = try findEnglishWordForms(gpa, lang, "变量 戊 = async 函数();\n");
+    defer v4.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v4.items.len);
+    var v5 = try findEnglishWordForms(gpa, lang, "变量 己 = await 戊;\n");
+    defer v5.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v5.items.len);
+}
+
 test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
