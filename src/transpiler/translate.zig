@@ -820,7 +820,7 @@ test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁�
 //   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
 //     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
 // `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
-// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`
+// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`
 // 同样强制；无映射者如 `@pow`（0.17 不存在）/`@as`/`@intCast` 依旧放行）。
 // 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
 
@@ -1032,6 +1032,62 @@ test "翻译 + 纯度门：数学内建方言词 ↔ @sqrt/@floor/@abs（第 146
     var vp = try findEnglishWordForms(gpa, lang, "变量 结果 = @pow(2.0, 3.0);\n");
     defer vp.deinit();
     try std.testing.expectEqual(@as(usize, 0), vp.items.len);
+}
+
+test "翻译 + 纯度门：三角/指数/对数内建方言词全覆盖（第 147 轮·承 146 同机制、用户拍板全覆盖）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 方言 → Zig：八个新内建方言词（正弦/余弦/正切/自然指数/自然对数/二进制指数/二进制对数/常用对数）各走对应内建。
+    // 此八个无同名 std 前缀别名（143 未注 std.math.sin/cos/tan/exp/log），故 146 的劫持面不适用、只需证正向与声明名避让。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    变量 甲: 实数 = 4.0;
+        \\    变量 弦 = 正弦(甲);
+        \\    变量 余 = 余弦(甲);
+        \\    变量 切 = 正切(甲);
+        \\    变量 指 = 自然指数(甲);
+        \\    变量 数 = 自然对数(甲);
+        \\    变量 二指 = 二进制指数(甲);
+        \\    变量 二数 = 二进制对数(甲);
+        \\    变量 常 = 常用对数(甲);
+        \\}
+        \\
+    ;
+    const expect =
+        \\pub fn main() !void {
+        \\    var z_1: f64 = 4.0;
+        \\    var z_2 = @sin(z_1);
+        \\    var z_3 = @cos(z_1);
+        \\    var z_4 = @tan(z_1);
+        \\    var z_5 = @exp(z_1);
+        \\    var z_6 = @log(z_1);
+        \\    var z_7 = @exp2(z_1);
+        \\    var z_8 = @log2(z_1);
+        \\    var z_9 = @log10(z_1);
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 反向：英文 `@cos`/`@log10` 混入方言源被纯度门坐实、携母语建议形（底数写明口径：@log10→常用对数）。
+    var v1 = try findEnglishWordForms(gpa, lang, "变量 结果 = @cos(1.0);\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("@cos", v1.items[0].word);
+    try std.testing.expectEqualStrings("余弦", v1.items[0].native);
+    var v2 = try findEnglishWordForms(gpa, lang, "变量 结果 = @log10(1.0);\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("@log10", v2.items[0].word);
+    try std.testing.expectEqualStrings("常用对数", v2.items[0].native);
 }
 
 test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {
