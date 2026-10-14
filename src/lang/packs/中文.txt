@@ -117,21 +117,23 @@ $code = zh
 主函数 = main
 
 # —— 常用高频（叶子函数/惯用类型）——
-标准库.主函数 = std.process.main
-标准库.打印 = std.debug.print
-标准库.断言 = std.debug.assert
-标准库.拷贝 = std.mem.copyForwards
-标准库.切片比较 = std.mem.eql
-标准库.查找 = std.mem.indexOfScalar
-标准库.格式化打印 = std.fmt.allocPrint
-标准库.分配器 = std.mem.Allocator
-标准库.页分配 = std.heap.page_allocator
-标准库.测试相等 = std.testing.expectEqual
-标准库.测试相等字符串 = std.testing.expectEqualStrings
-标准库.参数 = std.process.Args
-标准库.路径 = std.fs.path
-标准库.最大 = std.math.max
-标准库.最小 = std.math.min
+# 逐段镜像：中文键与英文值按 `.` 一段段对应、段数必相等（守卫测钉死）。旧写法把中间模块段
+# 吞了（如 `标准库.打印 = std.debug.print` 丢了 `debug`），令 `参数` 之类的名不知所云；现补回模块段。
+# 注：原 `标准库.最大/最小 = std.math.max/min`、`标准库.主函数 = std.process.main` 三条经编译器坐实
+# 在 Zig 0.17 已不存在（std 早移除 math.max/min、从无 process.main），属死路径，本轮删除；
+# 取最大/最小请用内置函数 @max/@min（如需方言词可后续登记到 [keywords]）。
+标准库.调试.打印 = std.debug.print
+标准库.调试.断言 = std.debug.assert
+标准库.内存.拷贝 = std.mem.copyForwards
+标准库.内存.切片比较 = std.mem.eql
+标准库.内存.查找 = std.mem.indexOfScalar
+标准库.内存.分配器 = std.mem.Allocator
+标准库.格式化.分配打印 = std.fmt.allocPrint
+标准库.分配策略.页分配 = std.heap.page_allocator
+标准库.测试.相等 = std.testing.expectEqual
+标准库.测试.相等字符串 = std.testing.expectEqualStrings
+标准库.过程.参数 = std.process.Args
+标准库.文件系统.路径 = std.fs.path
 标准库.列表 = std.ArrayList
 标准库.字符串哈希表 = std.StringHashMap
 标准库.自动哈希表 = std.AutoHashMap
@@ -164,8 +166,8 @@ $code = zh
 # —— 文件 · 输入输出 ——
 标准库.输入输出 = std.Io
 标准库.文件系统 = std.fs
-标准库.文件 = std.Io.File
-标准库.目录 = std.Io.Dir
+标准库.输入输出.文件 = std.Io.File
+标准库.输入输出.目录 = std.Io.Dir
 标准库.网络 = std.http
 标准库.进度 = std.Progress
 
@@ -236,6 +238,31 @@ $code = zh
 标准库.对齐列表裸 = std.ArrayListAlignedUnmanaged
 标准库.动位集裸 = std.DynamicBitSetUnmanaged
 标准库.静态字符串表定制 = std.StaticStringMapWithEql
+
+# —— 各模块常用成员（逐段镜像·值均已用 Zig 0.17 编译器 build-obj 实引用坐实存在）——
+标准库.调试.崩溃 = std.debug.panic
+标准库.调试.倾栈 = std.debug.dumpStackTrace
+标准库.内存.倒拷 = std.mem.copyBackwards
+标准库.内存.起始匹配 = std.mem.startsWith
+标准库.内存.结尾匹配 = std.mem.endsWith
+标准库.内存.拼接 = std.mem.concat
+标准库.内存.计数 = std.mem.count
+标准库.内存.翻转 = std.mem.reverse
+标准库.格式化.缓冲打印 = std.fmt.bufPrint
+标准库.格式化.计数 = std.fmt.count
+标准库.数学.平方根 = std.math.sqrt
+标准库.数学.幂 = std.math.pow
+标准库.数学.下取整 = std.math.floor
+标准库.数学.上取整 = std.math.ceil
+标准库.数学.四舍五入 = std.math.round
+标准库.测试.期望 = std.testing.expect
+标准库.测试.期望错误 = std.testing.expectError
+标准库.分配策略.暂存分配器 = std.heap.ArenaAllocator
+标准库.分配策略.固定缓冲分配器 = std.heap.FixedBufferAllocator
+标准库.类型信息.串转枚举 = std.meta.stringToEnum
+标准库.排序.块排 = std.sort.block
+标准库.排序.插入排 = std.sort.insertion
+标准库.排序.堆排 = std.sort.heap
 
 [diagnostics]
 # 值 = 匹配短语|母语译文|教学提示（三段，用 `|` 分隔；匹配为子串包含，非仅前缀）

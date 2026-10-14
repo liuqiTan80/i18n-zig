@@ -4,7 +4,7 @@
 //! 因此输出的行结构与输入一致，ColumnMap 只需记录被替换词元的偏移对。
 //!
 //! nonascii_word 的处理顺序：
-//!   1. 点分路径别名链（贪心最长，含单词形式，如 主函数 = std.process.main）；
+//!   1. 点分路径别名链（贪心最长，跨多段，如 标准库.调试.打印 = std.debug.print）；
 //!   2. 关键字/类型表（常数 -> const）；
 //!   3. 用户标识符转码（数量 -> z_1，工程级符号表保证跨文件一致）。
 //! 字符串词元里的导入路径扩展名 `.zz` 改写为 `.zig`；
@@ -385,7 +385,7 @@ test "翻译快照：hello 方言 -> 标准 Zig（逐字节）" {
         \\公开 函数 主函数() !void {
         \\    变量 数量: 整数 = 10;
         \\    数量 = 数量 + 1;
-        \\    标准库.打印("hi {d}\n", .{数量});
+        \\    标准库.调试.打印("hi {d}\n", .{数量});
         \\}
         \\
     ;
@@ -565,7 +565,7 @@ test "关键字/别名超串标识符：整词不拆分，别名仅对完整词�
     const src =
         \\常数 标准库 = 导入("std");
         \\函数 打印数据(值: 整数) void {
-        \\    标准库.打印("{d}\n", .{值});
+        \\    标准库.调试.打印("{d}\n", .{值});
         \\}
         \\公开 函数 主函数() !void {
         \\    常数 返回值: 整数 = 3;
@@ -587,7 +587,7 @@ test "关键字/别名超串标识符：整词不拆分，别名仅对完整词�
     const res = try translate(gpa, src, lang, &table);
     // 关键：这些超串名必须各自整词转码，而非被拆成“关键字片段+残体”。
     try std.testing.expectEqualStrings(expect, res.zig_str);
-    // 别名 `标准库.打印` 仍对完整词链（`标准库` `.` `打印`）生效，展开为 std.debug.print。
+    // 别名 `标准库.调试.打印` 仍对完整词链（`标准库` `.` `调试` `.` `打印`）生效，展开为 std.debug.print。
     try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "std.debug.print") != null);
     // 反查：函数名与变量名各自为一个完整符号，未被拆分。
     try std.testing.expectEqualStrings("打印数据", table.unmangle("z_1").?);
@@ -957,7 +957,7 @@ test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI
         \\常数 标准库 = 导入("std");
         \\公开 函数 主函数() !空 {
         \\    变量 数量: 整数 = 10;
-        \\    标准库.打印("hello {d}\n", .{数量});
+        \\    标准库.调试.打印("hello {d}\n", .{数量});
         \\}
         \\'
     ;
@@ -1144,7 +1144,7 @@ test "D48（第 104 轮）/第 142 轮：init 模板按包生成——中外语�
     // 中文包全词形齐备（非降级路径）：方言形必在产物里、ASCII 兜底形不得泄漏。
     try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "std.debug.print(") != null);
     try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "常数") != null);
-    try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "标准库.打印") != null);
+    try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "标准库.调试.打印") != null);
     // 串内 `\n` 必为字面两字符（第 142 轮实现期自捕：生成器误落真换行字节，zig 拒
     // 「string literal contains invalid byte」——模板串跨全部包共用，单点钉住即可）。
     try std.testing.expect(std.mem.indexOf(u8, zh_tmpl, "结果是 {d}\\n") != null);

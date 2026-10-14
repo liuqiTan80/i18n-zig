@@ -1743,7 +1743,7 @@ test "报错列映射：CJK 字符串字面量在前时，zig 字节列正确回
     const src = "常数 标准库 = 导入(\"std\");\n" ++
         "公开 函数 主函数() !void {\n" ++
         "    变量 乙: 整数 = 0;\n" ++
-        "    标准库.打印(\"你好世界\", .{ 甲 });\n" ++
+        "    标准库.调试.打印(\"你好世界\", .{ 甲 });\n" ++
         "}\n";
     const res = try tr.translate(gpa, src, lang, &table);
     const units = [_]Unit{.{
@@ -1755,12 +1755,12 @@ test "报错列映射：CJK 字符串字面量在前时，zig 字节列正确回
     }};
 
     // zig 对生成行报的是字节列：`    std.debug.print("你好世界", .{ ` = 39 字节 -> 第 40 列。
-    // 方言行中 甲 前有 22 个字符 -> 应回映为字符列 23（而非 zig 字节列 40、也非方言字节列 41）。
+    // 方言行中 甲 前有 25 个字符 -> 应回映为字符列 26（而非 zig 字节列 40、也非方言字节列 48）。
     const out = try renderDiag(gpa, lang, table, &units, "gen/main.zig", 4, 40, "error", "use of undeclared identifier 'z_2'", null);
     defer gpa.free(out);
-    try hasSub(out, "src/main.zz:4:23");
+    try hasSub(out, "src/main.zz:4:26");
     try noSub(out, "4:40"); // 不得把 zig 的字节列原样透出
-    try noSub(out, "4:41"); // 也不得退化为方言字节列
+    try noSub(out, "4:48"); // 也不得退化为方言字节列
 }
 
 test "去重 seen：跨两次 zig 调用（同位置同消息）仅输出一次，异位置不受影响" {
@@ -1777,7 +1777,7 @@ test "去重 seen：跨两次 zig 调用（同位置同消息）仅输出一次�
     const src = "常数 标准库 = 导入(\"std\");\n" ++
         "公开 函数 主函数() !void {\n" ++
         "    变量 乙: 整数 = 0;\n" ++
-        "    标准库.打印(\"你好世界\", .{ 甲 });\n" ++
+        "    标准库.调试.打印(\"你好世界\", .{ 甲 });\n" ++
         "}\n";
     const res = try tr.translate(gpa, src, lang, &table);
     const units = [_]Unit{.{
@@ -1797,7 +1797,7 @@ test "去重 seen：跨两次 zig 调用（同位置同消息）仅输出一次�
 
     const out_a = try translateStderr(gpa, lang, table, &units, a, &seen, null);
     defer gpa.free(out_a);
-    try hasSub(out_a, "src/main.zz:4:23"); // 首次正常渲染
+    try hasSub(out_a, "src/main.zz:4:26"); // 首次正常渲染
 
     const out_b = try translateStderr(gpa, lang, table, &units, b, &seen, null);
     defer gpa.free(out_b);
@@ -2297,12 +2297,12 @@ test "CRLF 源位置回映防回归：混坐标自洽闭合（第 74 轮勘察�
     const src_lf = "常数 标准库 = 导入(\"std\");\n" ++
         "公开 函数 主函数() !void {\n" ++
         "    变量 乙: 整数 = 0;\n" ++
-        "    标准库.打印(\"你好世界\", .{ 甲 });\n" ++
+        "    标准库.调试.打印(\"你好世界\", .{ 甲 });\n" ++
         "}\n";
     const src_crlf = "常数 标准库 = 导入(\"std\");\r\n" ++
         "公开 函数 主函数() !void {\r\n" ++
         "    变量 乙: 整数 = 0;\r\n" ++
-        "    标准库.打印(\"你好世界\", .{ 甲 });\r\n" ++
+        "    标准库.调试.打印(\"你好世界\", .{ 甲 });\r\n" ++
         "}\r\n";
 
     // 两份同坐标系的 table 独立建（同程序同序、转码编号一致）
@@ -2320,11 +2320,11 @@ test "CRLF 源位置回映防回归：混坐标自洽闭合（第 74 轮勘察�
     const o2 = try renderDiag(gpa, lang, t2, &units2, "gen/main.zig", 4, 40, "error", "use of undeclared identifier 'z_2'", null);
     defer gpa.free(o2);
 
-    // 铁证：CRLF 源与 LF 源回映到完全相同的方言位置（与既有 LF 基线测同坐标 4:23）
-    try hasSub(o1, "src/main.zz:4:23");
-    try hasSub(o2, "src/main.zz:4:23");
+    // 铁证：CRLF 源与 LF 源回映到完全相同的方言位置（与既有 LF 基线测同坐标 4:26）
+    try hasSub(o1, "src/main.zz:4:26");
+    try hasSub(o2, "src/main.zz:4:26");
     // 片段行同文（行尾 \r 不在行本体、不上屏）
-    try hasSub(o2, "|     标准库.打印(\"你好世界\", .{ 甲 });");
+    try hasSub(o2, "|     标准库.调试.打印(\"你好世界\", .{ 甲 });");
 }
 
 // 护栏（第 88 轮、第 74 轮证伪面续）：zig 正常坐标域之外的对抗形坐标（col=0 / 行号越界）

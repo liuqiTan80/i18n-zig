@@ -313,7 +313,7 @@ pub fn keywordFormsFor(gpa: std.mem.Allocator, lang: Pack, want: []const u8) ![]
 /// 首个映射为 `want` 的方言词（先 keywords 后 aliases，多形并存时取先入表形、同包同构建确定）。
 /// 供模板脚手架按包组词（第 142 轮）：工具侧不硬编码任何方言词，判据全取自包——与 D44
 /// 反查同一语言无关原则。未命中 null（调用方自行降级：ASCII 直通形或整行省略）。
-/// aliases 多段键（如 `标准库.打印`）可整体作点分链使用——翻译第 1 步贪心链匹配跨非 ASCII 段。
+/// aliases 多段键（如 `标准库.调试.打印`）可整体作点分链使用——翻译第 1 步贪心链匹配跨非 ASCII 段。
 pub fn firstKeywordFor(lang: Pack, want: []const u8) ?[]const u8 {
     var it = lang.keywords.iterator();
     while (it.next()) |e| {
@@ -343,7 +343,7 @@ test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优
     // aliases 段命中（keywords 未映射时兼容）：单段入口名与多段叶子链键——多段键整体可作点分链用。
     try std.testing.expectEqualStrings("主函数", lang.firstKeywordFor("main").?);
     try std.testing.expectEqualStrings("标准库", lang.firstKeywordFor("std").?);
-    try std.testing.expectEqualStrings("标准库.打印", lang.firstKeywordFor("std.debug.print").?);
+    try std.testing.expectEqualStrings("标准库.调试.打印", lang.firstKeywordFor("std.debug.print").?);
     // 未命中：包无任何映射值等于它——调用方自行降级，不得 panic。
     try std.testing.expectEqual(@as(?[]const u8, null), lang.firstKeywordFor("nonexistent.value"));
 }
@@ -389,7 +389,7 @@ test "语言包解析" {
         \\[keywords]
         \\常数 = const
         \\[aliases]
-        \\标准库.打印 = std.debug.print
+        \\标准库.调试.打印 = std.debug.print
         \\[whitelist]
         \\@memcpy|内建拷贝
         \\MyType
@@ -402,7 +402,7 @@ test "语言包解析" {
 
     try std.testing.expectEqualStrings("测试语", pack.name);
     try std.testing.expectEqualStrings("const", pack.keywords.get("常数").?);
-    try std.testing.expectEqualStrings("std.debug.print", pack.aliases.get("标准库.打印").?);
+    try std.testing.expectEqualStrings("std.debug.print", pack.aliases.get("标准库.调试.打印").?);
     // whitelist：`|` 备注剥离后入规则、重复幂等。
     try std.testing.expectEqual(@as(usize, 2), pack.whitelist.items.len);
     try std.testing.expectEqualStrings("@memcpy", pack.whitelist.items[0]);
@@ -439,7 +439,24 @@ test "内置中文包别名表不变量（第 141 轮）：键除 `.` 分隔外�
     // 既有高频条目不得因重排而丢失（回归防线）。
     try std.testing.expectEqualStrings("std", p.aliases.get("标准库").?);
     try std.testing.expectEqualStrings("std.process", p.aliases.get("标准库.过程").?);
-    try std.testing.expectEqualStrings("std.debug.print", p.aliases.get("标准库.打印").?);
+    try std.testing.expectEqualStrings("std.debug.print", p.aliases.get("标准库.调试.打印").?);
+}
+
+test "别名键段数不变量（第 143 轮逐段镜像）：每条 alias 中文键点分段数须等于英文值点分段数" {
+    // 依据（用户口径 143）：叶子别名须逐段镜像英文点路径（std.debug.print→标准库.调试.打印），
+    // 「段数相等」是「逐段一一对应」的可机械化形式。旧压扁形（标准库.打印 = std.debug.print 段数 2≠3）
+    // 吞掉中间模块段，是「参数不知所云」这类迷惑的根源——本测把镜像定理钓死，任何人再写压扁形即红。
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    var it = p.aliases.iterator();
+    while (it.next()) |e| {
+        const k = std.mem.count(u8, e.key_ptr.*, ".") + 1;
+        const v = std.mem.count(u8, e.value_ptr.*, ".") + 1;
+        try std.testing.expectEqual(k, v);
+    }
 }
 
 test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全量通过" {
