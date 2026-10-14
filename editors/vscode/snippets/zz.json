@@ -1,0 +1,1202 @@
+{
+  "al-主函数": {
+    "prefix": "主函数",
+    "body": "主函数",
+    "description": "标准库 → main"
+  },
+  "al-标准库": {
+    "prefix": "标准库",
+    "body": "标准库",
+    "description": "标准库 → std"
+  },
+  "al-标准库.交换文本": {
+    "prefix": "标准库.交换文本",
+    "body": "标准库.交换文本",
+    "description": "标准库 → std.json"
+  },
+  "al-标准库.优先双端": {
+    "prefix": "标准库.优先双端",
+    "body": "标准库.优先双端",
+    "description": "标准库 → std.PriorityDequeue"
+  },
+  "al-标准库.优先队列": {
+    "prefix": "标准库.优先队列",
+    "body": "标准库.优先队列",
+    "description": "标准库 → std.PriorityQueue"
+  },
+  "al-标准库.位操作": {
+    "prefix": "标准库.位操作",
+    "body": "标准库.位操作",
+    "description": "标准库 → std.bit_set"
+  },
+  "al-标准库.位栈": {
+    "prefix": "标准库.位栈",
+    "body": "标准库.位栈",
+    "description": "标准库 → std.BitStack"
+  },
+  "al-标准库.便携系统": {
+    "prefix": "标准库.便携系统",
+    "body": "标准库.便携系统",
+    "description": "标准库 → std.posix"
+  },
+  "al-标准库.六十四": {
+    "prefix": "标准库.六十四",
+    "body": "标准库.六十四",
+    "description": "标准库 → std.base64"
+  },
+  "al-标准库.内存": {
+    "prefix": "标准库.内存",
+    "body": "标准库.内存",
+    "description": "标准库 → std.mem"
+  },
+  "al-标准库.内存.倒拷": {
+    "prefix": "标准库.内存.倒拷",
+    "body": "标准库.内存.倒拷",
+    "description": "标准库 → std.mem.copyBackwards"
+  },
+  "al-标准库.内存.分配器": {
+    "prefix": "标准库.内存.分配器",
+    "body": "标准库.内存.分配器",
+    "description": "标准库 → std.mem.Allocator"
+  },
+  "al-标准库.内存.切片比较": {
+    "prefix": "标准库.内存.切片比较",
+    "body": "标准库.内存.切片比较",
+    "description": "标准库 → std.mem.eql"
+  },
+  "al-标准库.内存.拷贝": {
+    "prefix": "标准库.内存.拷贝",
+    "body": "标准库.内存.拷贝",
+    "description": "标准库 → std.mem.copyForwards"
+  },
+  "al-标准库.内存.拼接": {
+    "prefix": "标准库.内存.拼接",
+    "body": "标准库.内存.拼接",
+    "description": "标准库 → std.mem.concat"
+  },
+  "al-标准库.内存.查找": {
+    "prefix": "标准库.内存.查找",
+    "body": "标准库.内存.查找",
+    "description": "标准库 → std.mem.indexOfScalar"
+  },
+  "al-标准库.内存.结尾匹配": {
+    "prefix": "标准库.内存.结尾匹配",
+    "body": "标准库.内存.结尾匹配",
+    "description": "标准库 → std.mem.endsWith"
+  },
+  "al-标准库.内存.翻转": {
+    "prefix": "标准库.内存.翻转",
+    "body": "标准库.内存.翻转",
+    "description": "标准库 → std.mem.reverse"
+  },
+  "al-标准库.内存.计数": {
+    "prefix": "标准库.内存.计数",
+    "body": "标准库.内存.计数",
+    "description": "标准库 → std.mem.count"
+  },
+  "al-标准库.内存.起始匹配": {
+    "prefix": "标准库.内存.起始匹配",
+    "body": "标准库.内存.起始匹配",
+    "description": "标准库 → std.mem.startsWith"
+  },
+  "al-标准库.内置信息": {
+    "prefix": "标准库.内置信息",
+    "body": "标准库.内置信息",
+    "description": "标准库 → std.builtin"
+  },
+  "al-标准库.分配策略": {
+    "prefix": "标准库.分配策略",
+    "body": "标准库.分配策略",
+    "description": "标准库 → std.heap"
+  },
+  "al-标准库.分配策略.固定缓冲分配器": {
+    "prefix": "标准库.分配策略.固定缓冲分配器",
+    "body": "标准库.分配策略.固定缓冲分配器",
+    "description": "标准库 → std.heap.FixedBufferAllocator"
+  },
+  "al-标准库.分配策略.暂存分配器": {
+    "prefix": "标准库.分配策略.暂存分配器",
+    "body": "标准库.分配策略.暂存分配器",
+    "description": "标准库 → std.heap.ArenaAllocator"
+  },
+  "al-标准库.分配策略.页分配": {
+    "prefix": "标准库.分配策略.页分配",
+    "body": "标准库.分配策略.页分配",
+    "description": "标准库 → std.heap.page_allocator"
+  },
+  "al-标准库.列表": {
+    "prefix": "标准库.列表",
+    "body": "标准库.列表",
+    "description": "标准库 → std.ArrayList"
+  },
+  "al-标准库.列表裸": {
+    "prefix": "标准库.列表裸",
+    "body": "标准库.列表裸",
+    "description": "标准库 → std.ArrayListUnmanaged"
+  },
+  "al-标准库.动位集": {
+    "prefix": "标准库.动位集",
+    "body": "标准库.动位集",
+    "description": "标准库 → std.DynamicBitSet"
+  },
+  "al-标准库.动位集裸": {
+    "prefix": "标准库.动位集裸",
+    "body": "标准库.动位集裸",
+    "description": "标准库 → std.DynamicBitSetUnmanaged"
+  },
+  "al-标准库.动态库": {
+    "prefix": "标准库.动态库",
+    "body": "标准库.动态库",
+    "description": "标准库 → std.DynLib"
+  },
+  "al-标准库.单向链表": {
+    "prefix": "标准库.单向链表",
+    "body": "标准库.单向链表",
+    "description": "标准库 → std.SinglyLinkedList"
+  },
+  "al-标准库.压缩": {
+    "prefix": "标准库.压缩",
+    "body": "标准库.压缩",
+    "description": "标准库 → std.compress"
+  },
+  "al-标准库.压缩包": {
+    "prefix": "标准库.压缩包",
+    "body": "标准库.压缩包",
+    "description": "标准库 → std.zip"
+  },
+  "al-标准库.原子": {
+    "prefix": "标准库.原子",
+    "body": "标准库.原子",
+    "description": "标准库 → std.atomic"
+  },
+  "al-标准库.双向链表": {
+    "prefix": "标准库.双向链表",
+    "body": "标准库.双向链表",
+    "description": "标准库 → std.DoublyLinkedList"
+  },
+  "al-标准库.双端队列": {
+    "prefix": "标准库.双端队列",
+    "body": "标准库.双端队列",
+    "description": "标准库 → std.Deque"
+  },
+  "al-标准库.启动": {
+    "prefix": "标准库.启动",
+    "body": "标准库.启动",
+    "description": "标准库 → std.start"
+  },
+  "al-标准库.哈希": {
+    "prefix": "标准库.哈希",
+    "body": "标准库.哈希",
+    "description": "标准库 → std.hash"
+  },
+  "al-标准库.哈希表": {
+    "prefix": "标准库.哈希表",
+    "body": "标准库.哈希表",
+    "description": "标准库 → std.hash_map"
+  },
+  "al-标准库.多元列表": {
+    "prefix": "标准库.多元列表",
+    "body": "标准库.多元列表",
+    "description": "标准库 → std.MultiArrayList"
+  },
+  "al-标准库.字符串哈希表": {
+    "prefix": "标准库.字符串哈希表",
+    "body": "标准库.字符串哈希表",
+    "description": "标准库 → std.StringHashMap"
+  },
+  "al-标准库.字符串哈希表裸": {
+    "prefix": "标准库.字符串哈希表裸",
+    "body": "标准库.字符串哈希表裸",
+    "description": "标准库 → std.StringHashMapUnmanaged"
+  },
+  "al-标准库.字符串数组哈希表裸": {
+    "prefix": "标准库.字符串数组哈希表裸",
+    "body": "标准库.字符串数组哈希表裸",
+    "description": "标准库 → std.StringArrayHashMapUnmanaged"
+  },
+  "al-标准库.密码": {
+    "prefix": "标准库.密码",
+    "body": "标准库.密码",
+    "description": "标准库 → std.crypto"
+  },
+  "al-标准库.对齐列表": {
+    "prefix": "标准库.对齐列表",
+    "body": "标准库.对齐列表",
+    "description": "标准库 → std.ArrayListAligned"
+  },
+  "al-标准库.对齐列表裸": {
+    "prefix": "标准库.对齐列表裸",
+    "body": "标准库.对齐列表裸",
+    "description": "标准库 → std.ArrayListAlignedUnmanaged"
+  },
+  "al-标准库.小整编码": {
+    "prefix": "标准库.小整编码",
+    "body": "标准库.小整编码",
+    "description": "标准库 → std.leb"
+  },
+  "al-标准库.并行指令": {
+    "prefix": "标准库.并行指令",
+    "body": "标准库.并行指令",
+    "description": "标准库 → std.simd"
+  },
+  "al-标准库.打包": {
+    "prefix": "标准库.打包",
+    "body": "标准库.打包",
+    "description": "标准库 → std.tar"
+  },
+  "al-标准库.排序": {
+    "prefix": "标准库.排序",
+    "body": "标准库.排序",
+    "description": "标准库 → std.sort"
+  },
+  "al-标准库.排序.块排": {
+    "prefix": "标准库.排序.块排",
+    "body": "标准库.排序.块排",
+    "description": "标准库 → std.sort.block"
+  },
+  "al-标准库.排序.堆排": {
+    "prefix": "标准库.排序.堆排",
+    "body": "标准库.排序.堆排",
+    "description": "标准库 → std.sort.heap"
+  },
+  "al-标准库.排序.插入排": {
+    "prefix": "标准库.排序.插入排",
+    "body": "标准库.排序.插入排",
+    "description": "标准库 → std.sort.insertion"
+  },
+  "al-标准库.操作系统": {
+    "prefix": "标准库.操作系统",
+    "body": "标准库.操作系统",
+    "description": "标准库 → std.os"
+  },
+  "al-标准库.数学": {
+    "prefix": "标准库.数学",
+    "body": "标准库.数学",
+    "description": "标准库 → std.math"
+  },
+  "al-标准库.数学.上取整": {
+    "prefix": "标准库.数学.上取整",
+    "body": "标准库.数学.上取整",
+    "description": "标准库 → std.math.ceil"
+  },
+  "al-标准库.数学.下取整": {
+    "prefix": "标准库.数学.下取整",
+    "body": "标准库.数学.下取整",
+    "description": "标准库 → std.math.floor"
+  },
+  "al-标准库.数学.四舍五入": {
+    "prefix": "标准库.数学.四舍五入",
+    "body": "标准库.数学.四舍五入",
+    "description": "标准库 → std.math.round"
+  },
+  "al-标准库.数学.幂": {
+    "prefix": "标准库.数学.幂",
+    "body": "标准库.数学.幂",
+    "description": "标准库 → std.math.pow"
+  },
+  "al-标准库.数学.平方根": {
+    "prefix": "标准库.数学.平方根",
+    "body": "标准库.数学.平方根",
+    "description": "标准库 → std.math.sqrt"
+  },
+  "al-标准库.数组列表": {
+    "prefix": "标准库.数组列表",
+    "body": "标准库.数组列表",
+    "description": "标准库 → std.array_list"
+  },
+  "al-标准库.数组哈希表": {
+    "prefix": "标准库.数组哈希表",
+    "body": "标准库.数组哈希表",
+    "description": "标准库 → std.array_hash_map"
+  },
+  "al-标准库.数组哈希表裸": {
+    "prefix": "标准库.数组哈希表裸",
+    "body": "标准库.数组哈希表裸",
+    "description": "标准库 → std.ArrayHashMapUnmanaged"
+  },
+  "al-标准库.文件系统": {
+    "prefix": "标准库.文件系统",
+    "body": "标准库.文件系统",
+    "description": "标准库 → std.fs"
+  },
+  "al-标准库.文件系统.路径": {
+    "prefix": "标准库.文件系统.路径",
+    "body": "标准库.文件系统.路径",
+    "description": "标准库 → std.fs.path"
+  },
+  "al-标准库.日志": {
+    "prefix": "标准库.日志",
+    "body": "标准库.日志",
+    "description": "标准库 → std.log"
+  },
+  "al-标准库.时区": {
+    "prefix": "标准库.时区",
+    "body": "标准库.时区",
+    "description": "标准库 → std.tz"
+  },
+  "al-标准库.时间": {
+    "prefix": "标准库.时间",
+    "body": "标准库.时间",
+    "description": "标准库 → std.time"
+  },
+  "al-标准库.朴码": {
+    "prefix": "标准库.朴码",
+    "body": "标准库.朴码",
+    "description": "标准库 → std.ascii"
+  },
+  "al-标准库.构建描述": {
+    "prefix": "标准库.构建描述",
+    "body": "标准库.构建描述",
+    "description": "标准库 → std.Build"
+  },
+  "al-标准库.枚举数组": {
+    "prefix": "标准库.枚举数组",
+    "body": "标准库.枚举数组",
+    "description": "标准库 → std.EnumArray"
+  },
+  "al-标准库.枚举映射": {
+    "prefix": "标准库.枚举映射",
+    "body": "标准库.枚举映射",
+    "description": "标准库 → std.EnumMap"
+  },
+  "al-标准库.枚举装配": {
+    "prefix": "标准库.枚举装配",
+    "body": "标准库.枚举装配",
+    "description": "标准库 → std.enums"
+  },
+  "al-标准库.枚举集合": {
+    "prefix": "标准库.枚举集合",
+    "body": "标准库.枚举集合",
+    "description": "标准库 → std.EnumSet"
+  },
+  "al-标准库.树堆": {
+    "prefix": "标准库.树堆",
+    "body": "标准库.树堆",
+    "description": "标准库 → std.Treap"
+  },
+  "al-标准库.格式化": {
+    "prefix": "标准库.格式化",
+    "body": "标准库.格式化",
+    "description": "标准库 → std.fmt"
+  },
+  "al-标准库.格式化.分配打印": {
+    "prefix": "标准库.格式化.分配打印",
+    "body": "标准库.格式化.分配打印",
+    "description": "标准库 → std.fmt.allocPrint"
+  },
+  "al-标准库.格式化.缓冲打印": {
+    "prefix": "标准库.格式化.缓冲打印",
+    "body": "标准库.格式化.缓冲打印",
+    "description": "标准库 → std.fmt.bufPrint"
+  },
+  "al-标准库.格式化.计数": {
+    "prefix": "标准库.格式化.计数",
+    "body": "标准库.格式化.计数",
+    "description": "标准库 → std.fmt.count"
+  },
+  "al-标准库.检存": {
+    "prefix": "标准库.检存",
+    "body": "标准库.检存",
+    "description": "标准库 → std.valgrind"
+  },
+  "al-标准库.测试": {
+    "prefix": "标准库.测试",
+    "body": "标准库.测试",
+    "description": "标准库 → std.testing"
+  },
+  "al-标准库.测试.期望": {
+    "prefix": "标准库.测试.期望",
+    "body": "标准库.测试.期望",
+    "description": "标准库 → std.testing.expect"
+  },
+  "al-标准库.测试.期望错误": {
+    "prefix": "标准库.测试.期望错误",
+    "body": "标准库.测试.期望错误",
+    "description": "标准库 → std.testing.expectError"
+  },
+  "al-标准库.测试.相等": {
+    "prefix": "标准库.测试.相等",
+    "body": "标准库.测试.相等",
+    "description": "标准库 → std.testing.expectEqual"
+  },
+  "al-标准库.测试.相等字符串": {
+    "prefix": "标准库.测试.相等字符串",
+    "body": "标准库.测试.相等字符串",
+    "description": "标准库 → std.testing.expectEqualStrings"
+  },
+  "al-标准库.独立位": {
+    "prefix": "标准库.独立位",
+    "body": "标准库.独立位",
+    "description": "标准库 → std.pie"
+  },
+  "al-标准库.目标平台": {
+    "prefix": "标准库.目标平台",
+    "body": "标准库.目标平台",
+    "description": "标准库 → std.Target"
+  },
+  "al-标准库.程序档": {
+    "prefix": "标准库.程序档",
+    "body": "标准库.程序档",
+    "description": "标准库 → std.pdb"
+  },
+  "al-标准库.类型信息": {
+    "prefix": "标准库.类型信息",
+    "body": "标准库.类型信息",
+    "description": "标准库 → std.meta"
+  },
+  "al-标准库.类型信息.串转枚举": {
+    "prefix": "标准库.类型信息.串转枚举",
+    "body": "标准库.类型信息.串转枚举",
+    "description": "标准库 → std.meta.stringToEnum"
+  },
+  "al-标准库.线程": {
+    "prefix": "标准库.线程",
+    "body": "标准库.线程",
+    "description": "标准库 → std.Thread"
+  },
+  "al-标准库.组记文本": {
+    "prefix": "标准库.组记文本",
+    "body": "标准库.组记文本",
+    "description": "标准库 → std.zon"
+  },
+  "al-标准库.统一资源": {
+    "prefix": "标准库.统一资源",
+    "body": "标准库.统一资源",
+    "description": "标准库 → std.Uri"
+  },
+  "al-标准库.缓冲映射": {
+    "prefix": "标准库.缓冲映射",
+    "body": "标准库.缓冲映射",
+    "description": "标准库 → std.BufMap"
+  },
+  "al-标准库.缓冲集": {
+    "prefix": "标准库.缓冲集",
+    "body": "标准库.缓冲集",
+    "description": "标准库 → std.BufSet"
+  },
+  "al-标准库.编码": {
+    "prefix": "标准库.编码",
+    "body": "标准库.编码",
+    "description": "标准库 → std.unicode"
+  },
+  "al-标准库.编译工具": {
+    "prefix": "标准库.编译工具",
+    "body": "标准库.编译工具",
+    "description": "标准库 → std.zig"
+  },
+  "al-标准库.网汇": {
+    "prefix": "标准库.网汇",
+    "body": "标准库.网汇",
+    "description": "标准库 → std.wasm"
+  },
+  "al-标准库.网络": {
+    "prefix": "标准库.网络",
+    "body": "标准库.网络",
+    "description": "标准库 → std.http"
+  },
+  "al-标准库.联载格式": {
+    "prefix": "标准库.联载格式",
+    "body": "标准库.联载格式",
+    "description": "标准库 → std.elf"
+  },
+  "al-标准库.自动哈希表": {
+    "prefix": "标准库.自动哈希表",
+    "body": "标准库.自动哈希表",
+    "description": "标准库 → std.AutoHashMap"
+  },
+  "al-标准库.自动哈希表裸": {
+    "prefix": "标准库.自动哈希表裸",
+    "body": "标准库.自动哈希表裸",
+    "description": "标准库 → std.AutoHashMapUnmanaged"
+  },
+  "al-标准库.自动数组哈希表裸": {
+    "prefix": "标准库.自动数组哈希表裸",
+    "body": "标准库.自动数组哈希表裸",
+    "description": "标准库 → std.AutoArrayHashMapUnmanaged"
+  },
+  "al-标准库.螺旋": {
+    "prefix": "标准库.螺旋",
+    "body": "标准库.螺旋",
+    "description": "标准库 → std.spirv"
+  },
+  "al-标准库.西接口": {
+    "prefix": "标准库.西接口",
+    "body": "标准库.西接口",
+    "description": "标准库 → std.c"
+  },
+  "al-标准库.语义版本": {
+    "prefix": "标准库.语义版本",
+    "body": "标准库.语义版本",
+    "description": "标准库 → std.SemanticVersion"
+  },
+  "al-标准库.语言规范": {
+    "prefix": "标准库.语言规范",
+    "body": "标准库.语言规范",
+    "description": "标准库 → std.lang"
+  },
+  "al-标准库.调档格式": {
+    "prefix": "标准库.调档格式",
+    "body": "标准库.调档格式",
+    "description": "标准库 → std.dwarf"
+  },
+  "al-标准库.调试": {
+    "prefix": "标准库.调试",
+    "body": "标准库.调试",
+    "description": "标准库 → std.debug"
+  },
+  "al-标准库.调试.倾栈": {
+    "prefix": "标准库.调试.倾栈",
+    "body": "标准库.调试.倾栈",
+    "description": "标准库 → std.debug.dumpStackTrace"
+  },
+  "al-标准库.调试.崩溃": {
+    "prefix": "标准库.调试.崩溃",
+    "body": "标准库.调试.崩溃",
+    "description": "标准库 → std.debug.panic"
+  },
+  "al-标准库.调试.打印": {
+    "prefix": "标准库.调试.打印",
+    "body": "标准库.调试.打印",
+    "description": "标准库 → std.debug.print"
+  },
+  "al-标准库.调试.断言": {
+    "prefix": "标准库.调试.断言",
+    "body": "标准库.调试.断言",
+    "description": "标准库 → std.debug.assert"
+  },
+  "al-标准库.输入输出": {
+    "prefix": "标准库.输入输出",
+    "body": "标准库.输入输出",
+    "description": "标准库 → std.Io"
+  },
+  "al-标准库.输入输出.文件": {
+    "prefix": "标准库.输入输出.文件",
+    "body": "标准库.输入输出.文件",
+    "description": "标准库 → std.Io.File"
+  },
+  "al-标准库.输入输出.目录": {
+    "prefix": "标准库.输入输出.目录",
+    "body": "标准库.输入输出.目录",
+    "description": "标准库 → std.Io.Dir"
+  },
+  "al-标准库.过程": {
+    "prefix": "标准库.过程",
+    "body": "标准库.过程",
+    "description": "标准库 → std.process"
+  },
+  "al-标准库.过程.参数": {
+    "prefix": "标准库.过程.参数",
+    "body": "标准库.过程.参数",
+    "description": "标准库 → std.process.Args"
+  },
+  "al-标准库.进度": {
+    "prefix": "标准库.进度",
+    "body": "标准库.进度",
+    "description": "标准库 → std.Progress"
+  },
+  "al-标准库.通对格式": {
+    "prefix": "标准库.通对格式",
+    "body": "标准库.通对格式",
+    "description": "标准库 → std.coff"
+  },
+  "al-标准库.通用哈希表": {
+    "prefix": "标准库.通用哈希表",
+    "body": "标准库.通用哈希表",
+    "description": "标准库 → std.HashMap"
+  },
+  "al-标准库.通用哈希表裸": {
+    "prefix": "标准库.通用哈希表裸",
+    "body": "标准库.通用哈希表裸",
+    "description": "标准库 → std.HashMapUnmanaged"
+  },
+  "al-标准库.随机": {
+    "prefix": "标准库.随机",
+    "body": "标准库.随机",
+    "description": "标准库 → std.Random"
+  },
+  "al-标准库.静位集": {
+    "prefix": "标准库.静位集",
+    "body": "标准库.静位集",
+    "description": "标准库 → std.StaticBitSet"
+  },
+  "al-标准库.静态字符串表": {
+    "prefix": "标准库.静态字符串表",
+    "body": "标准库.静态字符串表",
+    "description": "标准库 → std.StaticStringMap"
+  },
+  "al-标准库.静态字符串表定制": {
+    "prefix": "标准库.静态字符串表定制",
+    "body": "标准库.静态字符串表定制",
+    "description": "标准库 → std.StaticStringMapWithEql"
+  },
+  "al-标准库.麦客格式": {
+    "prefix": "标准库.麦客格式",
+    "body": "标准库.麦客格式",
+    "description": "标准库 → std.macho"
+  },
+  "kw-上取整": {
+    "prefix": "上取整",
+    "body": "上取整",
+    "description": "内建函数 → @ceil"
+  },
+  "kw-下取整": {
+    "prefix": "下取整",
+    "body": "下取整",
+    "description": "内建函数 → @floor"
+  },
+  "kw-不内联": {
+    "prefix": "不内联",
+    "body": "不内联",
+    "description": "关键字 → noinline"
+  },
+  "kw-不返回": {
+    "prefix": "不返回",
+    "body": "不返回",
+    "description": "类型 → noreturn"
+  },
+  "kw-不透明类型": {
+    "prefix": "不透明类型",
+    "body": "不透明类型",
+    "description": "关键字 → opaque"
+  },
+  "kw-且": {
+    "prefix": "且",
+    "body": "且",
+    "description": "关键字 → and"
+  },
+  "kw-中整数": {
+    "prefix": "中整数",
+    "body": "中整数",
+    "description": "类型 → i32"
+  },
+  "kw-中无符号整数": {
+    "prefix": "中无符号整数",
+    "body": "中无符号整数",
+    "description": "类型 → u32"
+  },
+  "kw-二进制对数": {
+    "prefix": "二进制对数",
+    "body": "二进制对数",
+    "description": "内建函数 → @log2"
+  },
+  "kw-二进制指数": {
+    "prefix": "二进制指数",
+    "body": "二进制指数",
+    "description": "内建函数 → @exp2"
+  },
+  "kw-任意帧": {
+    "prefix": "任意帧",
+    "body": "任意帧",
+    "description": "类型 → anyframe"
+  },
+  "kw-任意类型": {
+    "prefix": "任意类型",
+    "body": "任意类型",
+    "description": "关键字 → anytype"
+  },
+  "kw-任错": {
+    "prefix": "任错",
+    "body": "任错",
+    "description": "类型 → anyerror"
+  },
+  "kw-位大小": {
+    "prefix": "位大小",
+    "body": "位大小",
+    "description": "内建函数 → @bitSizeOf"
+  },
+  "kw-位逆序": {
+    "prefix": "位逆序",
+    "body": "位逆序",
+    "description": "内建函数 → @bitReverse"
+  },
+  "kw-余弦": {
+    "prefix": "余弦",
+    "body": "余弦",
+    "description": "内建函数 → @cos"
+  },
+  "kw-假": {
+    "prefix": "假",
+    "body": "假",
+    "description": "类型 → false"
+  },
+  "kw-允许零": {
+    "prefix": "允许零",
+    "body": "允许零",
+    "description": "关键字 → allowzero"
+  },
+  "kw-公开": {
+    "prefix": "公开",
+    "body": "公开",
+    "description": "关键字 → pub"
+  },
+  "kw-内联": {
+    "prefix": "内联",
+    "body": "内联",
+    "description": "关键字 → inline"
+  },
+  "kw-函数": {
+    "prefix": "函数",
+    "body": "函数",
+    "description": "关键字 → fn"
+  },
+  "kw-前导零计数": {
+    "prefix": "前导零计数",
+    "body": "前导零计数",
+    "description": "内建函数 → @clz"
+  },
+  "kw-匹配": {
+    "prefix": "匹配",
+    "body": "匹配",
+    "description": "关键字 → switch"
+  },
+  "kw-半精度": {
+    "prefix": "半精度",
+    "body": "半精度",
+    "description": "类型 → f16"
+  },
+  "kw-单精度": {
+    "prefix": "单精度",
+    "body": "单精度",
+    "description": "类型 → f32"
+  },
+  "kw-取类型": {
+    "prefix": "取类型",
+    "body": "取类型",
+    "description": "内建函数 → @TypeOf"
+  },
+  "kw-变量": {
+    "prefix": "变量",
+    "body": "变量",
+    "description": "关键字 → var"
+  },
+  "kw-向上除法": {
+    "prefix": "向上除法",
+    "body": "向上除法",
+    "description": "内建函数 → @divCeil"
+  },
+  "kw-向下取余": {
+    "prefix": "向下取余",
+    "body": "向下取余",
+    "description": "内建函数 → @mod"
+  },
+  "kw-向下除法": {
+    "prefix": "向下除法",
+    "body": "向下除法",
+    "description": "内建函数 → @divFloor"
+  },
+  "kw-否则": {
+    "prefix": "否则",
+    "body": "否则",
+    "description": "关键字 → else"
+  },
+  "kw-四倍精度": {
+    "prefix": "四倍精度",
+    "body": "四倍精度",
+    "description": "类型 → f128"
+  },
+  "kw-四舍五入": {
+    "prefix": "四舍五入",
+    "body": "四舍五入",
+    "description": "内建函数 → @round"
+  },
+  "kw-外部": {
+    "prefix": "外部",
+    "body": "外部",
+    "description": "关键字 → extern"
+  },
+  "kw-如果": {
+    "prefix": "如果",
+    "body": "如果",
+    "description": "关键字 → if"
+  },
+  "kw-字": {
+    "prefix": "字",
+    "body": "字",
+    "description": "类型 → usize"
+  },
+  "kw-字符串": {
+    "prefix": "字符串",
+    "body": "字符串",
+    "description": "方言词 → []u8"
+  },
+  "kw-字节": {
+    "prefix": "字节",
+    "body": "字节",
+    "description": "类型 → u8"
+  },
+  "kw-字节序翻转": {
+    "prefix": "字节序翻转",
+    "body": "字节序翻转",
+    "description": "内建函数 → @byteSwap"
+  },
+  "kw-实数": {
+    "prefix": "实数",
+    "body": "实数",
+    "description": "类型 → f64"
+  },
+  "kw-对于": {
+    "prefix": "对于",
+    "body": "对于",
+    "description": "关键字 → for"
+  },
+  "kw-对齐": {
+    "prefix": "对齐",
+    "body": "对齐",
+    "description": "关键字 → align"
+  },
+  "kw-对齐大小": {
+    "prefix": "对齐大小",
+    "body": "对齐大小",
+    "description": "内建函数 → @alignOf"
+  },
+  "kw-导入": {
+    "prefix": "导入",
+    "body": "导入",
+    "description": "内建函数 → @import"
+  },
+  "kw-导出": {
+    "prefix": "导出",
+    "body": "导出",
+    "description": "关键字 → export"
+  },
+  "kw-尝试": {
+    "prefix": "尝试",
+    "body": "尝试",
+    "description": "关键字 → try"
+  },
+  "kw-尾随零计数": {
+    "prefix": "尾随零计数",
+    "body": "尾随零计数",
+    "description": "内建函数 → @ctz"
+  },
+  "kw-嵌入文件": {
+    "prefix": "嵌入文件",
+    "body": "嵌入文件",
+    "description": "内建函数 → @embedFile"
+  },
+  "kw-布尔": {
+    "prefix": "布尔",
+    "body": "布尔",
+    "description": "类型 → bool"
+  },
+  "kw-常数": {
+    "prefix": "常数",
+    "body": "常数",
+    "description": "关键字 → const"
+  },
+  "kw-常用对数": {
+    "prefix": "常用对数",
+    "body": "常用对数",
+    "description": "内建函数 → @log10"
+  },
+  "kw-平方根": {
+    "prefix": "平方根",
+    "body": "平方根",
+    "description": "内建函数 → @sqrt"
+  },
+  "kw-延迟": {
+    "prefix": "延迟",
+    "body": "延迟",
+    "description": "关键字 → defer"
+  },
+  "kw-当": {
+    "prefix": "当",
+    "body": "当",
+    "description": "关键字 → while"
+  },
+  "kw-待处理": {
+    "prefix": "待处理",
+    "body": "待处理",
+    "description": "关键字 → unreachable"
+  },
+  "kw-或": {
+    "prefix": "或",
+    "body": "或",
+    "description": "关键字 → or"
+  },
+  "kw-或不然": {
+    "prefix": "或不然",
+    "body": "或不然",
+    "description": "关键字 → orelse"
+  },
+  "kw-截断取余": {
+    "prefix": "截断取余",
+    "body": "截断取余",
+    "description": "内建函数 → @rem"
+  },
+  "kw-截断取整": {
+    "prefix": "截断取整",
+    "body": "截断取整",
+    "description": "内建函数 → @trunc"
+  },
+  "kw-截断除法": {
+    "prefix": "截断除法",
+    "body": "截断除法",
+    "description": "内建函数 → @divTrunc"
+  },
+  "kw-挂起外": {
+    "prefix": "挂起外",
+    "body": "挂起外",
+    "description": "关键字 → nosuspend"
+  },
+  "kw-捕获": {
+    "prefix": "捕获",
+    "body": "捕获",
+    "description": "关键字 → catch"
+  },
+  "kw-数据类型": {
+    "prefix": "数据类型",
+    "body": "数据类型",
+    "description": "类型 → type"
+  },
+  "kw-整数": {
+    "prefix": "整数",
+    "body": "整数",
+    "description": "类型 → i64"
+  },
+  "kw-文本": {
+    "prefix": "文本",
+    "body": "文本",
+    "description": "方言词 → []const u8"
+  },
+  "kw-断开": {
+    "prefix": "断开",
+    "body": "断开",
+    "description": "关键字 → break"
+  },
+  "kw-无别名": {
+    "prefix": "无别名",
+    "body": "无别名",
+    "description": "关键字 → noalias"
+  },
+  "kw-无符号整数": {
+    "prefix": "无符号整数",
+    "body": "无符号整数",
+    "description": "类型 → u64"
+  },
+  "kw-易变": {
+    "prefix": "易变",
+    "body": "易变",
+    "description": "关键字 → volatile"
+  },
+  "kw-最大": {
+    "prefix": "最大",
+    "body": "最大",
+    "description": "内建函数 → @max"
+  },
+  "kw-最小": {
+    "prefix": "最小",
+    "body": "最小",
+    "description": "内建函数 → @min"
+  },
+  "kw-有符号字": {
+    "prefix": "有符号字",
+    "body": "有符号字",
+    "description": "类型 → isize"
+  },
+  "kw-有符号字节": {
+    "prefix": "有符号字节",
+    "body": "有符号字节",
+    "description": "类型 → i8"
+  },
+  "kw-未定义": {
+    "prefix": "未定义",
+    "body": "未定义",
+    "description": "类型 → undefined"
+  },
+  "kw-本类型": {
+    "prefix": "本类型",
+    "body": "本类型",
+    "description": "内建函数 → @This"
+  },
+  "kw-枚举": {
+    "prefix": "枚举",
+    "body": "枚举",
+    "description": "关键字 → enum"
+  },
+  "kw-标签名": {
+    "prefix": "标签名",
+    "body": "标签名",
+    "description": "内建函数 → @tagName"
+  },
+  "kw-正切": {
+    "prefix": "正切",
+    "body": "正切",
+    "description": "内建函数 → @tan"
+  },
+  "kw-正弦": {
+    "prefix": "正弦",
+    "body": "正弦",
+    "description": "内建函数 → @sin"
+  },
+  "kw-汇编": {
+    "prefix": "汇编",
+    "body": "汇编",
+    "description": "关键字 → asm"
+  },
+  "kw-测试块": {
+    "prefix": "测试块",
+    "body": "测试块",
+    "description": "关键字 → test"
+  },
+  "kw-真": {
+    "prefix": "真",
+    "body": "真",
+    "description": "类型 → true"
+  },
+  "kw-短整数": {
+    "prefix": "短整数",
+    "body": "短整数",
+    "description": "类型 → i16"
+  },
+  "kw-短无符号整数": {
+    "prefix": "短无符号整数",
+    "body": "短无符号整数",
+    "description": "类型 → u16"
+  },
+  "kw-空": {
+    "prefix": "空",
+    "body": "空",
+    "description": "类型 → void"
+  },
+  "kw-空值": {
+    "prefix": "空值",
+    "body": "空值",
+    "description": "类型 → null"
+  },
+  "kw-类型信息": {
+    "prefix": "类型信息",
+    "body": "类型信息",
+    "description": "内建函数 → @typeInfo"
+  },
+  "kw-类型名": {
+    "prefix": "类型名",
+    "body": "类型名",
+    "description": "内建函数 → @typeName"
+  },
+  "kw-类型大小": {
+    "prefix": "类型大小",
+    "body": "类型大小",
+    "description": "内建函数 → @sizeOf"
+  },
+  "kw-精确右移": {
+    "prefix": "精确右移",
+    "body": "精确右移",
+    "description": "内建函数 → @shrExact"
+  },
+  "kw-精确左移": {
+    "prefix": "精确左移",
+    "body": "精确左移",
+    "description": "内建函数 → @shlExact"
+  },
+  "kw-精确整除": {
+    "prefix": "精确整除",
+    "body": "精确整除",
+    "description": "内建函数 → @divExact"
+  },
+  "kw-紧实": {
+    "prefix": "紧实",
+    "body": "紧实",
+    "description": "关键字 → packed"
+  },
+  "kw-线程局部": {
+    "prefix": "线程局部",
+    "body": "线程局部",
+    "description": "关键字 → threadlocal"
+  },
+  "kw-结构": {
+    "prefix": "结构",
+    "body": "结构",
+    "description": "关键字 → struct"
+  },
+  "kw-绝对值": {
+    "prefix": "绝对值",
+    "body": "绝对值",
+    "description": "内建函数 → @abs"
+  },
+  "kw-继续": {
+    "prefix": "继续",
+    "body": "继续",
+    "description": "关键字 → continue"
+  },
+  "kw-置位计数": {
+    "prefix": "置位计数",
+    "body": "置位计数",
+    "description": "内建函数 → @popCount"
+  },
+  "kw-联合": {
+    "prefix": "联合",
+    "body": "联合",
+    "description": "关键字 → union"
+  },
+  "kw-自然对数": {
+    "prefix": "自然对数",
+    "body": "自然对数",
+    "description": "内建函数 → @log"
+  },
+  "kw-自然指数": {
+    "prefix": "自然指数",
+    "body": "自然指数",
+    "description": "内建函数 → @exp"
+  },
+  "kw-计期": {
+    "prefix": "计期",
+    "body": "计期",
+    "description": "关键字 → comptime"
+  },
+  "kw-计期整数": {
+    "prefix": "计期整数",
+    "body": "计期整数",
+    "description": "类型 → comptime_int"
+  },
+  "kw-计期浮点": {
+    "prefix": "计期浮点",
+    "body": "计期浮点",
+    "description": "类型 → comptime_float"
+  },
+  "kw-让": {
+    "prefix": "让",
+    "body": "让",
+    "description": "关键字 → var"
+  },
+  "kw-调用约定": {
+    "prefix": "调用约定",
+    "body": "调用约定",
+    "description": "关键字 → callconv"
+  },
+  "kw-返回": {
+    "prefix": "返回",
+    "body": "返回",
+    "description": "关键字 → return"
+  },
+  "kw-链接段": {
+    "prefix": "链接段",
+    "body": "链接段",
+    "description": "关键字 → linksection"
+  },
+  "kw-错延": {
+    "prefix": "错延",
+    "body": "错延",
+    "description": "关键字 → errdefer"
+  },
+  "kw-错误": {
+    "prefix": "错误",
+    "body": "错误",
+    "description": "关键字 → error"
+  },
+  "kw-错误名": {
+    "prefix": "错误名",
+    "body": "错误名",
+    "description": "内建函数 → @errorName"
+  },
+  "kw-长整数": {
+    "prefix": "长整数",
+    "body": "长整数",
+    "description": "类型 → i128"
+  },
+  "kw-长无符号整数": {
+    "prefix": "长无符号整数",
+    "body": "长无符号整数",
+    "description": "类型 → u128"
+  }
+}

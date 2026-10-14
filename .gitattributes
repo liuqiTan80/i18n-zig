@@ -20,3 +20,5 @@
 # 故 autocrlf=true 的克隆若把本文件检出成 CRLF，守卫会在 fresh clone 上无端翻红——
 # 同 .zig fmt 门禁教训，须仓库级钉 LF 令检出形制与生成器产出一致。
 editors/vscode/syntaxes/zz.tmLanguage.json text eol=lf
+# 同守卫机制适用于第 155 轮生成的 snippets（check-editor-snippets 同样按字节比对）。
+editors/vscode/snippets/zz.json text eol=lf

@@ -6,6 +6,7 @@
 
 - `.zz` 文件自动关联 `source.zz` 语法
 - 中文方言关键词、内建函数、类型名、标准库别名语法高亮
+- **补全**：方言关键词/别名作为 snippet 补全候选（按前缀召回，附「→ 标准 Zig 形」说明）
 - `zzc check --machine` 问题匹配器（单行诊断 → Problems 面板）
 
 ## 安装（开发态）
@@ -13,11 +14,13 @@
 1. 确保 `zzc` 在 PATH 中（`zig build install` 后取 `zig-out/bin`）
 2. 按 F5 启动扩展开发宿主，或 `code --install-extension` VSIX
 
-## 生成语法高亮
+## 生成语法高亮与补全
 
 ```sh
 zig build gen-editor-syntax      # 从语言包重新生成 syntaxes/zz.tmLanguage.json
 zig build check-editor-syntax    # CI 守卫：校验文件与包同步
+zig build gen-editor-snippets    # 从语言包重新生成 snippets/zz.json
+zig build check-editor-snippets  # CI 守卫：校验 snippets 与包同步
 ```
 
 ## 任务配置
@@ -27,6 +30,6 @@ zig build check-editor-syntax    # CI 守卫：校验文件与包同步
 
 ## 路线图（后续轮次）
 
-- 补全（completion provider）
-- LSP 协议集成
+- ~~补全（completion provider）~~ 已于第 155 轮以声明式 snippet 落地（从语言包同源取词）
+- LSP 协议集成（补全/悬停/跳转走标准协议，取代静态 snippet）
 - 多语言包支持（切换 scopeName 对应方言）

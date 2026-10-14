@@ -70,6 +70,27 @@ pub fn build(b: *std.Build) void {
     const check_run = b.addRunArtifact(gen_tmlang_exe);
     check_run.addArg("check");
     check_syntax_step.dependOn(&check_run.step);
+
+    // 第 155 轮：补全片段生成器（编辑器集成 MVP 补全面）。
+    const gen_snippets_exe = b.addExecutable(.{
+        .name = "gen-snippets",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/editor/gen_snippets_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+
+    const gen_snippets_step = b.step("gen-editor-snippets", "生成 editors/vscode/snippets/zz.json");
+    const gen_snip_run = b.addRunArtifact(gen_snippets_exe);
+    gen_snip_run.addArg("emit");
+    gen_snippets_step.dependOn(&gen_snip_run.step);
+
+    const check_snippets_step = b.step("check-editor-snippets", "校验 snippets 与语言包同步（CI 守卫）");
+    const check_snip_run = b.addRunArtifact(gen_snippets_exe);
+    check_snip_run.addArg("check");
+    check_snippets_step.dependOn(&check_snip_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②）
