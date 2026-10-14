@@ -12,6 +12,8 @@ pub const cli = @import("cli/args.zig");
 pub const file_io = @import("file_io.zig");
 pub const tmlang = @import("editor/tmlang.zig");
 pub const snippets = @import("editor/snippets.zig");
+pub const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
+pub const lsp_server = @import("lsp/server.zig");
 
 pub const zh_pack_bytes = @embedFile("lang/packs/中文.txt");
 
@@ -29,4 +31,6 @@ test {
     _ = file_io;
     _ = tmlang;
     _ = snippets;
+    _ = lsp_jsonrpc;
+    _ = lsp_server;
 }

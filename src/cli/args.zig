@@ -491,6 +491,7 @@ pub const usage_text =
     \\  zzc run    [文件.zz]   编译并运行；`--` 之后传给程序
     \\  zzc test   [文件.zz]   翻译 -> zig test
     \\  zzc eject  [目录]      导出标准 Zig 工程（默认 standard/）
+    \\  zzc lsp                启动 LSP 服务器（JSON-RPC over stdio：悬停/快路诊断/文档同步；stdout 专供协议帧）
     \\  zzc lang               列出当前语言包与可注册包
     \\  zzc lang add <文件>   装入外部语言包到本工程（--as 注册名 可选；免重编译）
     \\  zzc version            版本与当前语言包
@@ -503,7 +504,7 @@ pub const usage_text =
 
 test "usage 文本列出全部子命令" {
     // 每个子命令名都必须出现在帮助文本里，避免新增命令忘更帮助、或改名后文本漏改。
-    for ([_][]const u8{ "init", "check", "build", "run", "test", "eject", "lang" }) |sub| {
+    for ([_][]const u8{ "init", "check", "build", "run", "test", "eject", "lsp", "lang" }) |sub| {
         try std.testing.expect(std.mem.indexOf(u8, usage_text, sub) != null);
     }
 }

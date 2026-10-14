@@ -23,7 +23,8 @@ fn isLanguageConstant(value: []const u8) bool {
 }
 
 /// 按映射值归类方言词的分组标签（判据全取自注册表，语言无关）。
-fn classify(value: []const u8) []const u8 {
+/// 公开供 LSP hover 复用（第 156 轮）：同一词在补全描述与悬停详情里分组口径一致。
+pub fn classify(value: []const u8) []const u8 {
     if (value.len > 0 and value[0] == '@') return "内建函数";
     if (std.zig.isPrimitive(value)) return "类型";
     if (isLanguageConstant(value)) return "字面常量";

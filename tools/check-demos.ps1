@@ -928,5 +928,71 @@ Remove-Item -Recurse -Force $lp -ErrorAction SilentlyContinue
 if ($laOk) { Write-Output "  [PASS] lang add guard: install byte-exact, runtime --lang selection without recompile, dup->2/bytes kept, bad pack->1/zero writes, traversal->2, unknown verb->2 (stdout clean), bare lang shape preserved" }
 else { $fail = $fail + 1 }
 
+# --- zzc lsp LSP handshake e2e guard (round 156). Framing and dispatch cores are
+# unit-tested in-graph, but the stdin/stdout assembly in main.zig is OUTSIDE the
+# test graph -- only this e2e section can catch wiring regressions (buffer drain,
+# flush-per-response, EOF exit, exit-notification stop). Script stays pure ASCII:
+# native word forms enter JSON via \uXXXX escapes; asserts decode UTF-8 off the
+# wire (round-133/D52 cross-platform discipline: forward slashes, no PS 5.1-only
+# constructs, no node dependency -- .NET streams drive the whole handshake).
+Write-Output "== lsp handshake guard =="
+$lspOk = $true
+$acc = New-Object Collections.Generic.List[byte]
+function Add-Frame([string]$body) {
+    $b = [Text.Encoding]::UTF8.GetBytes($body)
+    $h = [Text.Encoding]::ASCII.GetBytes("Content-Length: $($b.Length)`r`n`r`n")
+    foreach ($x in $h) { $acc.Add($x) }
+    foreach ($x in $b) { $acc.Add($x) }
+}
+# initialize(id1) -> initialized -> didOpen(chang-shu a = 1 + fullwidth comma) ->
+# hover(id2 at line0 char0 on chang-shu) -> shutdown(id3) -> exit. The dialect
+# word and the fullwidth comma ride in as \uXXXX escapes (script stays ASCII).
+Add-Frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
+Add-Frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
+Add-Frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///g156.zz","languageId":"zig-dialect","version":1,"text":"\u5E38\u6570 a = 1\uFF0C\n"}}}'
+Add-Frame '{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///g156.zz"},"position":{"line":0,"character":0}}}'
+Add-Frame '{"jsonrpc":"2.0","id":3,"method":"shutdown"}'
+Add-Frame '{"jsonrpc":"2.0","method":"exit"}'
+$li = Join-Path $root ".zig-cache/lsp156.in"; $lo = Join-Path $root ".zig-cache/lsp156.out"; $le = Join-Path $root ".zig-cache/lsp156.err"
+[IO.File]::WriteAllBytes($li, $acc.ToArray())
+$proc = Start-Process -FilePath $zzc -ArgumentList "lsp" -NoNewWindow -Wait -PassThru `
+    -RedirectStandardInput $li -RedirectStandardOutput $lo -RedirectStandardError $le
+$raw = Read-B $lo
+if ($raw.Count -eq 0) { $raw = [byte[]]::new(0) }
+$ltxt = [Text.Encoding]::UTF8.GetString([byte[]]$raw)
+$errb = Read-B $le
+if ($errb.Count -eq 0) { $errb = [byte[]]::new(0) }
+$leString = [Text.Encoding]::UTF8.GetString([byte[]]$errb)
+Remove-Item -Force $li, $lo, $le -ErrorAction SilentlyContinue
+if ($proc.ExitCode -ne 0) { Write-Output ("  [FAIL] lsp: handshake run exited " + $proc.ExitCode + " (expected 0)"); $lspOk = $false }
+if ($leString.Trim().Length -ne 0) { Write-Output ("  [FAIL] lsp: human text leaked to stderr: " + $leString.Trim()); $lspOk = $false }
+$msgs = @([regex]::Split($ltxt, "Content-Length:\s*\d+`r`n`r`n") | Where-Object { $_.Trim().Length -gt 0 })
+if ($msgs.Count -ne 4) { Write-Output ("  [FAIL] lsp: expected exactly 4 framed messages, got " + $msgs.Count); $lspOk = $false }
+if ($lspOk) {
+    $N_cifa = Native 0x8BCD, 0x6CD5        # ci-fa (lexical diagnostics kind)
+    $N_gjz  = Native 0x5173, 0x952E, 0x5B57 # guan-jian-zi (hover group label)
+    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":1') -and $msgs[0].Contains('"hoverProvider":true'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities"; $lspOk = $false }
+    if (-not ($msgs[1].Contains('publishDiagnostics') -and $msgs[1].Contains('file:///g156.zz') -and $msgs[1].Contains($N_cifa))) { Write-Output "  [FAIL] lsp: didOpen did not publish native-lexical diagnostics for the fullwidth comma"; $lspOk = $false }
+    if (-not ($msgs[2].Contains('"id":2') -and $msgs[2].Contains('const') -and $msgs[2].Contains($N_gjz))) { Write-Output "  [FAIL] lsp: hover on chang-shu did not resolve to const/keyword-group"; $lspOk = $false }
+    if (-not ($msgs[3].Contains('"id":3') -and $msgs[3].Contains('"result":null'))) { Write-Output "  [FAIL] lsp: shutdown reply not result-null"; $lspOk = $false }
+    # framing self-consistency: every declared Content-Length must match its body bytes
+    $pos = 0
+    while ($pos -lt $raw.Length) {
+        $hdrEnd = -1
+        for ($j = $pos; $j -lt $raw.Length - 3; $j++) { if ($raw[$j] -eq 13 -and $raw[$j+1] -eq 10 -and $raw[$j+2] -eq 13 -and $raw[$j+3] -eq 10) { $hdrEnd = $j; break } }
+        if ($hdrEnd -lt 0) { Write-Output "  [FAIL] lsp: output stream is not frame-parseable (missing header terminator)"; $lspOk = $false; break }
+        $hdr = [Text.Encoding]::ASCII.GetString($raw[$pos..($hdrEnd - 1)])
+        $cm = [regex]::Match($hdr, "Content-Length:\s*(\d+)")
+        if (-not $cm.Success) { Write-Output "  [FAIL] lsp: frame header lacks Content-Length"; $lspOk = $false; break }
+        $clen = [int]$cm.Groups[1].Value
+        $bstart = $hdrEnd + 4
+        if ($bstart + $clen -gt $raw.Length) { Write-Output "  [FAIL] lsp: Content-Length overruns the stream"; $lspOk = $false; break }
+        $pos = $bstart + $clen
+    }
+    if ($lspOk -and $pos -ne $raw.Length) { Write-Output "  [FAIL] lsp: trailing bytes after last frame"; $lspOk = $false }
+}
+if ($lspOk) { Write-Output "  [PASS] lsp guard: full handshake over real stdio -- init/didOpen-publish/hover/shutdown/exit, 4 frames byte-consistent, stderr clean, exit 0" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"

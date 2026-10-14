@@ -7,6 +7,7 @@
 //!   zzc run   [文件.zz]     编译并运行，`--` 之后为程序参数
 //!   zzc test  [文件.zz]     翻译 -> zig test
 //!   zzc eject [目录]        导出标准 Zig 工程（毕业路径）
+//!   zzc lsp                 启动 LSP 服务器（JSON-RPC over stdio，第 156 轮）
 //!   zzc lang                列出当前语言包与可注册包；`lang add` 装入外部包（R9g 第二档）
 //!   zzc version             版本信息
 //!
@@ -29,6 +30,8 @@ const cli = @import("cli/args.zig");
 const file_io = @import("file_io.zig");
 const registry = @import("lang/registry.zig");
 const userpack = @import("lang/userpack.zig");
+const lsp = @import("lsp/server.zig");
+const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
 
 const version_str = "0.1.0";
 const zh_pack = @embedFile("lang/packs/中文.txt");
@@ -923,6 +926,72 @@ fn bail(e: anyerror) noreturn {
     std.process.exit(if (e == error.Usage) 2 else 1);
 }
 
+// ---------------------------------------------------------------- LSP 接线
+
+/// LSP 服务器（第 156 轮）：JSON-RPC over stdio 帧环流。stdout 专供协议帧、
+/// 人读消息一律走 stderr（启动失败/流断坏）；分发核（能力/诊断/悬停）全在
+/// lsp/server.zig 测试图内单测，此处只做 stdin→handle→stdout 的字节搬运。
+fn cmdLsp(lang: Pack) void {
+    var srv = lsp.Server.init(gpa_, &lang); // lang 形参与函数体同寿，&lang 安全
+    defer srv.deinit();
+
+    var in_buf: [8192]u8 = undefined;
+    var in_r = Io.File.Reader.init(.stdin(), io_, &in_buf);
+    var pend: std.ArrayList(u8) = .empty; // 跨帧未解析字节
+
+    while (true) {
+        // 缓冲内逐帧消费
+        while (true) {
+            const f = lsp_jsonrpc.parseFrame(pend.items) catch |e| {
+                printErr("zzc: LSP 帧解析失败（{s}），流已不可信，结束。", .{@errorName(e)});
+                werr.flush() catch {};
+                return;
+            };
+            const frame = f orelse break;
+            var out: lsp.OutList = .empty;
+            srv.handle(frame.body, &out) catch {
+                printErr("zzc: LSP 处理本条报文失败（内存不足），已跳过。\n", .{});
+            };
+            defer {
+                for (out.items) |m| gpa_.free(m);
+                out.deinit(gpa_);
+            }
+            var io_broke = false;
+            for (out.items) |m| {
+                const enc = lsp_jsonrpc.encodeFrame(gpa_, m) catch {
+                    io_broke = true;
+                    break;
+                };
+                defer gpa_.free(enc);
+                out_w.writeAll(enc) catch {
+                    io_broke = true;
+                    break;
+                };
+            }
+            out_w.flush() catch {
+                io_broke = true;
+            };
+            if (io_broke) {
+                printErr("zzc: LSP 标准输出写入失败，客户端已断开，结束。\n", .{});
+                return;
+            }
+            // 消费已处理字节
+            const rest = pend.items[frame.consumed..];
+            std.mem.copyForwards(u8, pend.items, rest);
+            pend.shrinkRetainingCapacity(rest.len);
+            if (srv.stop) return; // exit 通知：环流结束（调用方 main 自然退 0）
+        }
+        // 不足一帧：续读 stdin
+        var chunk: [4096]u8 = undefined;
+        const n = in_r.interface.readSliceShort(&chunk) catch 0;
+        if (n == 0) return; // stdin 关闭：客户端断开，正常收束
+        pend.appendSlice(gpa_, chunk[0..n]) catch {
+            printErr("zzc: LSP 读缓冲耗尽（内存不足），结束。\n", .{});
+            return;
+        };
+    }
+}
+
 // ---------------------------------------------------------------- 入口
 
 pub fn main(init: std.process.Init) !void {
@@ -1068,6 +1137,12 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, cmd, "init")) {
         if (argv.len < 1) bail(error.Usage);
         cmdInit(argv[0], lang) catch |e| bail(e);
+        return;
+    }
+    if (std.mem.eql(u8, cmd, "lsp")) {
+        // LSP（第 156 轮）：分发核在 lsp/server.zig（测试图内全量单测），此处只接 stdio 帧环流。
+        // 不走 symbols/Mangle 链：快路诊断纯函数化、不 intern 不写盘，无 saveSymbols 义务（D46 形安全）。
+        cmdLsp(lang);
         return;
     }
 
