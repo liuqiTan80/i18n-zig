@@ -547,6 +547,80 @@ test "内置中文包 keywords 关键字存在性不变量（第 152 轮·D54 �
     try std.testing.expectEqualStrings("noalias", p.keywords.get("无别名").?);
 }
 
+test "内置中文包 whitelist 存在性不变量（第 153 轮·护栏盲区补齐）：@-前缀豁免 token 必为真实内建，标识符 token 须合词法" {
+    // 依据（153 轮盲区盘点）：whitelist 段是纯母语过滤器的整行精确豁免面（F2），独立于
+    // keywords 段——151 轮 BuiltinFn 不变量只扫 keywords，本段 @-值（@import/@memcpy/@typeInfo）
+    // 从未经任何存在性把关；写错一字节即「该豁免不生效」的静默漏拦。另拦非 @ token 的
+    // 空白/非法词法形（含空格即永不命中、纯占位死条目）。
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    var at_checked: usize = 0;
+    var ident_checked: usize = 0;
+    for (p.whitelist.items) |rule| {
+        if (rule.len >= 2 and rule[0] == '@') {
+            // @ 后须全为标识符字符（本包 whitelist 无 @"..." 形，出现即新面、须显式更新本测）。
+            for (rule[1..]) |b| {
+                const ok = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
+                try std.testing.expect(ok);
+            }
+            at_checked += 1;
+            if (!std.zig.BuiltinFn.list.has(rule)) {
+                std.debug.print("dead whitelist builtin: {s}\n", .{rule});
+            }
+            try std.testing.expect(std.zig.BuiltinFn.list.has(rule));
+        } else {
+            // 非 @ token：合 Zig 标识符词法且不得含空白（「整行精确匹配」语义下任一模糊形永不生效）。
+            ident_checked += 1;
+            for (rule, 0..) |b, i| {
+                const ok = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
+                if (!ok) {
+                    std.debug.print("malformed whitelist token: {s}\n", .{rule});
+                }
+                try std.testing.expect(ok);
+                _ = i;
+            }
+        }
+    }
+    // 覆盖面与锚点：三条 @-内建豁免在场（与 keywords 段 `导入`/`嵌入文件`/`类型信息` 的映射值形互为
+    // 独立登记面，值若被编译器移除即此处拦下）；标识符示例 token 至少 4 条，防段被误清空使本测空转。
+    try std.testing.expect(at_checked >= 3);
+    try std.testing.expect(ident_checked >= 4);
+}
+
+test "内置中文包 keywords 复合多 token 类型表达式值不变量（第 153 轮·护栏盲区补齐）：151/152 测均跳过的第三分区不再裸奔" {
+    // 依据（153 轮盲区盘点）：[keywords] 映射值三分区——@-前缀（151 测）、ASCII 单 token（152 测）、
+    // 复合多 token 类型表达式（`文本 = []const u8`、`字符串 = []u8`）。前两区有注册表真相源把关，
+    // 第三区 151/152 测仅记「跳过」而无任何覆盖——值被手滑改坏（如 []cosnt u8）要到真编译才暴。
+    // 本测钉分区计数下限与两锚点值；新增复合值须同步 translate.zig 逐字节快照测（153 轮已备）。
+    const gpa = std.testing.allocator;
+    const zh = @embedFile("packs/中文.txt");
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    var composite: usize = 0;
+    var it = p.keywords.iterator();
+    while (it.next()) |e| {
+        const v = e.value_ptr.*;
+        if (v.len == 0 or v[0] == '@') continue; // @-前缀由 151 轮测把关
+        var single_token = true;
+        for (v) |b| {
+            const ok = (b >= 'a' and b <= 'z') or (b >= 'A' and b <= 'Z') or (b >= '0' and b <= '9') or b == '_';
+            if (!ok) {
+                single_token = false;
+                break;
+            }
+        }
+        if (single_token) continue; // 单 token 由 152 轮测把关
+        composite += 1;
+    }
+    try std.testing.expect(composite >= 2);
+    try std.testing.expectEqualStrings("[]const u8", p.keywords.get("文本").?);
+    try std.testing.expectEqualStrings("[]u8", p.keywords.get("字符串").?);
+}
+
 test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全量通过" {
     const gpa = std.testing.allocator;
 

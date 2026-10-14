@@ -1349,6 +1349,34 @@ test "翻译 + 纯度门：关键字方言词补登 测试块=test / 紧实=pack
     try std.testing.expectEqual(@as(usize, 0), v5.items.len);
 }
 
+test "翻译逐字节快照：复合多 token 类型表达式映射值 字符串=[]u8（第 153 轮·护栏盲区补齐，151/152 测均跳过的第三分区）" {
+    // [keywords] 映射值三分区：@-前缀（151 测）、ASCII 单 token（152 测）、复合多 token 类型表达式。
+    // 既有快照仅盖 `文本 = []const u8`（声明位测），`字符串 = []u8` 形零覆盖——值被改坏要到真编译才暴。
+    // 本测以真编译坐实的形制（类型标注位整词展开）钉住两复合值的译出，与 pack.zig 分区不变量测同治。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\变量 缓冲: 字符串 = 未定义;
+        \\常数 名字: 文本 = "hi";
+        \\缓冲 = 名字;
+        \\_ = 缓冲;
+    ;
+    const expect =
+        \\var z_1: []u8 = undefined;
+        \\const z_2: []const u8 = "hi";
+        \\z_1 = z_2;
+        \\_ = z_1;
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+}
+
 test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
