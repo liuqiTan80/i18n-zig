@@ -106,6 +106,8 @@ $code = zh
 嵌入文件 = @embedFile
 取类型 = @TypeOf
 类型 = @Type
+最大 = @max
+最小 = @min
 
 [aliases]
 # 标准库全量路径别名（覆盖 std.zig 全部顶层 pub 名，按类型分组）。
@@ -121,7 +123,7 @@ $code = zh
 # 吞了（如 `标准库.打印 = std.debug.print` 丢了 `debug`），令 `参数` 之类的名不知所云；现补回模块段。
 # 注：原 `标准库.最大/最小 = std.math.max/min`、`标准库.主函数 = std.process.main` 三条经编译器坐实
 # 在 Zig 0.17 已不存在（std 早移除 math.max/min、从无 process.main），属死路径，本轮删除；
-# 取最大/最小请用内置函数 @max/@min（如需方言词可后续登记到 [keywords]）。
+# 取最大/最小请用内置函数 @max/@min；其方言词 最大/最小 已登记于上方 [keywords] 内置函数映射节（编译器 build-obj 坐实存在）。
 标准库.调试.打印 = std.debug.print
 标准库.调试.断言 = std.debug.assert
 标准库.内存.拷贝 = std.mem.copyForwards

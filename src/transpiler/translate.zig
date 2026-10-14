@@ -815,12 +815,12 @@ test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁�
 // 豁免位（词元级，字符串/注释/多行串/@"..." 符号整体是单词元、天然不拆解）：
 //   - 数字字面量/含数字混合形：映射值皆纯字母词，全等判据天然放行；C ABI 领土名（`c_int`/`c_char`）
 //     不属任何语言包的映射值（它们不是 Zig 关键字、是 C 生态符号），同一判据天然豁免；
-//   - 无母语映射的 Zig 内建（`@as`/`@min`/`@intCast`…）：语言领土、无可反查对象，放行；
+//   - 无母语映射的 Zig 内建（`@as`/`@intCast`/`@add`…）：语言领土、无可反查对象，放行；
 //   - 点号后的段（`a.true` 型字段访问）：Zig 的 `.` 后接关键字合法，不报；
 //   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
 //     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
 // `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
-// 内建如 `@import`/`@embedFile`/`@TypeOf` 同样强制）。
+// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min` 同样强制）。
 // 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
 
 pub const EnglishWord = struct {
@@ -942,6 +942,46 @@ test "纯母语强制：英文关键字/类型词混入方言源被坐实（先�
     try std.testing.expectEqualStrings("fn", v3.items[0].word);
     try std.testing.expectEqualStrings("@embedFile", v3.items[1].word);
     try std.testing.expectEqualStrings("嵌入文件", v3.items[1].native);
+}
+
+test "翻译 + 纯度门：最大/最小 方言词 ↔ 内建 @max/@min（第 144 轮·承 143 删死路径的活替代）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 方言 → Zig：`最大(甲,乙)`/`最小(甲,乙)` 编成 `@max(...)`/`@min(...)`（同 导入→@import 机制、声明名位不受累）。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    变量 甲: 整数 = 3;
+        \\    变量 乙: 整数 = 7;
+        \\    变量 大: 整数 = 最大(甲, 乙);
+        \\    变量 小: 整数 = 最小(甲, 乙);
+        \\}
+        \\
+    ;
+    const expect =
+        \\pub fn main() !void {
+        \\    var z_1: i64 = 3;
+        \\    var z_2: i64 = 7;
+        \\    var z_3: i64 = @max(z_1, z_2);
+        \\    var z_4: i64 = @min(z_1, z_2);
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 反向：英文 `@max` 混入方言源被纯度门坐实（`@` 全形反查命中 keywords 映射值）、携母语建议形。
+    var v = try findEnglishWordForms(gpa, lang, "变量 结果 = @max(1, 2);\n");
+    defer v.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v.items.len);
+    try std.testing.expectEqualStrings("@max", v.items[0].word);
+    try std.testing.expectEqualStrings("最大", v.items[0].native);
 }
 
 test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {
