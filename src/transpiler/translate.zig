@@ -820,7 +820,8 @@ test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁�
 //   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
 //     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
 // `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
-// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min` 同样强制）。
+// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`
+// 同样强制；无映射者如 `@pow`（0.17 不存在）/`@as`/`@intCast` 依旧放行）。
 // 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
 
 pub const EnglishWord = struct {
@@ -982,6 +983,55 @@ test "翻译 + 纯度门：最大/最小 方言词 ↔ 内建 @max/@min（第 14
     try std.testing.expectEqual(@as(usize, 1), v.items.len);
     try std.testing.expectEqualStrings("@max", v.items[0].word);
     try std.testing.expectEqualStrings("最大", v.items[0].native);
+}
+
+test "翻译 + 纯度门：数学内建方言词 ↔ @sqrt/@floor/@abs（第 146 轮·承 144 同机制、与 143 前缀别名互不劫持）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 方言 → Zig：裸 `平方根(甲)`/`下取整(甲)`/`绝对值(甲)` 编成 `@sqrt/@floor/@abs`；
+    // 而带前缀的 `标准库.数学.平方根` 仍走别名链→`std.math.sqrt`（证关键字层不劫持前缀形末段，
+    // 否则会误产 `std.math.@sqrt`）。这是本轮 load-bearing 不变量。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    变量 甲: 实数 = 4.0;
+        \\    变量 根 = 平方根(甲);
+        \\    变量 整 = 下取整(甲);
+        \\    变量 对 = 绝对值(甲);
+        \\    变量 标 = 标准库.数学.平方根(甲);
+        \\}
+        \\
+    ;
+    const expect =
+        \\pub fn main() !void {
+        \\    var z_1: f64 = 4.0;
+        \\    var z_2 = @sqrt(z_1);
+        \\    var z_3 = @floor(z_1);
+        \\    var z_4 = @abs(z_1);
+        \\    var z_5 = std.math.sqrt(z_1);
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 反向：英文 `@sqrt` 混入方言源被纯度门坐实（`@` 全形反查命中 keywords 映射值）、携母语建议形。
+    var v = try findEnglishWordForms(gpa, lang, "变量 结果 = @sqrt(4.0);\n");
+    defer v.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v.items.len);
+    try std.testing.expectEqualStrings("@sqrt", v.items[0].word);
+    try std.testing.expectEqualStrings("平方根", v.items[0].native);
+
+    // 无母语映射且 0.17 不存在的 `@pow`（幂走 std.math.pow 别名、非内建）依旧放行——锁「强制面只盖真存在的内建」。
+    var vp = try findEnglishWordForms(gpa, lang, "变量 结果 = @pow(2.0, 3.0);\n");
+    defer vp.deinit();
+    try std.testing.expectEqual(@as(usize, 0), vp.items.len);
 }
 
 test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {

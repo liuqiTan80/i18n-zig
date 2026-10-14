@@ -108,6 +108,16 @@ $code = zh
 类型 = @Type
 最大 = @max
 最小 = @min
+# —— 数学内建方言词（第 146 轮·高频裸调用）——
+# 与上方 `标准库.数学.*` 成员同术语对齐（平方根/下取整/上取整/四舍五入），裸调用走活内建、带前缀仍走 std.math。
+# 均经 zig build-obj 坐实在 Zig 0.17 存在；@pow 坐实不存在（幂运算走 std.math.pow，见上 `标准库.数学.幂`），故不登记裸「幂」。
+# 截断取整=@trunc（向零取整）、绝对值=@abs 系新增概念（无 std 成员同名冲突）。@sqrt/@abs 等 8 个已坐实存在的内建（exp/log/exp2/log2/log10/sin/cos/tan）留待按需登记。
+平方根 = @sqrt
+绝对值 = @abs
+下取整 = @floor
+上取整 = @ceil
+四舍五入 = @round
+截断取整 = @trunc
 
 [aliases]
 # 标准库全量路径别名（覆盖 std.zig 全部顶层 pub 名，按类型分组）。
