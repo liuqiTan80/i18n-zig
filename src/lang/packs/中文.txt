@@ -141,6 +141,16 @@ $code = zh
 置位计数 = @popCount
 字节序翻转 = @byteSwap
 位逆序 = @bitReverse
+# —— 第 150 轮收官审计续补：内建全集 build-obj 逐族分档后，登记除法族补全 + 类型元新域（用户拍板全部 6 词）——
+# @divExact 系 149 除法族（向下/截断）漏登的第 5 个成员、运行时纯值同族；写明「精确」区别于泛义「整除」（除不尽即 panic）。
+精确整除 = @divExact
+# —— 类型元/值转字符串（arg 为类型或返回字符串、属类型级而非运行时数值线；均 zig build-obj 坐实存在；@memberCount/@byteOffsetOf 坐实不存在、转型族需已知结果类型非自然裸形、@addWithOverflow 返 {值,溢出} 结构体——皆排除）——
+类型大小 = @sizeOf
+对齐大小 = @alignOf
+位大小 = @bitSizeOf
+类型名 = @typeName
+标签名 = @tagName
+错误名 = @errorName
 
 [aliases]
 # 标准库全量路径别名（覆盖 std.zig 全部顶层 pub 名，按类型分组）。

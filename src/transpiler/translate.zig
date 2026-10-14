@@ -820,7 +820,7 @@ test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁�
 //   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
 //     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
 // `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
-// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`/`@mod`/`@rem`/`@divFloor`/`@divTrunc`/`@clz`/`@ctz`/`@popCount`/`@byteSwap`/`@bitReverse` 同样强制（第 146–149 轮逐族登记）；无映射者如 @pow（0.17 不存在）/@as/@intCast 依旧放行。
+// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`/`@mod`/`@rem`/`@divFloor`/`@divTrunc`/`@clz`/`@ctz`/`@popCount`/`@byteSwap`/`@bitReverse`/`@divExact`/`@sizeOf`/`@alignOf`/`@bitSizeOf`/`@typeName`/`@tagName`/`@errorName` 同样强制（第 146–150 轮逐族登记）；无映射者如 @pow/@memberCount/@byteOffsetOf（0.17 不存在）/@as/@intCast（需已知结果类型、非自然裸值形）依旧放行。
 // 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
 
 pub const EnglishWord = struct {
@@ -1149,6 +1149,67 @@ test "翻译 + 纯度门：余除/位运算内建方言词全覆盖（第 149 �
     try std.testing.expectEqualStrings("置位计数", v2.items[0].native);
     // 未登记内建 `@fabs`（坐实不存在、绝对值统一走 @abs）混入仍放行 0 项——锁「强制面只盖真登记内建」。
     var v3 = try findEnglishWordForms(gpa, lang, "变量 结果 = @fabs(1.0);\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v3.items.len);
+}
+
+test "翻译 + 纯度门：除法族补全与类型元内建方言词登记（第 150 轮·收官审计、用户拍板 @divExact + 全部 6 词）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 正向：@divExact（149 除法族漏登的第 5 个成员）+ 类型元六词各走对应内建。
+    // 类型元 arg 为类型或返回字符串、属新领域（第 150 轮用户拍板开启）；本包为纯 token 替换、不跑 zig sema，
+    // 故形如 `@sizeOf(i64)` 只需验证方言词→内建名的整词映射、无需产物语义合法。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    变量 甲 = 6;
+        \\    变量 乙 = 3;
+        \\    变量 丙 = 精确整除(甲, 乙);
+        \\    变量 丁 = 类型大小(整数);
+        \\    变量 戊 = 对齐大小(整数);
+        \\    变量 己 = 位大小(整数);
+        \\    变量 庚 = 类型名(整数);
+        \\    变量 辛 = 标签名(乙);
+        \\    变量 壬 = 错误名(乙);
+        \\}
+        \\
+    ;
+    const expect =
+        \\pub fn main() !void {
+        \\    var z_1 = 6;
+        \\    var z_2 = 3;
+        \\    var z_3 = @divExact(z_1, z_2);
+        \\    var z_4 = @sizeOf(i64);
+        \\    var z_5 = @alignOf(i64);
+        \\    var z_6 = @bitSizeOf(i64);
+        \\    var z_7 = @typeName(i64);
+        \\    var z_8 = @tagName(z_2);
+        \\    var z_9 = @errorName(z_2);
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 反向：英文 `@divExact`/`@sizeOf` 混入方言源被纯度门坐实、携母语建议形。
+    var v1 = try findEnglishWordForms(gpa, lang, "变量 结果 = @divExact(6, 3);\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("@divExact", v1.items[0].word);
+    try std.testing.expectEqualStrings("精确整除", v1.items[0].native);
+    var v2 = try findEnglishWordForms(gpa, lang, "变量 结果 = @sizeOf(整数);\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("@sizeOf", v2.items[0].word);
+    try std.testing.expectEqualStrings("类型大小", v2.items[0].native);
+    // 坐实不存在的 `@memberCount`（0.17 无此内建、须走 std.meta）混入仍放行 0 项——锁「强制面只盖真登记内建」。
+    var v3 = try findEnglishWordForms(gpa, lang, "变量 结果 = @memberCount(乙);\n");
     defer v3.deinit();
     try std.testing.expectEqual(@as(usize, 0), v3.items.len);
 }
