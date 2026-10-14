@@ -820,8 +820,7 @@ test "expectNoEnglishSentence 边界：≥ 3 恰等阈值 + 反引号码引豁�
 //   - 声明名位（复用 prevIsDeclKeyword/isExtendedDeclNamePos 避让判据）：与 D1 哲学一致，
 //     用户拿映射值当英文名时交下游更准的 zig 语法错，而非误导性的「请改母语」。
 // `@` 前缀内建：词元拆为 punct `@` + ascii_word，故拼回 `@embedFile` 全形后反查（有母语映射的
-// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`
-// 同样强制；无映射者如 `@pow`（0.17 不存在）/`@as`/`@intCast` 依旧放行）。
+// 内建如 `@import`/`@embedFile`/`@TypeOf`/`@max`/`@min`/`@sqrt`/`@abs`/`@floor`/`@ceil`/`@round`/`@trunc`/`@sin`/`@cos`/`@tan`/`@exp`/`@log`/`@exp2`/`@log2`/`@log10`/`@mod`/`@rem`/`@divFloor`/`@divTrunc`/`@clz`/`@ctz`/`@popCount`/`@byteSwap`/`@bitReverse` 同样强制（第 146–149 轮逐族登记）；无映射者如 @pow（0.17 不存在）/@as/@intCast 依旧放行。
 // 只检 keywords 段值：aliases 段值（std/main 等库路径与入口名）属互操作面、不在本轮判据内。
 
 pub const EnglishWord = struct {
@@ -1088,6 +1087,70 @@ test "翻译 + 纯度门：三角/指数/对数内建方言词全覆盖（第 14
     try std.testing.expectEqual(@as(usize, 1), v2.items.len);
     try std.testing.expectEqualStrings("@log10", v2.items[0].word);
     try std.testing.expectEqualStrings("常用对数", v2.items[0].native);
+}
+
+test "翻译 + 纯度门：余除/位运算内建方言词全覆盖（第 149 轮·承 146/147 同机制、用户拍板全覆盖）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // 方言 → Zig：九个新内建方言词（向下取余/截断取余/向下除法/截断除法/前导零计数/尾随零计数/置位计数/字节序翻转/位逆序）各走对应内建。
+    // 此九个无同名 std 前缀别名，146 的裸形↔前缀劫持面不适用、只需证正向与声明名避让。
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    变量 甲 = 7;
+        \\    变量 乙 = 3;
+        \\    变量 戊 = 向下取余(甲, 乙);
+        \\    变量 己 = 截断取余(甲, 乙);
+        \\    变量 庚 = 向下除法(甲, 乙);
+        \\    变量 辛 = 截断除法(甲, 乙);
+        \\    变量 壬 = 前导零计数(乙);
+        \\    变量 癸 = 尾随零计数(乙);
+        \\    变量 子 = 置位计数(乙);
+        \\    变量 丑 = 字节序翻转(乙);
+        \\    变量 寅 = 位逆序(乙);
+        \\}
+        \\
+    ;
+    const expect =
+        \\pub fn main() !void {
+        \\    var z_1 = 7;
+        \\    var z_2 = 3;
+        \\    var z_3 = @mod(z_1, z_2);
+        \\    var z_4 = @rem(z_1, z_2);
+        \\    var z_5 = @divFloor(z_1, z_2);
+        \\    var z_6 = @divTrunc(z_1, z_2);
+        \\    var z_7 = @clz(z_2);
+        \\    var z_8 = @ctz(z_2);
+        \\    var z_9 = @popCount(z_2);
+        \\    var z_10 = @byteSwap(z_2);
+        \\    var z_11 = @bitReverse(z_2);
+        \\}
+        \\
+    ;
+    const res = try translate(gpa, src, lang, &table);
+    try std.testing.expectEqualStrings(expect, res.zig_str);
+
+    // 反向：英文 `@mod`/`@popCount` 混入方言源被纯度门坐实、携母语建议形（写明口径：@mod→向下取余）。
+    var v1 = try findEnglishWordForms(gpa, lang, "变量 结果 = @mod(7, 3);\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v1.items.len);
+    try std.testing.expectEqualStrings("@mod", v1.items[0].word);
+    try std.testing.expectEqualStrings("向下取余", v1.items[0].native);
+    var v2 = try findEnglishWordForms(gpa, lang, "变量 结果 = @popCount(7);\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 1), v2.items.len);
+    try std.testing.expectEqualStrings("@popCount", v2.items[0].word);
+    try std.testing.expectEqualStrings("置位计数", v2.items[0].native);
+    // 未登记内建 `@fabs`（坐实不存在、绝对值统一走 @abs）混入仍放行 0 项——锁「强制面只盖真登记内建」。
+    var v3 = try findEnglishWordForms(gpa, lang, "变量 结果 = @fabs(1.0);\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v3.items.len);
 }
 
 test "纯母语强制：母语全等豁免位不误拦（串/注释/数字/C ABI/@\"...\"/点后/声明名位）" {
