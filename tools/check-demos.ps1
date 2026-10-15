@@ -1110,6 +1110,17 @@ if (-not $extSrc.Contains("onDidSaveTextDocument")) { Write-Output "  [FAIL] cli
 if (-not $extSrc.Contains("textDocument/didSave")) { Write-Output "  [FAIL] client: didSave notification never sent"; $lcOk = $false }
 $saveLine = ($extSrc -split "`n" | Where-Object { $_ -match 'textDocument/didSave' -and $_ -match 'send' }) -join "`n"
 if (-not ($saveLine.Length -gt 0) -or ($saveLine -match 'text:')) { Write-Output "  [FAIL] client: didSave must be uri-only (includeText:false contract broken by inline text)"; $lcOk = $false }
+# client semanticTokens rendering wiring (round 162): the client must register a
+# DocumentSemanticTokensProvider, declare the full semanticTokens capability, request
+# textDocument/semanticTokens/full, and hand the server's relative 5-tuples straight to
+# vscode.SemanticTokens. The legend is a NEW client<->server shared truth source: its order
+# must match the server initialize legend verbatim (each data tuple's type index points into
+# it), so it is pinned here -- a reorder silently mis-colors and this assert goes red.
+if (-not $extSrc.Contains("registerDocumentSemanticTokensProvider")) { Write-Output "  [FAIL] client: DocumentSemanticTokensProvider not registered (server semantic tokens never painted)"; $lcOk = $false }
+if (-not $extSrc.Contains("textDocument/semanticTokens/full")) { Write-Output "  [FAIL] client: textDocument/semanticTokens/full request never sent"; $lcOk = $false }
+if (-not $extSrc.Contains("requests: { full: true }")) { Write-Output "  [FAIL] client: full semanticTokens capability not declared"; $lcOk = $false }
+if (-not ($extSrc.Contains("new vscode.SemanticTokensLegend(") -and $extSrc.Contains("new vscode.SemanticTokens("))) { Write-Output "  [FAIL] client: SemanticTokens legend/result construction missing (provider cannot build a token set)"; $lcOk = $false }
+if (-not $extSrc.Contains("'keyword', 'type', 'function', 'variable', 'string', 'comment', 'number'")) { Write-Output "  [FAIL] client: semantic token legend order drifted from the server legend (data type index would mis-color)"; $lcOk = $false }
 $frs = Get-Content -Raw (Join-Path $extDir "client_frames.js") -Encoding UTF8
 if (-not $frs.Contains("10 * 1024 * 1024")) { Write-Output "  [FAIL] client: framing cap no longer spelled 10 * 1024 * 1024 (server max_frame_len drift risk)"; $lcOk = $false }
 if (-not $frs.Contains("toLowerCase")) { Write-Output "  [FAIL] client: header name match lost case-insensitivity (server parses case-insensitive)"; $lcOk = $false }
@@ -1171,7 +1182,7 @@ if (-not $node) {
     & node --check (Join-Path $extDir "extension.js") 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "  [FAIL] client: extension.js does not parse under node --check"; $lcOk = $false }
 }
-if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit)" }
+if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit), client semanticTokens rendering (provider registered, full capability, /full request, legend order pinned to server)" }
 else { $fail = $fail + 1 }
 
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }

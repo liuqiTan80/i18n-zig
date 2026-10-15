@@ -8,6 +8,15 @@
 // editor save, which drives the round-159 server-side on-save semantic
 // diagnostics end-to-end (previously reachable only via the declarative
 // task/problemMatcher).
+// Round 162: the client registers a DocumentSemanticTokensProvider and declares
+// the semanticTokens capability, so the round-161 server's semantic-token stream
+// for dialect vocabulary actually paints in-editor. The server returns the LSP
+// relative 5-tuples directly, so we hand them straight to vscode.SemanticTokens;
+// the client legend order must match the server legend verbatim (the type index
+// in each tuple points into it -- a reorder silently mis-colors). Highlighting
+// stays additive over the declarative tmLanguage base. Rendering lives only in
+// the extension host (require('vscode')), so it is not node-behavior testable --
+// pinned by text-contract asserts in the check-demos client guard.
 'use strict';
 
 const vscode = require('vscode');
@@ -16,6 +25,12 @@ const { encodeFrame, FrameDecoder } = require('./client_frames.js');
 
 const LANGUAGE_ID = 'zig-dialect'; // must equal contributes.languages[0].id (guard-pinned)
 const OUTPUT_CHANNEL = 'zzc lsp';
+
+// Round 162: semantic-token legend. Order/type names must match the round-161
+// server initialize legend verbatim -- the `type` index in each data 5-tuple
+// points into this array, so any reorder silently mis-colors (guard-pinned).
+const SEMANTIC_TOKEN_TYPES = ['keyword', 'type', 'function', 'variable', 'string', 'comment', 'number'];
+const SEMANTIC_TOKEN_MODIFIERS = [];
 
 let child = null;
 let decoder = null;
@@ -158,6 +173,13 @@ function activate(context) {
       textDocument: {
         synchronization: { didSave: true }, // round 160: server declares save{includeText:false}; we drive it on save
         hover: { contentFormat: ['markdown', 'plaintext'] },
+        // round 162: declare full semantic-tokens consumption over the shared legend.
+        semanticTokens: {
+          requests: { full: true },
+          tokenTypes: SEMANTIC_TOKEN_TYPES,
+          tokenModifiers: SEMANTIC_TOKEN_MODIFIERS,
+          formats: 'relative',
+        },
       },
       window: {},
     },
@@ -190,6 +212,22 @@ function activate(context) {
         return new vscode.Hover(new vscode.MarkdownString(res.contents.value || String(res.contents)));
       },
     }),
+    // round 162: semantic tokens -- request the server's full stream and hand the
+    // relative 5-tuples straight to vscode.SemanticTokens (server data is already
+    // [deltaLine, deltaStart, length, type, modifiers] over the shared legend).
+    vscode.languages.registerDocumentSemanticTokensProvider(
+      { language: LANGUAGE_ID },
+      {
+        provideDocumentSemanticTokens: async (doc) => {
+          if (!ready) return new vscode.SemanticTokens([], null);
+          const res = await request('textDocument/semanticTokens/full', {
+            textDocument: { uri: doc.uri.toString() },
+          });
+          return new vscode.SemanticTokens((res && res.data) ? res.data : [], null);
+        },
+      },
+      new vscode.SemanticTokensLegend(SEMANTIC_TOKEN_TYPES, SEMANTIC_TOKEN_MODIFIERS),
+    ),
   );
 }
 

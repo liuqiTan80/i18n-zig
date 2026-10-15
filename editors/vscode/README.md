@@ -16,7 +16,7 @@
   收发帧，把 publishDiagnostics 落到 Problems 面板、把悬停接到 hover provider，stderr 转「zzc lsp」输出面板。
   补全与高亮仍保持声明式（不注册 completion provider）；高亮仍以声明式 tmLanguage（静态 ASCII 模式）为基底，
   第 161 轮服务端另开 `semanticTokens/full` **语义 token 供给**面（补方言母语词汇、与 tmLanguage 叠加），
-  客户端渲染留 162；语义级编译诊断的**服务端 on-save 供给**已于第 159 轮接入
+  客户端渲染已于第 162 轮接线（`DocumentSemanticTokensProvider`，见下条）；语义级编译诊断的**服务端 on-save 供给**已于第 159 轮接入
   （见下条），**客户端 `didSave` 端到端触发已于第 160 轮接线**（见下下条）——编辑器内保存即触发服务端语义诊断
 - **语义级编译诊断接入 LSP·服务端 on-save**（第 159 轮）：`zzc lsp` 现声明 `textDocumentSync` 的 `save` 能力，
   并在 `didSave` 时按需 spawn 一个短命 `zzc check --machine` 子进程（自带干净 arena、退出即回收，不触服务端长活
@@ -31,7 +31,8 @@
   （能力翻转、保存回调、uri-only didSave 发出各一面，反证撤任一行即转红）
 - **客户端提示全母语化**（第 158 轮）：扩展自身面向用户的文案——启动失败弹窗、输出面板帧错误/就绪两行、
   `client_frames.js` 帧格式非法 throw、`package.json` 的 `zzc.lspPath` 设置项描述——均为中文（标识符 `zzc`/`PATH`/`Content-Length` 保留原文）；母语 UI 契约由 `check-demos.ps1` 客户端节守卫逐串钉住
-- **语义 token 高亮供给·服务端**（第 161 轮）：`zzc lsp` 按 LSP 标准实现 `textDocument/semanticTokens/full`，把「方言母语词汇」（tmLanguage 静态 ASCII 模式看不见的那部分）的语义 token 流供给任意 LSP 客户端。图例 `keyword/type/function/variable/string/comment/number`（index 即类型）、`full` 供给；发 token 规则复用真相源（`lexer.scan` 切词 + `snippets.classify`/`lang.keywords` 分组，不硬编码词表、语言无关）：注释→comment、串/字符/多行/符号→string、数字字面量→number、命中 keywords 的母语词按词类→keyword/type/function/variable；**跳过策略**——未命中 keywords 的母语标识符/标准库别名段/非数字 ASCII 词/punct 一律不发，保 tmLanguage 既有着色不被降级。语义 token 仅「被请求才返回」，VS Code 扩展未注册 provider 前不应用（无 tmLanguage 降级风险），非 VSCode 客户端（neovim/emacs）即时受益。服务器侧由 `check-demos.ps1`「lsp handshake guard」节以裸 JSON-RPC e2e 帧钉住（能力钉 + `data` 元组断言）；**客户端渲染需 `vscode.DocumentSemanticTokensProvider`/`SemanticTokensBuilder`（属 `require('vscode')` 不可进 node 行为测），留第 162 轮**
+- **语义 token 高亮供给·服务端**（第 161 轮）：`zzc lsp` 按 LSP 标准实现 `textDocument/semanticTokens/full`，把「方言母语词汇」（tmLanguage 静态 ASCII 模式看不见的那部分）的语义 token 流供给任意 LSP 客户端。图例 `keyword/type/function/variable/string/comment/number`（index 即类型）、`full` 供给；发 token 规则复用真相源（`lexer.scan` 切词 + `snippets.classify`/`lang.keywords` 分组，不硬编码词表、语言无关）：注释→comment、串/字符/多行/符号→string、数字字面量→number、命中 keywords 的母语词按词类→keyword/type/function/variable；**跳过策略**——未命中 keywords 的母语标识符/标准库别名段/非数字 ASCII 词/punct 一律不发，保 tmLanguage 既有着色不被降级。语义 token 仅「被请求才返回」，VS Code 扩展未注册 provider 前不应用（无 tmLanguage 降级风险），非 VSCode 客户端（neovim/emacs）即时受益。服务器侧由 `check-demos.ps1`「lsp handshake guard」节以裸 JSON-RPC e2e 帧钉住（能力钉 + `data` 元组断言）；客户端渲染已于第 162 轮接线（见下条）
+- **语义 token 高亮客户端渲染**（第 162 轮）：`extension.js` 声明 `semanticTokens`（`requests:{full:true}`、`formats:'relative'`）能力并注册 `DocumentSemanticTokensProvider`——`provideDocumentSemanticTokens` 发 `textDocument/semanticTokens/full` 请求、把服务端已产的相对 5 元组直接投 `new vscode.SemanticTokens(res.data)`（无需客户端重编码）。**图例与服务端同序为共享真相源承重**：`SEMANTIC_TOKEN_TYPES = keyword/type/function/variable/string/comment/number` 须与服务端 initialize 图例逐字对齐（每个 token 的 type 索引即指向此序、错序即静默错色），由客户端节以文本契约钉住；高亮仅在声明式 tmLanguage 基底上**叠加**、不替换。provider 无 delta/无 refresh，依赖 VS Code 文档变更后自动重取全量（MVP）。渲染属 `require('vscode')` 不可进 node 行为测，故本轮以文本契约守卫（provider 注册/full 能力//full 请求/SemanticTokens 构造/图例同序各钉一面）
 
 ## LSP 客户端配置
 
@@ -65,5 +66,6 @@ zig build check-editor-snippets  # CI 守卫：校验 snippets 与包同步
 - ~~待办：语义级编译诊断接入 LSP~~ 服务端 on-save 已于第 159 轮落地；客户端翻 `didSave:true`、保存端到端触发
   已于第 160 轮落地（保存只发 uri、服务端按需 spawn `zzc check --machine` 发母语语义诊断，`check-demos` 客户端节文本契约钉住）
 - 语义 token 高亮（`semanticTokens/full`）：服务端供给已于第 161 轮落地（方言母语词汇语义 token 流、复用 lexer/classify/keywords、
-  任意 LSP 客户端可用，`check-demos` 握手节裸 JSON-RPC e2e 钉住）；客户端渲染（`DocumentSemanticTokensProvider`/`SemanticTokensBuilder`）留第 162 轮
+  任意 LSP 客户端可用，`check-demos` 握手节裸 JSON-RPC e2e 钉住）；客户端渲染已于第 162 轮接线（`extension.js` 注册 `DocumentSemanticTokensProvider`、
+  data 相对 5 元组直投 `vscode.SemanticTokens`、图例与服务端同序为共享真相源承重，`check-demos` 客户端节文本契约钉住）——编辑器内方言母语词汇真正上色
 - 多语言包支持（切换 scopeName 对应方言）
