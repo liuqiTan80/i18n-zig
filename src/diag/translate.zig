@@ -2571,6 +2571,162 @@ test "matchDiag 真消息命中矩阵（D50 方法论·探针实捕真形样本�
     }
 }
 
+// ---------------------------------------------------------------------------
+// R11（第 164 轮）：真形快照矩阵数据 + 豁免表（文件级、供快照测与覆盖率测共用）。
+// 承 D50「先登矩阵再提交」规约的机械化——把「每条 [diagnostics] 都须有真形样本命中并归属、
+// 否则显式豁免」从人工纪律升为常驻测：新增/改包条目若未同步登记样本或豁免即红（防回译词条
+// 静默不可达的译链回归面）。真形来源（不臆造）：本机真 zig 实跑（_probe/diag/raw_*.txt）、既有
+// 回译测与 D50/D41 历史探针实录；基线行以「包内登记的匹配短语」为真形——该短语本身即从真 zig
+// 报错逐字摘取的子串（见 中文.txt [diagnostics] 段头注）。归属判据用「身份」：matchDiag(真形) 命中
+// 条目的 message/tip 须逐字等于「按该 pattern 在表里查得的条目」，被更靠前条目劫持则 message 立即
+// 不等而红（表序不变量由下方全表子串包含序守卫兜住）；再以 msg_key/tip_key 短子串钉住关键译文与
+// 教学指引不失踪。方言/工具链面不可造纯英文真形者入豁免表并附因——其升版措辞漂移由
+// cli.parseZigVersion 版本检测告警作轻量早警替代，全量错形 e2e 回放登记为在册边界（见台账）。
+// ---------------------------------------------------------------------------
+const R11Snap = struct { eng: []const u8, pattern: []const u8, msg_key: []const u8, tip_key: []const u8 };
+const r11_snaps = [_]R11Snap{
+    // 表序前段 1–8。
+    .{ .eng = "cannot assign to constant", .pattern = "cannot assign to constant", .msg_key = "重新赋值", .tip_key = "变量" },
+    .{ .eng = "use of undeclared identifier", .pattern = "use of undeclared identifier", .msg_key = "未声明", .tip_key = "拼写" },
+    .{ .eng = "expected type", .pattern = "expected type", .msg_key = "期望不符", .tip_key = "@as" },
+    .{ .eng = "incompatible types", .pattern = "incompatible types", .msg_key = "不兼容", .tip_key = "不一致" },
+    .{ .eng = "return of non-void function missing", .pattern = "return of non-void function missing", .msg_key = "返回语句", .tip_key = "路径" },
+    .{ .eng = "unknown identifier", .pattern = "unknown identifier", .msg_key = "标识符", .tip_key = "关键字" },
+    .{ .eng = "is not marked 'pub'", .pattern = "is not marked 'pub'", .msg_key = "未标记", .tip_key = "公开" },
+    .{ .eng = "expected return type of main", .pattern = "expected return type of main", .msg_key = "返回类型", .tip_key = "可执行入口" },
+    // 14–54（9–13 系工具链内部/越界不可造形者，见豁免表）。
+    .{ .eng = "file imported", .pattern = "file imported", .msg_key = "导入语句", .tip_key = "核对" },
+    .{ .eng = "no module named", .pattern = "no module named", .msg_key = "模块", .tip_key = ".zz" },
+    .{ .eng = "dependency loop", .pattern = "dependency loop", .msg_key = "循环依赖", .tip_key = "环" },
+    // 富真形（本机实跑/历史探针）：以完整报形钉归属、防交叉共现劫持复发。
+    .{ .eng = "type 'u32' has no member named 'len'", .pattern = "has no member", .msg_key = "成员不存在", .tip_key = "标量" },
+    .{ .eng = "no field named 'main' in struct 'probe.main.T'", .pattern = "no field named", .msg_key = "字段不存在", .tip_key = "字段" },
+    .{ .eng = "no field or member function named", .pattern = "no field or member function named", .msg_key = "成员函数", .tip_key = "分配器" },
+    .{ .eng = "invalid builtin function: '@importt'", .pattern = "invalid builtin function", .msg_key = "内建函数", .tip_key = "原名" },
+    .{ .eng = "integer cast failed", .pattern = "integer cast failed", .msg_key = "表示范围", .tip_key = "@intCast" },
+    .{ .eng = "index out of bounds", .pattern = "index out of bounds", .msg_key = "数组长度", .tip_key = "边界检查" },
+    .{ .eng = "expected statement", .pattern = "expected statement", .msg_key = "未闭合", .tip_key = "花括号" },
+    .{ .eng = "after statement", .pattern = "after statement", .msg_key = "结束符", .tip_key = "漏了" },
+    .{ .eng = "expected ',' after argument", .pattern = "expected ',' after argument", .msg_key = "逗号", .tip_key = "补上逗号" },
+    .{ .eng = "expression must be handled", .pattern = "expression must be handled", .msg_key = "没有被处理", .tip_key = "兜底" },
+    .{ .eng = "dereference of null pointer", .pattern = "dereference of null pointer", .msg_key = "空可选值", .tip_key = "判空" },
+    .{ .eng = "redeclaration of", .pattern = "redeclaration of", .msg_key = "重复声明", .tip_key = "唯一" },
+    .{ .eng = "duplicate struct member name", .pattern = "duplicate struct member name", .msg_key = "文件结构", .tip_key = "重命名" },
+    .{ .eng = "duplicate name here", .pattern = "duplicate name here", .msg_key = "名称重复", .tip_key = "冲突" },
+    .{ .eng = "import loop", .pattern = "import loop", .msg_key = "导入环", .tip_key = "单向" },
+    .{ .eng = "unused local variable", .pattern = "unused local variable", .msg_key = "未使用", .tip_key = "删除" },
+    .{ .eng = "unused function parameter", .pattern = "unused function parameter", .msg_key = "未使用", .tip_key = "下划线" },
+    .{ .eng = "unused local constant", .pattern = "unused local constant", .msg_key = "从未使用", .tip_key = "绑定" },
+    .{ .eng = "unreachable code", .pattern = "unreachable code", .msg_key = "不可达", .tip_key = "分支" },
+    .{ .eng = "control flow is diverted", .pattern = "control flow is diverted", .msg_key = "控制流", .tip_key = "不可达代码" },
+    .{ .eng = "break expression outside loop", .pattern = "break expression outside loop", .msg_key = "循环内部", .tip_key = "循环体" },
+    .{ .eng = "loop label", .pattern = "loop label", .msg_key = "循环标签", .tip_key = "标签" },
+    .{ .eng = "block label", .pattern = "block label", .msg_key = "块标签", .tip_key = "标签" },
+    .{ .eng = "continue expression outside loop", .pattern = "continue expression outside loop", .msg_key = "循环内部", .tip_key = "循环体" },
+    .{ .eng = "implicitly returns", .pattern = "implicitly returns", .msg_key = "返回值", .tip_key = "非空返回类型" },
+    .{ .eng = "reaches end of body", .pattern = "reaches end of body", .msg_key = "函数体", .tip_key = "控制流" },
+    .{ .eng = "previous declaration", .pattern = "previous declaration", .msg_key = "同名声明", .tip_key = "冲突" },
+    .{ .eng = "local variable is never mutated", .pattern = "local variable is never mutated", .msg_key = "从未被修改", .tip_key = "只读绑定" },
+    .{ .eng = "consider using 'const'", .pattern = "consider using 'const'", .msg_key = "不可变常量", .tip_key = "从未重新赋值" },
+    .{ .eng = "consider using 'try'", .pattern = "consider using 'try'", .msg_key = "错误或可选值", .tip_key = "尝试" },
+    .{ .eng = "error union is discarded", .pattern = "error union is discarded", .msg_key = "被丢弃", .tip_key = "错误联合" },
+    .{ .eng = "to declare a container", .pattern = "to declare a container", .msg_key = "容器", .tip_key = "容器类型" },
+    .{ .eng = "cannot convert error union", .pattern = "cannot convert error union", .msg_key = "错误联合", .tip_key = "捕获" },
+    .{ .eng = "function cannot return an error", .pattern = "function cannot return an error", .msg_key = "不能返回错误", .tip_key = "返回类型" },
+    .{ .eng = "struct declared here", .pattern = "struct declared here", .msg_key = "结构在此处", .tip_key = "定位" },
+    .{ .eng = "function declared here", .pattern = "function declared here", .msg_key = "函数在此处", .tip_key = "定位" },
+    .{ .eng = "switch must handle", .pattern = "switch must handle", .msg_key = "匹配语句", .tip_key = "兜底" },
+    .{ .eng = "division by zero", .pattern = "division by zero", .msg_key = "除数为零", .tip_key = "除数" },
+    // 63/65/66（55–62、64 系不可独立造形/伴随行，见豁免表）。
+    .{ .eng = "is redundant", .pattern = "is redundant", .msg_key = "冗余", .tip_key = "隐含" },
+    .{ .eng = "consider omitting 'try'", .pattern = "consider omitting 'try'", .msg_key = "省略", .tip_key = "去掉" },
+    .{ .eng = "declared here", .pattern = "declared here", .msg_key = "定义在此处", .tip_key = "定位" },
+};
+
+const R11Waiver = struct { pattern: []const u8, why: []const u8 };
+const r11_waivers = [_]R11Waiver{
+    .{ .pattern = "outside module path", .why = "导入越界：需把入口指向子目录令模块根上溯才触发、默认从工程根运行不产此英文串——方言面不可造纯英文真形" },
+    .{ .pattern = "unable to load \"", .why = "导入文件加载失败：措辞含动态文件名、真形不稳定（高频子集由 check-demos 广谱语料 e2e 覆盖）" },
+    .{ .pattern = "failed opening \"", .why = "嵌入资源加载失败：含动态路径、真形不稳定" },
+    .{ .pattern = "embed of file outside package path", .why = "嵌入越界：zzc 已镜像 src 内资产、越界少触发，方言面难造稳定纯英文真形" },
+    .{ .pattern = "@import operand", .why = "导入参数非字面量：需特定 AST 形、本机方言面不可造纯英文真形" },
+    .{ .pattern = "non-matching for loop lengths", .why = "for 并列序列长度不符：措辞含动态数字、真形不稳定" },
+    .{ .pattern = "unable to resolve comptime value", .why = "comptime 求值失败：多依赖具体表达式上下文、真形不稳" },
+    .{ .pattern = "types must be comptime-known", .why = "类型须计期已知：工具链类型系统内部措辞、方言面少触发" },
+    .{ .pattern = "cannot load comptime-only", .why = "加载仅限编译期类型：依赖特定 std 措辞" },
+    .{ .pattern = "modify this variable", .why = "运行时改值需定宽类型：伴随主报错出现、不独立成行" },
+    .{ .pattern = "is runtime-known", .why = "指针类型运行时可知：上一条伴随说明行、不独立出现" },
+    .{ .pattern = "method invocation only supports", .why = "方法调用仅一重解引用：需指针的指针等特定形、本机方言面少触发" },
+    .{ .pattern = "to dereference pointer", .why = "解引用提示：上一条的续行提示、不独立出现" },
+    .{ .pattern = "cast discards const qualifier", .why = "丢弃常量限定：需特定 const 指针转换形、本机方言面少触发" },
+};
+
+test "matchDiag 真形快照矩阵（R11·全条归属钉，第 164 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    const items = lang.diagnostics.items;
+    for (r11_snaps) |s| {
+        // 表里须存在该 pattern 条目（防删条目后快照空转）。
+        var found: ?Pack.Entry = null;
+        for (items) |e| {
+            if (std.mem.eql(u8, e.pattern, s.pattern)) {
+                found = e;
+                break;
+            }
+        }
+        if (found == null) {
+            std.debug.print("[R11 快照] 表内缺 pattern '{s}'（条目被删/拼写漂移？）\n", .{s.pattern});
+            return error.TestUnexpectedResult;
+        }
+        const want = found.?;
+        const m = matchDiag(lang, s.eng);
+        try std.testing.expect(m.matched);
+        // 身份钉：命中条目逐字即目标条目——被更靠前条目劫持/改表序使子串包含复发即此不等而红。
+        try std.testing.expectEqualStrings(want.message, m.message);
+        try std.testing.expectEqualStrings(want.tip, m.tip);
+        // 关键译文/教学指引子串钉（内容失踪/被删即红）。
+        try hasSub(m.message, s.msg_key);
+        try hasSub(m.tip, s.tip_key);
+    }
+}
+
+test "快照矩阵覆盖率守卫（R11·全条 pattern 须有样本或豁免，第 164 轮）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    const items = lang.diagnostics.items;
+    var covered: usize = 0;
+    for (items) |e| {
+        var hit = false;
+        for (r11_snaps) |s| {
+            if (std.mem.eql(u8, s.pattern, e.pattern)) {
+                hit = true;
+                break;
+            }
+        }
+        if (!hit) for (r11_waivers) |w| {
+            if (std.mem.eql(u8, w.pattern, e.pattern)) {
+                hit = true;
+                break;
+            }
+        };
+        if (hit) covered += 1 else {
+            std.debug.print("[R11 覆盖率缺口] pattern '{s}' 既无快照样本亦无豁免（新增条目须先登矩阵或豁免）\n", .{e.pattern});
+            return error.TestUnexpectedResult;
+        }
+    }
+    // 基数锚防静默空转（103 轮教训）：样本/豁免下限；且覆盖计数须恰等于全表条目数。
+    try std.testing.expect(r11_snaps.len >= 45);
+    try std.testing.expect(r11_waivers.len >= 10);
+    try std.testing.expectEqual(items.len, covered);
+    std.debug.print("[R11 覆盖率] 条目={d} 覆盖={d} 样本={d} 豁免={d}\n", .{ items.len, covered, r11_snaps.len, r11_waivers.len });
+}
+
 // 全表序守卫（D41 同族预防，承 92 轮 localizeRunner 方法论）：
 // 若 pattern A 是 pattern B 的子串（A⊆B），则任何匹配 B 的消息也匹配 A；
 // A 排在 B 前会劫持 B 的专属匹配——须保证「长（更具体）在前、短（更泛）在后」。

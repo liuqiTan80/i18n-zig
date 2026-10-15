@@ -580,6 +580,87 @@ test "parseFingerprintFromZone：名字匹配才抽取，改名/缺字段/无十
     try std.testing.expectEqualStrings("0xabcdef0012", trunc.?);
 }
 
+// ---------------------------------------------------------------------------
+// R11（第 164 轮）：Zig 版本漂移早警。
+// 诊断措辞表（[diagnostics]）系按标定工具链版本采集：zig 升版后错误串措辞可能漂移、
+// 使回译词条静默不可达（台账 R11 的两「未做」缺口之一）。此处置一处轻量早警面（纯函数、入测试图）：
+// 解析 `zig version` 取前两级、与内置包标定基线比对，非标定即产母语告警。真实回放全部错形语料
+// 的 e2e 面工程量大、登记为在册边界（见台账/CHANGELOG 第 164 轮）；本告警即其轻量替代早警。
+// 外部包 per-pack 基线登记为后续边界（当前仅内置包有标定值）。
+// ---------------------------------------------------------------------------
+
+/// 诊断措辞表标定的工具链基线（内置中文包真相源；`zigDriftNote` 据此判漂移）。
+pub const diag_baseline_zig = .{ .major = 0, .minor = 17 };
+
+/// 解析 `zig version` 文本（`M.m.p` / `M.m.p-dev.N+hash` 等形）取前两级 major/minor；
+/// 垃圾/缺第二段/非数字段返回 null（调用方据此静默、不误报）。按 `.` 分段后取前两段 parseInt，
+/// 第三段（patch/dev/hash 后缀）不参与判定，故 `0.18.1-dev.421+afb31` 得 { 0, 18 }。
+pub fn parseZigVersion(text: []const u8) ?struct { major: u32, minor: u32 } {
+    const t = std.mem.trim(u8, text, " \t\r\n");
+    if (t.len == 0) return null;
+    var it = std.mem.splitScalar(u8, t, '.');
+    const major_s = it.next() orelse return null;
+    const minor_s = it.next() orelse return null;
+    const major = std.fmt.parseInt(u32, major_s, 10) catch return null;
+    const minor = std.fmt.parseInt(u32, minor_s, 10) catch return null;
+    return .{ .major = major, .minor = minor };
+}
+
+/// 非基线时把母语告警写入调用方给的 `buf` 并返回之；基线内返回 null。
+/// `buf` 不足以容纳时也返回 null（宁可不提醒也不 panic——告警属辅面、不得反噬主流程）。
+pub fn zigDriftNote(major: u32, minor: u32, buf: []u8) ?[]const u8 {
+    if (major == diag_baseline_zig.major and minor == diag_baseline_zig.minor) return null;
+    return std.fmt.bufPrint(buf, "zzc: 注意：本机 zig 为 {d}.{d}.x，与报错回译标定基线 {d}.{d} 不同——回译词条可能不完整，欢迎反馈。", .{
+        major, minor, diag_baseline_zig.major, diag_baseline_zig.minor,
+    }) catch null;
+}
+
+test "parseZigVersion：取前两级、dev/hash 后缀容忍、垃圾输入 null（第 164 轮 R11）" {
+    const v1 = parseZigVersion("0.17.0\n");
+    try std.testing.expect(v1 != null);
+    try std.testing.expectEqual(@as(u32, 0), v1.?.major);
+    try std.testing.expectEqual(@as(u32, 17), v1.?.minor);
+
+    const v2 = parseZigVersion("0.18.1-dev.421+afb312\n");
+    try std.testing.expect(v2 != null);
+    try std.testing.expectEqual(@as(u32, 0), v2.?.major);
+    try std.testing.expectEqual(@as(u32, 18), v2.?.minor);
+
+    // 大版本跨度亦取前两级。
+    const v3 = parseZigVersion("1.0.0");
+    try std.testing.expect(v3 != null);
+    try std.testing.expectEqual(@as(u32, 1), v3.?.major);
+    try std.testing.expectEqual(@as(u32, 0), v3.?.minor);
+
+    // 垃圾/缺第二段/非数字段/空 → null（不误报）。
+    try std.testing.expect(parseZigVersion("garbage") == null);
+    try std.testing.expect(parseZigVersion("0") == null);
+    try std.testing.expect(parseZigVersion("") == null);
+    try std.testing.expect(parseZigVersion("x.y.z") == null);
+    try std.testing.expect(parseZigVersion("zig version 0.17") == null); // 非纯版本起头 → 首段非数字
+}
+
+test "zigDriftNote：基线内 null、非基线产母语告警、buf 过小静默（第 164 轮 R11）" {
+    var buf: [256]u8 = undefined;
+    // 基线 0.17 → null（本机恒此形、既有 stdout 契约不破）。
+    try std.testing.expect(zigDriftNote(0, 17, &buf) == null);
+    // 0.18 / 0.16 / 1.0 → 有告警串，且含母语关键指引。
+    const drifts = [_]struct { major: u32, minor: u32 }{
+        .{ .major = 0, .minor = 18 },
+        .{ .major = 0, .minor = 16 },
+        .{ .major = 1, .minor = 0 },
+    };
+    for (drifts) |v| {
+        const note = zigDriftNote(v.major, v.minor, &buf);
+        try std.testing.expect(note != null);
+        try std.testing.expect(std.mem.indexOf(u8, note.?, "回译") != null);
+        try std.testing.expect(std.mem.indexOf(u8, note.?, "标定基线") != null);
+    }
+    // buf 过小 → null（宁缺毋滥、不 panic）。
+    var tiny: [1]u8 = undefined;
+    try std.testing.expect(zigDriftNote(0, 99, &tiny) == null);
+}
+
 /// 判断一段**生成 Zig 源码**是否含顶层入口函数 `main`（无论是否公开）。
 /// 只认同同行首（无缩进）且紧跟 `(` 的 `pub fn main(` 或 `fn main(`——要求行首无缩进（入口必为顶层）、
 /// 紧跟 `(` 以免误配 `fn main_helper(` 等含 main 前缀的非入口函数。非公开的 `fn main(` 也算入口：

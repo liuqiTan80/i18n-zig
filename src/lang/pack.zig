@@ -816,6 +816,21 @@ test "parseInto 对抗/畸形段头与诊断元数不足：一律 InvalidLangPac
     try std.testing.expectEqualStrings("a#b//c", okp.keywords.get("常数").?);
 }
 
+test "R2 diagnostics 段数契约：4+ 竖线不新增条目、多余段原样折入 tip（定义行为钉·非静默丢弃）" {
+    // 核验面（第 164 轮守则核验）：parseInto 对 diagnostics 行只切前两个 `|`（p1/p2），
+    // tip = rest[p2+1..] 把第三段之后的全部竖线原样折入 tip。既有测仅钉「元数不足」（<3 段拒）
+    // 与「空 tip 合法」，4+ 段的处置零直钉——若未来改成 split 全段并弃第 4+ 段（或整行拒），
+    // 手编包多竖线 tip 会被静默降级、无回归信号。本测钉住当前定义行为：条目保留、pattern/message
+    // 正确、tip 原样含其余竖线。非静默丢弃整条目，故不占缺陷号（守则面 R2）。
+    const gpa = std.testing.allocator;
+    var p = try parse(gpa, "$code = te\n[diagnostics]\nd = 模式|译文|提示一|提示二|提示三\n");
+    defer p.deinit();
+    try std.testing.expectEqual(@as(usize, 1), p.diagnostics.items.len);
+    try std.testing.expectEqualStrings("模式", p.diagnostics.items[0].pattern);
+    try std.testing.expectEqualStrings("译文", p.diagnostics.items[0].message);
+    try std.testing.expectEqualStrings("提示一|提示二|提示三", p.diagnostics.items[0].tip);
+}
+
 test "同层重复键冲突源头拒（D36 mangle 撞号同族）：同一字节流内同键不同值即 InvalidLangPack；同值幂等放行；跨层覆盖照旧合法（R11）" {
     // 缺陷面：keywords/aliases 段 L187 `map.put` 对同键后行静默覆盖——手编包/插件包写错两行
     // 矛盾映射（`常数 = const` + `常数 = var`）时先行意图被无声丢弃、零诊断；diagnostics 同

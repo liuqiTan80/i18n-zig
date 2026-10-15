@@ -1133,6 +1133,23 @@ fn cmdLsp(lang: Pack) void {
 
 // ---------------------------------------------------------------- 入口
 
+/// R11（第 164 轮）：版本漂移早警。一次性 spawn `zig version`，解析成功且非标定基线时把母语
+/// 告警走 stdout（人读提示、非错误）。zig 缺失 / 退出非零 / 解析失败一律静默（不误报、不增失败
+/// 面——真实编译失败自有「无法启动 zig」母语提示兜底）。本机恒为标定基线 0.17 → 恒静默、
+/// 既有 stdout 契约（clean-check 无泄漏守卫）不受影响。只挂编译类四入口消费 [diagnostics] 措辞表的路径。
+fn maybeWarnZigDrift() void {
+    const res = std.process.run(gpa_, io_, .{
+        .argv = &.{ "zig", "version" },
+        .create_no_window = true,
+    }) catch return; // zig 不在 PATH：静默，交由后续真实编译给出母语提示
+    defer gpa_.free(res.stdout);
+    defer gpa_.free(res.stderr);
+    if (!res.term.success()) return;
+    const v = cli.parseZigVersion(res.stdout) orelse return;
+    var buf: [256]u8 = undefined;
+    if (cli.zigDriftNote(v.major, v.minor, &buf)) |note| printOut("{s}", .{note});
+}
+
 pub fn main(init: std.process.Init) !void {
     gpa_ = init.arena.allocator();
     io_ = init.io;
@@ -1289,6 +1306,14 @@ pub fn main(init: std.process.Init) !void {
     defer table.deinit();
     loadSymbols(&table) catch |e| bail(e); // 此线之前 bail_table 为 null：半解析表不落盘（D46）
     bail_table = &table; // D46：自此表已全量就位，任何失败 bail 前补位持久化
+
+    // R11（第 164 轮）：版本漂移早警只挂编译类四入口（check/build/run/test）——这些路径消费
+    // [diagnostics] 措辞表；init/lang/version/lsp/eject 不产 zig 编译回译、无需提醒。
+    if (std.mem.eql(u8, cmd, "check") or std.mem.eql(u8, cmd, "build") or
+        std.mem.eql(u8, cmd, "run") or std.mem.eql(u8, cmd, "test"))
+    {
+        maybeWarnZigDrift();
+    }
 
     if (std.mem.eql(u8, cmd, "check")) {
         cmdCheck(lang, &table, argv) catch |e| bail(e);
