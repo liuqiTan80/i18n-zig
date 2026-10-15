@@ -800,6 +800,19 @@ test "lsp.server：hover 点链别名整体取词（标准库.调试.打印 形�
     try testing.expect(std.mem.indexOf(u8, out.items[0], "std.debug.print") != null);
 }
 
+// 假语义供给器（第 166 轮单测）：char_len=0 与 severity 越界归一化臂验证。
+var fake_sem_boundary_marker: u8 = 0;
+var fake_sem_boundary_items = [_]SemanticItem{
+    .{ .line = 2, .character = 5, .char_len = 0, .severity = 99, .message = "boundary-zero-len" },
+    .{ .line = 0, .character = 1, .char_len = 3, .severity = 0, .message = "boundary-sev-zero" },
+};
+fn fakeBoundarySemanticProvider(ctx: *anyopaque, uri: []const u8, text: []const u8) []SemanticItem {
+    _ = ctx;
+    _ = uri;
+    _ = text;
+    return &fake_sem_boundary_items;
+}
+
 // 假语义供给器（第 159 轮单测）：返回一个静态借用项，验核内合并与保存门控。
 var fake_sem_marker: u8 = 0;
 var fake_sem_items = [_]SemanticItem{
@@ -1045,4 +1058,139 @@ test "lsp.server：semanticTokensData 跨行 delta_line/delta_start 复位（第
     try testing.expectEqual(@as(i64, 1), data[6].integer); // delta_start=本行绝对列
     try testing.expectEqual(@as(i64, 1), data[7].integer); // length
     try testing.expectEqual(@as(i64, 6), data[8].integer); // type=number
+}
+
+test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+    srv.semantic = .{ .ctx = @ptrCast(&fake_sem_boundary_marker), .call = &fakeBoundarySemanticProvider };
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    // didOpen 干净文档（无快路诊断）
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///b166.zz\",\"text\":\"常数 a = 1;\\n\"}}}", &out);
+    freeOut(gpa, &out);
+
+    // didSave 触发 publishSave + 假供给器
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"file:///b166.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+
+    // 反解 publishDiagnostics
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+    defer parsed.deinit();
+    const root = asObject(parsed.value).?;
+    const prm = objIn(root.get("params")).?;
+    const diags = switch (prm.get("diagnostics").?) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 2), diags.len);
+
+    // item 0: char_len=0 → w=1, severity=99 → clamp 1
+    const d0 = asObject(diags[0]).?;
+    const r0 = asObject(d0.get("range").?).?;
+    const s0 = asObject(r0.get("start").?).?;
+    const e0 = asObject(r0.get("end").?).?;
+    try testing.expectEqual(@as(i64, 2), intField(s0, "line").?);
+    try testing.expectEqual(@as(i64, 5), intField(s0, "character").?);
+    try testing.expectEqual(@as(i64, 1), intField(e0, "character").? - intField(s0, "character").?); // w=1
+    try testing.expectEqual(@as(i64, 1), intField(d0, "severity").?); // 99→1
+
+    // item 1: char_len=3, severity=0 → clamp 1
+    const d1 = asObject(diags[1]).?;
+    const r1 = asObject(d1.get("range").?).?;
+    const s1 = asObject(r1.get("start").?).?;
+    const e1 = asObject(r1.get("end").?).?;
+    try testing.expectEqual(@as(i64, 3), intField(e1, "character").? - intField(s1, "character").?); // w=3
+    try testing.expectEqual(@as(i64, 1), intField(d1, "severity").?); // 0→1
+
+    // 断言数： 10
+}
+
+test "lsp.server：handle 未 open 退/空数组退/重复 open 覆盖（第 166 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    // A: didChange 对未 open URI → 静默不发布
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///no.zz\"},\"contentChanges\":[{\"text\":\"a\"}]}}", &out);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
+
+    // B: didChange contentChanges=[] → 静默不发布
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///e166.zz\",\"text\":\"OK\"}}}", &out);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"file:///e166.zz\"},\"contentChanges\":[]}}", &out);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
+
+    // C: 同 URI 二次 didOpen 不同文本（第一次含全角违例、第二次干净）
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///dup.zz\",\"text\":\"常数 a = 1，\\n\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"diagnostics\":[]") == null); // 有违例
+    freeOut(gpa, &out);
+
+    // 第二次 open 同 URI、干净文本：覆盖后诊断空
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///dup.zz\",\"text\":\"常数 a = 1;\\n\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"diagnostics\":[]") != null); // 已覆盖无违例
+
+    // 断言数： 5
+}
+
+test "lsp.server：idJson 对字符串 id 特殊字符做 JSON 转义（第 166 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    // 字符串 id 含嵌入引号： JSON 原文 "id":"a\"b" → 解析后 .string 值为 a"b
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":\"a\\\"b\",\"method\":\"initialize\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+
+    // 应答必须是合法 JSON（若转义缺失则 id 含裸引号破坏结构）
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+    defer parsed.deinit();
+    const root = asObject(parsed.value).?;
+    const id_val = root.get("id").?;
+    try testing.expectEqualStrings("a\"b", switch (id_val) {
+        .string => |s| s,
+        else => return error.TestUnexpectedResult,
+    });
+
+    // 另加一例： id 含反斜杠
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":\"x\\\\y\",\"method\":\"initialize\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    var p2 = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+    defer p2.deinit();
+    const r2 = asObject(p2.value).?;
+    const id2 = r2.get("id").?;
+    try testing.expectEqualStrings("x\\y", switch (id2) {
+        .string => |s| s,
+        else => return error.TestUnexpectedResult,
+    });
+
+    // 断言数： 4
 }
