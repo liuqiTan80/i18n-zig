@@ -17,6 +17,13 @@
 // stays additive over the declarative tmLanguage base. Rendering lives only in
 // the extension host (require('vscode')), so it is not node-behavior testable --
 // pinned by text-contract asserts in the check-demos client guard.
+// Round 163: multi-dialect selection. The client reads a zzc.lang setting and,
+// when set, appends `--lang <dialect>` to the `zzc lsp` spawn so the server picks
+// that pack for hover / native diagnostics / semantic tokens (the server already
+// honors --lang; rounds 161/162 make semantic tokens carry the dialect vocabulary,
+// so switching repaints in-editor without a second tmLanguage). Changing zzc.lang
+// (or zzc.lspPath) auto-restarts the server. tmLanguage stays the default-dialect
+// static base -- a deliberate scope decision recorded in the ledger.
 'use strict';
 
 const vscode = require('vscode');
@@ -39,6 +46,7 @@ const pending = new Map(); // request id -> resolve callback
 const diagnosticStore = new Map(); // uri string -> vscode.Diagnostic[]
 let diags = null;
 let ready = false;
+let bootGen = 0; // restart generation: a superseded initialize resolve must not repaint
 
 function zzcBinary() {
   const cfg = vscode.workspace.getConfiguration('zzc');
@@ -46,8 +54,25 @@ function zzcBinary() {
   return p && p.trim() ? p.trim() : 'zzc';
 }
 
-function startServer(context) {
-  child = cp.spawn(zzcBinary(), ['lsp'], { stdio: ['pipe', 'pipe', 'pipe'] });
+// Round 163: dialect selection -> `--lang` on the lsp spawn. Empty means the
+// built-in default pack; any other value is passed straight to `zzc lsp --lang`
+// (registry key/alias, e.g. 繁体). Invalid values are handled server-side (the
+// existing stderr -> output channel path), so the client does not re-validate.
+function zzLang() {
+  const cfg = vscode.workspace.getConfiguration('zzc');
+  const l = cfg.get('lang');
+  return l && l.trim() ? l.trim() : '';
+}
+
+function lspSpawnArgs() {
+  const args = ['lsp'];
+  const l = zzLang();
+  if (l) args.push('--lang', l);
+  return args;
+}
+
+function startServer() {
+  child = cp.spawn(zzcBinary(), lspSpawnArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
   child.on('error', (err) => {
     ready = false;
     vscode.window.showErrorMessage(
@@ -161,10 +186,9 @@ function onClose(doc) {
   diags.delete(doc.uri);
 }
 
-function activate(context) {
-  diags = vscode.languages.createDiagnosticCollection('zzc');
-  context.subscriptions.push(diags, channel);
-  startServer(context);
+function boot() {
+  const myGen = ++bootGen;
+  startServer();
 
   const initialize = {
     processId: process.pid,
@@ -186,13 +210,24 @@ function activate(context) {
     rootUri: null,
   };
   request('initialize', initialize).then((res) => {
+    if (myGen !== bootGen) return; // a newer restart superseded this handshake
     ready = true;
     send({ jsonrpc: '2.0', method: 'initialized', params: {} });
     channel.appendLine('zzc lsp 就绪（能力：' + JSON.stringify(res && res.capabilities) + '）');
     for (const doc of vscode.workspace.textDocuments) onOpened(doc);
   });
+}
+
+function activate(context) {
+  diags = vscode.languages.createDiagnosticCollection('zzc');
+  context.subscriptions.push(diags, channel);
+  boot();
 
   context.subscriptions.push(
+    // round 163: switching dialect (or lsp path) restarts the server so --lang takes effect.
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('zzc.lang') || e.affectsConfiguration('zzc.lspPath')) restartServer();
+    }),
     vscode.workspace.onDidOpenTextDocument(onOpened),
     vscode.workspace.onDidChangeTextDocument((e) => fullChange(e.document)),
     vscode.workspace.onDidCloseTextDocument(onClose),
@@ -231,13 +266,31 @@ function activate(context) {
   );
 }
 
-function deactivate() {
+function shutdownChild() {
   if (child && child.stdin && child.stdin.writable) {
     send({ jsonrpc: '2.0', id: ++seq, method: 'shutdown' });
     send({ jsonrpc: '2.0', method: 'exit' });
     child.stdin.end();
   }
   if (child) child.kill();
+  child = null;
+  decoder = null;
+  ready = false;
+}
+
+// round 163: re-spawn with the current zzc.lang / zzc.lspPath. bootGen (bumped in
+// boot) makes any superseded initialize resolve a no-op, so rapid double changes
+// converge on the last spawn without stale repaints.
+function restartServer() {
+  shutdownChild();
+  pending.clear();
+  diagnosticStore.clear();
+  if (diags) diags.clear();
+  boot();
+}
+
+function deactivate() {
+  shutdownChild();
 }
 
 module.exports = { activate, deactivate };

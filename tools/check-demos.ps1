@@ -1132,6 +1132,17 @@ if ($extSrc.Contains("failed to start") -or $extSrc.Contains("Install zzc on PAT
 if ($frs.Contains("invalid frame:") -or $frs.Contains("did not parse back")) { Write-Output "  [FAIL] client: English framing error text leaked"; $lcOk = $false }
 $lspDesc = [string]$pkg.contributes.configuration.properties."zzc.lspPath".description
 if (-not ($lspDesc -match '[\u4e00-\u9fff]')) { Write-Output "  [FAIL] client: zzc.lspPath settings description not native"; $lcOk = $false }
+# client dialect-selection wiring (round 163): the client reads a zzc.lang setting and appends
+# `--lang <dialect>` to the `zzc lsp` spawn (the server already honors --lang; rounds 161/162 make
+# semantic tokens carry the dialect vocabulary), and restarts the server when zzc.lang (or zzc.lspPath)
+# changes so the switch takes effect without a window reload. Pinned as text contracts because the
+# vscode-host runtime is not node-behavior testable here.
+if (-not $pkg.contributes.configuration.properties."zzc.lang") { Write-Output "  [FAIL] client: zzc.lang configuration property missing"; $lcOk = $false }
+$langDesc = [string]$pkg.contributes.configuration.properties."zzc.lang".description
+if (-not ($langDesc -match '[\u4e00-\u9fff]')) { Write-Output "  [FAIL] client: zzc.lang settings description not native"; $lcOk = $false }
+if (-not ($extSrc.Contains("function lspSpawnArgs") -and $extSrc.Contains("args.push('--lang', l)"))) { Write-Output "  [FAIL] client: zzc.lang not threaded into the lsp spawn as --lang"; $lcOk = $false }
+if (-not $extSrc.Contains("cp.spawn(zzcBinary(), lspSpawnArgs()")) { Write-Output "  [FAIL] client: lsp spawn does not use lspSpawnArgs (dialect --lang never reaches the server)"; $lcOk = $false }
+if (-not ($extSrc.Contains("onDidChangeConfiguration") -and $extSrc.Contains("affectsConfiguration('zzc.lang')") -and $extSrc.Contains("restartServer"))) { Write-Output "  [FAIL] client: no onDidChangeConfiguration -> restartServer wiring (dialect switch never takes effect)"; $lcOk = $false }
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
     Write-Output "  [SKIP] client behavior test: node not on PATH"
@@ -1182,7 +1193,7 @@ if (-not $node) {
     & node --check (Join-Path $extDir "extension.js") 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "  [FAIL] client: extension.js does not parse under node --check"; $lcOk = $false }
 }
-if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit), client semanticTokens rendering (provider registered, full capability, /full request, legend order pinned to server)" }
+if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit), client semanticTokens rendering (provider registered, full capability, /full request, legend order pinned to server), client dialect selection (zzc.lang property + native description, --lang threaded into lspSpawnArgs spawn, onDidChangeConfiguration -> restartServer)" }
 else { $fail = $fail + 1 }
 
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
