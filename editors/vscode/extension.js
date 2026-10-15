@@ -32,7 +32,7 @@ function startServer(context) {
   child.on('error', (err) => {
     ready = false;
     vscode.window.showErrorMessage(
-      'zzc lsp failed to start (' + err.message + '). Install zzc on PATH or set zzc.lspPath.');
+      'zzc 语言服务器启动失败（' + err.message + '）。请把 zzc 装入 PATH，或将 zzc.lspPath 设置为其可执行文件路径。');
   });
   child.on('exit', () => { ready = false; });
   if (child.stderr) {
@@ -46,7 +46,7 @@ function startServer(context) {
       try {
         frame = decoder.take();
       } catch (e) {
-        channel.appendLine('lsp frame error: ' + e.message);
+        channel.appendLine('lsp 帧解析错误：' + e.message);
         break;
       }
       if (frame === null) break;
@@ -162,7 +162,7 @@ function activate(context) {
   request('initialize', initialize).then((res) => {
     ready = true;
     send({ jsonrpc: '2.0', method: 'initialized', params: {} });
-    channel.appendLine('zzc lsp ready (capabilities: ' + JSON.stringify(res && res.capabilities) + ')');
+    channel.appendLine('zzc lsp 就绪（能力：' + JSON.stringify(res && res.capabilities) + '）');
     for (const doc of vscode.workspace.textDocuments) onOpened(doc);
   });
 

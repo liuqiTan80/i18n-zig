@@ -218,7 +218,7 @@ Remove-Item -Recurse -Force $ga -ErrorAction SilentlyContinue
 # (B) negative half: an embed path resolving OUTSIDE the mirror root .zzc/gen
 # must NOT be staged. ONE `../` is in-package-permitted (embedPathStaysWithin
 # precedent: single .. landing inside root is allowed), so the escape shape needs
-# TWO levels up: from .zzc/gen/src that lands at .zzc/<esc> — outside the root.
+# TWO levels up: from .zzc/gen/src that lands at .zzc/<esc> -- outside the root.
 # The asset file sits beside the project dir (.zig-cache/<esc>) so the SOURCE is
 # real (without the guard, staging would actually write it out => load-bearing).
 $gb = Join-Path $root ".zig-cache/embedB_guard"
@@ -382,7 +382,7 @@ $pA = Start-Process -FilePath $zzc -ArgumentList @("check", "--lang-file", (Join
 if ($pA.ExitCode -ne 0) { Write-Output ("  [FAIL] r9g A: external pack check expected exit 0, got " + $pA.ExitCode); $r9Ok = $false }
 $genZig = Join-Path $gr ".zzc/gen/src/main.zig"
 $genTxt = if (Test-Path $genZig) { [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($genZig)) } else { "" }
-# 行首断言而非任意子串：源注释里若含目标字面串会随透传混进 gen 使 Contains 假命中（反证轮实捕的静默空转形）。
+# line-start assert, not any substring: a source comment holding the target literal gets transpiled into gen, so Contains false-hits (the silent-idle shape caught in the disproof round).
 $hasMainFn = (@($genTxt -split "`n" | Where-Object { $_.StartsWith("pub fn main(") -or $_.StartsWith("fn main(") }).Count -gt 0)
 if (-not $hasMainFn) { Write-Output "  [FAIL] r9g A/D47: keywords-section main form not translated at entry position (silent library-shape pass)"; $r9Ok = $false }
 # B: $format too new -> refused with native upgrade hint (qing-sheng-ji via code points)
@@ -1004,7 +1004,11 @@ else { $fail = $fail + 1 }
 # case-insensitive Content-Length, no completion provider registered -- the
 # README claims completions stay declarative). Pure ASCII, forward slashes
 # (D52). [SKIP] when node is absent -- skip is loud, silent idle is the real
-# enemy (round-103 lesson).
+# enemy (round-103 lesson). Round 158 adds a native-UI contract: the client's
+# own user-facing strings (error popup, framing errors, zzc.lspPath settings
+# description) must carry CJK and the round-157 English phrasings must be gone
+# -- checked with node absent too (pure text contract; CJK probed via a
+# \u-escaped regex range so this guard stays ASCII).
 Write-Output "== lsp client guard =="
 $lcOk = $true
 $extDir = Join-Path $root "editors/vscode"
@@ -1022,6 +1026,14 @@ if ($extSrc.Contains("registerCompletionItemProvider")) { Write-Output "  [FAIL]
 $frs = Get-Content -Raw (Join-Path $extDir "client_frames.js") -Encoding UTF8
 if (-not $frs.Contains("10 * 1024 * 1024")) { Write-Output "  [FAIL] client: framing cap no longer spelled 10 * 1024 * 1024 (server max_frame_len drift risk)"; $lcOk = $false }
 if (-not $frs.Contains("toLowerCase")) { Write-Output "  [FAIL] client: header name match lost case-insensitivity (server parses case-insensitive)"; $lcOk = $false }
+# native-UI contract (round 158): the client's own user-facing strings reach a
+# pure-native audience -- error popup, framing errors, settings description.
+$extHasCjk = ($extSrc -match '[\u4e00-\u9fff]')
+if (-not $extHasCjk) { Write-Output "  [FAIL] client: extension.js lost its native (CJK) user-facing text"; $lcOk = $false }
+if ($extSrc.Contains("failed to start") -or $extSrc.Contains("Install zzc on PATH")) { Write-Output "  [FAIL] client: English startup error popup leaked to users"; $lcOk = $false }
+if ($frs.Contains("invalid frame:") -or $frs.Contains("did not parse back")) { Write-Output "  [FAIL] client: English framing error text leaked"; $lcOk = $false }
+$lspDesc = [string]$pkg.contributes.configuration.properties."zzc.lspPath".description
+if (-not ($lspDesc -match '[\u4e00-\u9fff]')) { Write-Output "  [FAIL] client: zzc.lspPath settings description not native"; $lcOk = $false }
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
     Write-Output "  [SKIP] client behavior test: node not on PATH"
@@ -1072,7 +1084,7 @@ if (-not $node) {
     & node --check (Join-Path $extDir "extension.js") 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "  [FAIL] client: extension.js does not parse under node --check"; $lcOk = $false }
 }
-if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant" }
+if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone)" }
 else { $fail = $fail + 1 }
 
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }

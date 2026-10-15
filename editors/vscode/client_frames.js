@@ -42,10 +42,10 @@ class FrameDecoder {
       }
     }
     if (!Number.isInteger(contentLength) || contentLength < 0) {
-      throw new Error('invalid frame: missing or malformed Content-Length');
+      throw new Error('帧格式非法：缺少或畸形的 Content-Length');
     }
     if (contentLength > MAX_FRAME_BYTES) {
-      throw new Error('invalid frame: Content-Length ' + contentLength + ' exceeds cap');
+      throw new Error('帧格式非法：Content-Length ' + contentLength + ' 超出上限');
     }
     const start = sep + 4;
     if (this.buf.length < start + contentLength) return null;
@@ -55,7 +55,7 @@ class FrameDecoder {
     try {
       json = JSON.parse(body);
     } catch (e) {
-      throw new Error('invalid frame: body is not JSON: ' + e.message);
+      throw new Error('帧格式非法：消息体不是合法 JSON：' + e.message);
     }
     return { body, json };
   }
@@ -66,7 +66,7 @@ function roundTrip(body) {
   const d = new FrameDecoder();
   d.append(encodeFrame(body));
   const f = d.take();
-  if (f === null) throw new Error('roundTrip: frame did not parse back');
+  if (f === null) throw new Error('往返失败：帧未能解析回来');
   return f;
 }
 

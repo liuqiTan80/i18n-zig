@@ -22,7 +22,7 @@
         "zzc.lspPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the zzc binary used for `zzc lsp` (empty = zzc on PATH)."
+          "description": "\u7528\u4e8e\u8fd0\u884c zzc lsp \u7684 zzc \u53ef\u6267\u884c\u6587\u4ef6\u8def\u5f84\uff1b\u7559\u7a7a\u8868\u793a\u4f7f\u7528 PATH \u4e0a\u7684 zzc\u3002"
         }
       }
     },
