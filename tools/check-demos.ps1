@@ -971,7 +971,7 @@ if ($msgs.Count -ne 4) { Write-Output ("  [FAIL] lsp: expected exactly 4 framed 
 if ($lspOk) {
     $N_cifa = Native 0x8BCD, 0x6CD5        # ci-fa (lexical diagnostics kind)
     $N_gjz  = Native 0x5173, 0x952E, 0x5B57 # guan-jian-zi (hover group label)
-    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":1') -and $msgs[0].Contains('"hoverProvider":true'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities"; $lspOk = $false }
+    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form)"; $lspOk = $false }
     if (-not ($msgs[1].Contains('publishDiagnostics') -and $msgs[1].Contains('file:///g156.zz') -and $msgs[1].Contains($N_cifa))) { Write-Output "  [FAIL] lsp: didOpen did not publish native-lexical diagnostics for the fullwidth comma"; $lspOk = $false }
     if (-not ($msgs[2].Contains('"id":2') -and $msgs[2].Contains('const') -and $msgs[2].Contains($N_gjz))) { Write-Output "  [FAIL] lsp: hover on chang-shu did not resolve to const/keyword-group"; $lspOk = $false }
     if (-not ($msgs[3].Contains('"id":3') -and $msgs[3].Contains('"result":null'))) { Write-Output "  [FAIL] lsp: shutdown reply not result-null"; $lspOk = $false }
@@ -992,6 +992,80 @@ if ($lspOk) {
     if ($lspOk -and $pos -ne $raw.Length) { Write-Output "  [FAIL] lsp: trailing bytes after last frame"; $lspOk = $false }
 }
 if ($lspOk) { Write-Output "  [PASS] lsp guard: full handshake over real stdio -- init/didOpen-publish/hover/shutdown/exit, 4 frames byte-consistent, stderr clean, exit 0" }
+else { $fail = $fail + 1 }
+
+# --- zzc lsp on-save SEMANTIC diagnostics e2e guard (round 159). didSave must trigger a
+# real `zzc check --machine` child compile and publish back-translated native SEMANTIC
+# diagnostics -- but ONLY on save, never on didOpen/didChange (per-keystroke compile is
+# deliberately avoided: slow + races symbols.txt). Drives real `zzc lsp` over a throwaway
+# project whose sole error (u8=300) passes the lexical + pure-native fast path (empty)
+# yet fails zig compile -- so a semantic diagnostic appearing after didSave and NOT after
+# didOpen is the load-bearing proof of save-gating + the check-machine reuse (message and
+# .zz coordinates come verbatim from the already-tested --machine chain). didOpen carries
+# empty text (fast path clean -> "[]"), which also keeps the frames ASCII; the semantic
+# provider compiles the ON-DISK file, independent of the buffer text. Zig-gated (D52):
+# without zig the child cannot start, produces no machine-diag line -> semantic-content
+# asserts are [SKIP]-ed while the mechanism assert (didSave round-trips a publish) holds.
+Write-Output "== lsp on-save semantic guard =="
+$soOk = $true
+$soDir = Join-Path $root ".zig-cache/lsp159_guard"
+if (Test-Path $soDir) { Remove-Item -Recurse -Force $soDir }
+New-Item -ItemType Directory -Force -Path (Join-Path $soDir "src") | Out-Null
+# chang-shu jia: zi-jie = 300; (wu-fu/u8 out-of-range) + pub fn main() -> void
+$soJia = Native 0x7532
+$soZi  = Native 0x5B57,0x8282
+$soSrc = @"
+$N_const ${soJia}: $soZi = 300;
+
+$N_pub $N_fn $N_main() $N_void {
+    _ = ${soJia};
+}
+"@
+$soFile = Join-Path $soDir "src/main.zz"
+[System.IO.File]::WriteAllText($soFile, $soSrc, $encNoBom)
+$soUri = "file:///" + ((Resolve-Path $soFile).Path -replace '\\','/')
+$acc = New-Object Collections.Generic.List[byte]
+Add-Frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}'
+Add-Frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
+Add-Frame ('{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"' + $soUri + '","languageId":"zig-dialect","version":1,"text":""}}}')
+Add-Frame ('{"jsonrpc":"2.0","method":"textDocument/didSave","params":{"textDocument":{"uri":"' + $soUri + '"}}}')
+Add-Frame '{"jsonrpc":"2.0","id":3,"method":"shutdown"}'
+Add-Frame '{"jsonrpc":"2.0","method":"exit"}'
+$si = Join-Path $root ".zig-cache/lsp159.in"; $so = Join-Path $root ".zig-cache/lsp159.out"; $se = Join-Path $root ".zig-cache/lsp159.err"
+[IO.File]::WriteAllBytes($si, $acc.ToArray())
+$sp = Start-Process -FilePath $zzc -ArgumentList "lsp" -NoNewWindow -Wait -PassThru `
+    -RedirectStandardInput $si -RedirectStandardOutput $so -RedirectStandardError $se
+$rawSo = Read-B $so
+if ($rawSo.Count -eq 0) { $rawSo = [byte[]]::new(0) }
+$txtSo = [Text.Encoding]::UTF8.GetString([byte[]]$rawSo)
+$errSo = Read-B $se
+if ($errSo.Count -eq 0) { $errSo = [byte[]]::new(0) }
+$strSoErr = [Text.Encoding]::UTF8.GetString([byte[]]$errSo)
+Remove-Item -Force $si, $so, $se -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force $soDir -ErrorAction SilentlyContinue
+if ($sp.ExitCode -ne 0) { Write-Output ("  [FAIL] on-save: lsp run exited " + $sp.ExitCode + " (expected 0)"); $soOk = $false }
+if ($strSoErr.Trim().Length -ne 0) { Write-Output ("  [FAIL] on-save: human text leaked to stderr: " + $strSoErr.Trim()); $soOk = $false }
+$mso = @([regex]::Split($txtSo, "Content-Length:\s*\d+`r`n`r`n") | Where-Object { $_.Trim().Length -gt 0 })
+if ($mso.Count -ne 4) { Write-Output ("  [FAIL] on-save: expected 4 framed messages (init/didOpen-publish/didSave-publish/shutdown), got " + $mso.Count); $soOk = $false }
+if ($soOk) {
+    # mechanism (zig-independent): didOpen and didSave each round-trip a publishDiagnostics
+    if (-not ($mso[1].Contains('publishDiagnostics') -and $mso[2].Contains('publishDiagnostics'))) { Write-Output "  [FAIL] on-save: didOpen/didSave did not each publish diagnostics"; $soOk = $false }
+    # didOpen must be FAST-ONLY clean (empty): the semantic error is save-gated, not keystroke-gated
+    if (-not $mso[1].Contains('"diagnostics":[]')) { Write-Output "  [FAIL] on-save: didOpen leaked diagnostics - semantic must not run on open/change"; $soOk = $false }
+    if (Get-Command zig -ErrorAction SilentlyContinue) {
+        # The machine line is `<file>:<line>:<col>: <kind>: <msg>`; the parser routes <kind>
+        # (cuo-wu = error) into LSP severity=1 (DiagnosticSeverity.Error) and keeps only <msg>
+        # as the diagnostic message -- so the anchor is a native fragment of the msg body itself
+        # (lei-xing = "type", from zig's back-translated "type 'u8' cannot represent 300"),
+        # NOT the kind word. Asserting the kind word here would be a false RED (kind never
+        # appears in the message field) -- the point is the native msg reached the frame.
+        $N_leixing = Native 0x7C7B,0x578B   # lei-xing ("type", back-translated msg body)
+        if (-not ($mso[2].Contains($N_leixing) -and $mso[2].Contains('"source":"zzc"') -and $mso[2].Contains('"severity":1') -and $mso[2].Contains('300') -and (-not $mso[2].Contains('"diagnostics":[]')))) { Write-Output "  [FAIL] on-save: didSave did not publish a native semantic diagnostic (check-machine reuse broken)"; $soOk = $false }
+    } else {
+        Write-Output "  [SKIP] on-save semantic content assert: zig not on PATH (child compile cannot run)"
+    }
+}
+if ($soOk) { Write-Output "  [PASS] on-save guard: didOpen publishes fast-only empty, didSave triggers check-machine compile and publishes native semantic diagnostic (save-gated, not per-keystroke)" }
 else { $fail = $fail + 1 }
 
 # --- zzc lsp VS Code CLIENT wiring guard (round 157). extension.js and

@@ -26,6 +26,25 @@ const snippets = @import("../editor/snippets.zig");
 
 pub const OutList = std.ArrayList([]const u8);
 
+/// 语义诊断项（第 159 轮 · on-save 语义接入）：坐标已是文档 text 的 0 基行 + 0 基
+/// UTF-16 码元列（与 LSP 展示口径一致、BMP 母语一字一码元），核内据此直拼 range。
+pub const SemanticItem = struct {
+    line: usize,
+    character: usize,
+    char_len: usize, // 跨度（码元）；0 视作 1（单字符下划）
+    severity: u8, // LSP DiagnosticSeverity：1 错误 / 2 警告 / 3 信息 / 4 提示
+    message: []const u8,
+};
+
+/// 语义供给器钩子：把「重、触 IO、按项目全量真编译」的语义诊断源从纯核解耦。
+/// 纯核据它把语义项并入 publishDiagnostics，本体不触 IO（承 156 轮「纯函数核、不触 IO」）。
+/// 实现方契约：返回的 items 与其 message 均为「本次调用期内有效」的借用切片——
+/// 由实现方自持的暂存 arena 分配、下次调用前重置，核内只读不还（不 free、不跨调用持有）。
+pub const SemanticProvider = struct {
+    ctx: *anyopaque,
+    call: *const fn (ctx: *anyopaque, uri: []const u8, text: []const u8) []SemanticItem,
+};
+
 // ---------------------------------------------------------------------------
 // UTF-16 坐标换算（LSP 默认 positionEncoding）
 // ---------------------------------------------------------------------------
@@ -173,6 +192,9 @@ pub const Server = struct {
     lang: *const Pack,
     /// uri → 文档全文（自持 dupe）
     docs: std.StringHashMap([]const u8),
+    /// 语义诊断供给器（第 159 轮）：null 时 didSave 仅重发快路诊断；接上真编译供给方后
+    /// didSave 把语义项并入发布。纯核不造，由 IO 侧（cmdLsp）注入；单测注入假供给器。
+    semantic: ?SemanticProvider = null,
     /// 收到 exit 通知：环流侧据此结束。
     stop: bool = false,
 
@@ -212,8 +234,10 @@ pub const Server = struct {
         const params_obj = objIn(root.get("params"));
 
         if (std.mem.eql(u8, method, "initialize")) {
+            // textDocumentSync 升级为对象形（第 159 轮）：声明 openClose + 全量 change + save（includeText:false，
+            // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
             const res =
-                \\{"capabilities":{"textDocumentSync":1,"hoverProvider":true},"serverInfo":{"name":"zzc-lsp"}}
+                \\{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"hoverProvider":true},"serverInfo":{"name":"zzc-lsp"}}
             ;
             try self.respond(out, idv, res);
             return;
@@ -262,6 +286,15 @@ pub const Server = struct {
             try self.publishRaw(out, uri, "[]");
             return;
         }
+        if (std.mem.eql(u8, method, "textDocument/didSave")) {
+            const p = params_obj orelse return;
+            const td = objIn(p.get("textDocument")) orelse return;
+            const uri = strField(td, "uri") orelse return;
+            // includeText:false → 取服务端自持文档表文本（已由 didChange 同步至最新）；未 open 则不处理。
+            const text = self.docs.get(uri) orelse return;
+            try self.publishSave(out, uri, text);
+            return;
+        }
         if (std.mem.eql(u8, method, "textDocument/hover")) {
             try self.hover(out, idv, params_obj);
             return;
@@ -296,6 +329,42 @@ pub const Server = struct {
         try self.publishRaw(out, uri, diags);
     }
 
+    /// didSave 发布（第 159 轮）：快路诊断 + 语义供给器产出（若已注入）合并为一个数组。
+    /// 未注入供给器时退化为与 publish 同形（仅快路）；语义项 message 为借用切片、核内不 free。
+    fn publishSave(self: *Server, out: *OutList, uri: []const u8, text: []const u8) !void {
+        const gpa = self.gpa;
+        var items: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (items.items) |s| gpa.free(s);
+            items.deinit(gpa);
+        }
+        try self.appendFastItems(text, &items);
+        if (self.semantic) |prov| {
+            for (prov.call(prov.ctx, uri, text)) |s| {
+                try items.append(gpa, try self.semItem(s));
+            }
+        }
+        const arr = try itemsJoinAndFree(gpa, &items);
+        defer gpa.free(arr);
+        try self.publishRaw(out, uri, arr);
+    }
+
+    /// 语义项 → Diagnostic JSON（坐标已是 0 基行/码元列、直拼 range、免经字节换算）。
+    fn semItem(self: *Server, s: SemanticItem) ![]const u8 {
+        const gpa = self.gpa;
+        const w = if (s.char_len == 0) 1 else s.char_len;
+        const sev = if (s.severity >= 1 and s.severity <= 4) s.severity else 1;
+        const range = try std.fmt.allocPrint(
+            gpa,
+            "{{\"start\":{{\"line\":{d},\"character\":{d}}},\"end\":{{\"line\":{d},\"character\":{d}}}}}",
+            .{ s.line, s.character, s.line, s.character + w },
+        );
+        defer gpa.free(range);
+        const msg_js = try jsonrpc.jsonString(gpa, s.message);
+        defer gpa.free(msg_js);
+        return std.fmt.allocPrint(gpa, "{{\"range\":{s},\"severity\":{d},\"source\":\"zzc\",\"message\":{s}}}", .{ range, sev, msg_js });
+    }
+
     fn publishRaw(self: *Server, out: *OutList, uri: []const u8, diags_json: []const u8) !void {
         const gpa = self.gpa;
         const uri_js = try jsonrpc.jsonString(gpa, uri);
@@ -315,6 +384,13 @@ pub const Server = struct {
             for (items.items) |s| gpa.free(s);
             items.deinit(gpa);
         }
+        try self.appendFastItems(text, &items);
+        return itemsJoinAndFree(gpa, &items);
+    }
+
+    /// 快路诊断项追入 items（publish 与 publishSave 共用，单一真相源）。
+    fn appendFastItems(self: *Server, text: []const u8, items: *std.ArrayList([]const u8)) !void {
+        const gpa = self.gpa;
 
         // preCheck 错误集仅分配失败形；失败按零词法违例继续（诊断辅面不吞主面）。
         var maybe_vs: ?[]fullwidth.Violation = null;
@@ -333,15 +409,13 @@ pub const Server = struct {
             try items.append(gpa, try self.diagItem(text, v.off, v.off + v.len, msg));
         }
 
-        var eng = translate.findEnglishWordForms(gpa, self.lang.*, text) catch return itemsJoinAndFree(gpa, &items);
+        var eng = translate.findEnglishWordForms(gpa, self.lang.*, text) catch return;
         defer eng.deinit();
         for (eng.items) |v| {
             const msg = try std.fmt.allocPrint(gpa, "纯母语: 方言源须全用母语词形，英文 `{s}` 请改用 `{s}`", .{ v.word, v.native });
             defer gpa.free(msg);
             try items.append(gpa, try self.diagItem(text, v.off, v.off + v.word.len, msg));
         }
-
-        return itemsJoinAndFree(gpa, &items);
     }
 
     fn diagItem(self: *Server, text: []const u8, start: usize, end: usize, msg: []const u8) ![]const u8 {
@@ -470,7 +544,7 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":7") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"hoverProvider\":true") != null);
-    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"textDocumentSync\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}}") != null);
 }
 
 test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 UTF-16（第 156 轮）" {
@@ -631,4 +705,50 @@ test "lsp.server：hover 点链别名整体取词（标准库.调试.打印 形�
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.zz\"},\"position\":{\"line\":0,\"character\":4}}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "std.debug.print") != null);
+}
+
+// 假语义供给器（第 159 轮单测）：返回一个静态借用项，验核内合并与保存门控。
+var fake_sem_marker: u8 = 0;
+var fake_sem_items = [_]SemanticItem{
+    .{ .line = 0, .character = 3, .char_len = 4, .severity = 1, .message = "错误: 假语义诊断XYZ" },
+};
+fn fakeSemanticProvider(ctx: *anyopaque, uri: []const u8, text: []const u8) []SemanticItem {
+    _ = ctx;
+    _ = uri;
+    _ = text;
+    return &fake_sem_items;
+}
+
+test "lsp.server：didSave 合并语义项、didOpen 不含语义（保存门控）（第 159 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+    srv.semantic = .{ .ctx = @ptrCast(&fake_sem_marker), .call = &fakeSemanticProvider };
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    // didOpen 一个词法干净的文档：快路发布零诊断，且绝不含假语义串（语义仅在 didSave 触发）。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///s159.zz\",\"text\":\"常数 a = 1;\\n\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "假语义诊断XYZ") == null); // didOpen 不出语义
+    freeOut(gpa, &out);
+
+    // didSave：发布合并数组，含假语义项（severity/coords/source=zzc）。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"file:///s159.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "假语义诊断XYZ") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"severity\":1") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"character\":3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"source\":\"zzc\"") != null);
+    freeOut(gpa, &out);
+
+    // 未 open 的 uri：didSave 无文本可算，静默不发布。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"file:///never.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 0), out.items.len);
 }

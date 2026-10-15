@@ -928,12 +928,151 @@ fn bail(e: anyerror) noreturn {
 
 // ---------------------------------------------------------------- LSP 接线
 
+/// 语义诊断解析自 `zzc check --machine` 单行：`<file>:<line>:<col>: <kind>: <msg>`
+/// （file/line/col 已是回映到 .zz 源的工程相对路径 + 1 基字符行列、kind/msg 已回译纯中文）。
+/// 与 problemMatcher 正则 `^([^\s:].*?):(\d+):(\d+): (\S+): (.*)$` 同一契约、同一真相源。
+const MachineDiag = struct { file: []const u8, line: usize, col: usize, kind: []const u8, message: []const u8 };
+
+fn parseMachineDiag(line: []const u8) ?MachineDiag {
+    if (line.len == 0) return null;
+    if (line[0] == ' ' or line[0] == '\t' or line[0] == ':') return null; // 顶格无空白/无前导冒号
+    const c1 = std.mem.indexOfScalar(u8, line, ':') orelse return null;
+    const file = line[0..c1];
+    if (file.len == 0) return null;
+    var i = c1 + 1;
+    const ln_start = i;
+    while (i < line.len and std.ascii.isDigit(line[i])) i += 1;
+    if (i == ln_start) return null;
+    const ln = std.fmt.parseInt(usize, line[ln_start..i], 10) catch return null;
+    if (i >= line.len or line[i] != ':') return null;
+    i += 1;
+    const col_start = i;
+    while (i < line.len and std.ascii.isDigit(line[i])) i += 1;
+    if (i == col_start) return null;
+    const coln = std.fmt.parseInt(usize, line[col_start..i], 10) catch return null;
+    if (i >= line.len or line[i] != ':') return null;
+    i += 1;
+    if (i >= line.len or line[i] != ' ') return null; // 坐标段后须 ": "
+    i += 1;
+    const k_start = i;
+    while (i < line.len and line[i] != ' ' and line[i] != ':') i += 1;
+    const kind = line[k_start..i];
+    if (kind.len == 0) return null;
+    if (i >= line.len or line[i] != ':') return null;
+    i += 1;
+    if (i >= line.len or line[i] != ' ') return null; // kind 段后须 ": "
+    i += 1;
+    if (i >= line.len) return null;
+    return .{ .file = file, .line = ln, .col = coln, .kind = kind, .message = line[i..] };
+}
+
+/// 机读 kind（`kind_zh` 值面）→ LSP DiagnosticSeverity（1..4）；未知退 1（错误）。
+fn kindSeverity(kind: []const u8) u8 {
+    if (std.mem.eql(u8, kind, "\u{8B66}\u{544A}")) return 2; // 警告
+    if (std.mem.eql(u8, kind, "\u{8BF4}\u{660E}")) return 3; // 说明
+    if (std.mem.eql(u8, kind, "\u{88AB}\u{5F15}\u{7528}\u{4E8E}")) return 4; // 被引用于
+    return 1; // 错误 / 内部错误 / 其他
+}
+
+/// 机读 `file`（工程相对、`/` 分隔）是否属于当前文档（basename 匹配、需词边界）。
+fn fileMatchesDoc(mfile: []const u8, base: []const u8) bool {
+    if (!std.mem.endsWith(u8, mfile, base)) return false;
+    if (mfile.len == base.len) return true;
+    const before = mfile[mfile.len - base.len - 1];
+    return before == '/' or before == '\\';
+}
+
+/// LSP URI → 文件系统绝对路径（剥 file://、驱符前导斜杠、百分号解码、Windows 分隔符归一）。
+fn uriToFilesystemPath(a: std.mem.Allocator, uri: []const u8) ?[]const u8 {
+    var s = if (std.mem.startsWith(u8, uri, "file://")) uri[7..] else return null;
+    if (s.len >= 3 and s[0] == '/' and std.ascii.isAlphabetic(s[1]) and s[2] == ':') s = s[1..]; // 去盘符前导 /
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(a);
+    var j: usize = 0;
+    while (j < s.len) {
+        if (s[j] == '%' and j + 2 < s.len) {
+            const b = std.fmt.parseInt(u8, s[j + 1 .. j + 3], 16) catch {
+                out.append(a, s[j]) catch return null;
+                j += 1;
+                continue;
+            };
+            out.append(a, b) catch return null;
+            j += 3;
+        } else {
+            out.append(a, s[j]) catch return null;
+            j += 1;
+        }
+    }
+    const dec = out.toOwnedSlice(a) catch return null;
+    if (builtin.os.tag == .windows) {
+        for (dec) |*c| {
+            if (c.* == '/') c.* = '\\';
+        }
+    }
+    return dec;
+}
+
+/// 真语义供给器（IO 侧、不入测试图）：didSave 时 spawn 一个短命 `zzc check --machine <入口>`
+/// 子进程（自带干净 arena、退出即回收，父 LSP 长活 arena 零增长），解其 stderr 机读行→语义项。
+/// 暂存 arena 每调用开头 reset(.retain_capacity)，返回项为本次调用期内有效的借用切片。
+const LspSemantic = struct {
+    exe: ?[]const u8, // 本可执行文件绝对路径（拿不到则语义面优雅降级为空、不影响快路/悬停）
+    scratch: std.heap.ArenaAllocator,
+
+    fn run(self: *LspSemantic, uri: []const u8) []lsp.SemanticItem {
+        const exe = self.exe orelse return &.{};
+        _ = self.scratch.reset(.retain_capacity);
+        const a = self.scratch.allocator();
+        const fs_path = uriToFilesystemPath(a, uri) orelse return &.{};
+        const dir = std.fs.path.dirname(fs_path) orelse return &.{};
+        const base = std.fs.path.basename(fs_path);
+        const argv = &.{ exe, "check", "--machine", base };
+        const res = std.process.run(a, io_, .{
+            .argv = argv,
+            .cwd = .{ .path = dir },
+            .create_no_window = true,
+        }) catch return &.{};
+        var items: std.ArrayList(lsp.SemanticItem) = .empty;
+        var it = std.mem.splitScalar(u8, res.stderr, '\n');
+        while (it.next()) |rawline| {
+            const line = std.mem.trimEnd(u8, rawline, "\r");
+            const d = parseMachineDiag(line) orelse continue;
+            if (!fileMatchesDoc(d.file, base)) continue;
+            const lnz = if (d.line > 0) d.line - 1 else 0;
+            const cnz = if (d.col > 0) d.col - 1 else 0;
+            items.append(a, .{
+                .line = lnz,
+                .character = cnz,
+                .char_len = 0, // 单字符下划（核内视作 1）
+                .severity = kindSeverity(d.kind),
+                .message = d.message, // 借用自暂存 arena，下次 reset 前有效
+            }) catch return &.{};
+        }
+        return items.items;
+    }
+};
+
+fn lspSemanticCall(ctx: *anyopaque, uri: []const u8, text: []const u8) []lsp.SemanticItem {
+    _ = text; // 编译取盘上已存文件（==刚保存文本），坐标回映不依赖内存文本
+    const self: *LspSemantic = @ptrCast(@alignCast(ctx));
+    return self.run(uri);
+}
+
 /// LSP 服务器（第 156 轮）：JSON-RPC over stdio 帧环流。stdout 专供协议帧、
 /// 人读消息一律走 stderr（启动失败/流断坏）；分发核（能力/诊断/悬停）全在
 /// lsp/server.zig 测试图内单测，此处只做 stdin→handle→stdout 的字节搬运。
 fn cmdLsp(lang: Pack) void {
     var srv = lsp.Server.init(gpa_, &lang); // lang 形参与函数体同寿，&lang 安全
     defer srv.deinit();
+
+    // 第 159 轮：接上真语义供给器——didSave 时按需起 `zzc check --machine` 子进程拿语义诊断。
+    // 本可执行文件绝对路径取不到则 exe=null、语义面优雅降级为空（didSave 退化为仅重发快路）。
+    var sem = LspSemantic{
+        .exe = std.process.executablePathAlloc(io_, gpa_) catch null,
+        .scratch = std.heap.ArenaAllocator.init(gpa_),
+    };
+    defer sem.scratch.deinit();
+    srv.semantic = .{ .ctx = @ptrCast(&sem), .call = &lspSemanticCall };
 
     var in_buf: [8192]u8 = undefined;
     var in_r = Io.File.Reader.init(.stdin(), io_, &in_buf);
