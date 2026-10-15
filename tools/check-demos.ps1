@@ -994,5 +994,86 @@ if ($lspOk) {
 if ($lspOk) { Write-Output "  [PASS] lsp guard: full handshake over real stdio -- init/didOpen-publish/hover/shutdown/exit, 4 frames byte-consistent, stderr clean, exit 0" }
 else { $fail = $fail + 1 }
 
+# --- zzc lsp VS Code CLIENT wiring guard (round 157). extension.js and
+# client_frames.js live outside every compiler/test graph -- a broken manifest
+# (wrong main/activationEvents/id) or a framing drift is only invisible in the
+# editor host unless pinned here. Three faces: (A) manifest cross-contracts,
+# (B) node behavior test of the framing layer written to a temp file (never an
+# inline -e string: PS 5.1 quote mangling is itself a known false-green trap),
+# (C) client<->server shared-truthsource byte asserts (10MB cap spelled alike,
+# case-insensitive Content-Length, no completion provider registered -- the
+# README claims completions stay declarative). Pure ASCII, forward slashes
+# (D52). [SKIP] when node is absent -- skip is loud, silent idle is the real
+# enemy (round-103 lesson).
+Write-Output "== lsp client guard =="
+$lcOk = $true
+$extDir = Join-Path $root "editors/vscode"
+$pkg = Get-Content -Raw (Join-Path $extDir "package.json") -Encoding UTF8 | ConvertFrom-Json
+if ($pkg.main -ne "./extension.js") { Write-Output "  [FAIL] client: manifest main is not ./extension.js"; $lcOk = $false }
+if (-not (Test-Path (Join-Path $extDir "extension.js"))) { Write-Output "  [FAIL] client: declared main file missing"; $lcOk = $false }
+if (-not ($pkg.activationEvents -contains "onLanguage:zig-dialect")) { Write-Output "  [FAIL] client: activation event onLanguage:zig-dialect missing"; $lcOk = $false }
+$langId = $pkg.contributes.languages[0].id
+if ($langId -ne "zig-dialect") { Write-Output "  [FAIL] client: languages[0].id drifted from zig-dialect"; $lcOk = $false }
+if (-not $pkg.contributes.configuration.properties."zzc.lspPath") { Write-Output "  [FAIL] client: zzc.lspPath configuration property missing"; $lcOk = $false }
+$extSrc = Get-Content -Raw (Join-Path $extDir "extension.js") -Encoding UTF8
+if (-not $extSrc.Contains("const LANGUAGE_ID = 'zig-dialect'")) { Write-Output "  [FAIL] client: LANGUAGE_ID constant no longer matches manifest language id"; $lcOk = $false }
+if (-not $extSrc.Contains("'lsp'")) { Write-Output "  [FAIL] client: extension no longer spawns the lsp subcommand"; $lcOk = $false }
+if ($extSrc.Contains("registerCompletionItemProvider")) { Write-Output "  [FAIL] client: completion registered via LSP although README keeps it declarative"; $lcOk = $false }
+$frs = Get-Content -Raw (Join-Path $extDir "client_frames.js") -Encoding UTF8
+if (-not $frs.Contains("10 * 1024 * 1024")) { Write-Output "  [FAIL] client: framing cap no longer spelled 10 * 1024 * 1024 (server max_frame_len drift risk)"; $lcOk = $false }
+if (-not $frs.Contains("toLowerCase")) { Write-Output "  [FAIL] client: header name match lost case-insensitivity (server parses case-insensitive)"; $lcOk = $false }
+$node = Get-Command node -ErrorAction SilentlyContinue
+if (-not $node) {
+    Write-Output "  [SKIP] client behavior test: node not on PATH"
+} else {
+    $cprobe = Join-Path $root ".zig-cache/lsp_client_probe.js"
+    $cline = @()
+    $cline += 'const { encodeFrame, FrameDecoder, roundTrip, MAX_FRAME_BYTES } = require(process.argv[2]);'
+    $cline += 'let fail = 0; let ran = 0;'
+    $cline += 'function ok(n, c) { ran++; if (!c) { console.log("FAIL " + n); fail++; } }'
+    $cline += 'ok("method-echo", roundTrip("{\"jsonrpc\":\"2.0\",\"id\":1}").json.id === 1);'
+    $cline += 'const cjk = Buffer.from("{\"t\":\"\u4e2d\u6587\u65b9\u8a00\"}");'
+    $cline += 'const f = encodeFrame(cjk.toString("utf8"));'
+    $cline += 'const m = /Content-Length: (\d+)/.exec(f.subarray(0, 40).toString("latin1"));'
+    $cline += 'ok("cjk-byte-len", Number(m[1]) === cjk.length);'
+    $cline += 'ok("cjk-roundtrip", roundTrip(cjk.toString("utf8")).json.t.length === 4);'
+    $cline += 'const d = new FrameDecoder();'
+    $cline += 'd.append(Buffer.concat([encodeFrame("{\"a\":1}"), encodeFrame("{\"b\":2}")]));'
+    $cline += 'let n = 0; for (;;) { if (!d.take()) break; n++; }'
+    $cline += 'ok("glued-two", n === 2);'
+    # CRLF is built with fromCharCode because a literal \r\n inside these
+    # single-quoted PS strings does not survive every console/transcode path.
+    $cline += 'const CRLF = String.fromCharCode(13, 10) + String.fromCharCode(13, 10);'
+    $cline += 'const p = new FrameDecoder(); p.append(Buffer.from("Content-Length: 7" + CRLF + "12345"));'
+    $cline += 'ok("partial-null", p.take() === null);'
+    $cline += 'p.append(Buffer.from("67"));'
+    $cline += 'ok("partial-completes", (p.take() || { json: 0 }).json === 1234567);'
+    $cline += 'const bad = new FrameDecoder(); bad.append(Buffer.from("Nope: 1" + CRLF + "{}"));'
+    $cline += 'let t1 = 0; try { bad.take(); } catch (e) { t1 = 1; }'
+    $cline += 'ok("no-cl-throws", t1 === 1);'
+    $cline += 'const big = new FrameDecoder(); big.append(Buffer.from("Content-Length: " + (MAX_FRAME_BYTES + 1) + CRLF));'
+    $cline += 'let t2 = 0; try { big.take(); } catch (e) { t2 = 1; }'
+    $cline += 'ok("oversize-throws", t2 === 1);'
+    $cline += 'const ci = new FrameDecoder(); ci.append(Buffer.from("content-length: 2" + CRLF + "{}"));'
+    $cline += 'ok("cl-case-insensitive", (ci.take() || { body: "" }).body === "{}");'
+    $cline += 'console.log("asserts=" + ran);'
+    $cline += 'process.exit(fail === 0 ? 0 : 1);'
+    Set-Content -Path $cprobe -Value ($cline -join "`n") -Encoding ASCII
+    $cnodeOut = ((& node $cprobe (Join-Path $extDir "client_frames.js") 2>&1) | Out-String)
+    $cnodeExit = $LASTEXITCODE
+    foreach ($cl in ($cnodeOut -split '[\r\n]+')) {
+        if ($cl.Trim().Length -gt 0) { Write-Output ("  node: " + $cl.Trim()) }
+    }
+    if ($cnodeExit -ne 0) { Write-Output "  [FAIL] client: framing behavior test exited $cnodeExit"; $lcOk = $false }
+    # anti-silent-idle (round-103 lesson): the probe must report every assert it
+    # actually ran, otherwise a probe that never starts would still look green.
+    if (-not $cnodeOut.Contains("asserts=9")) { Write-Output "  [FAIL] client: framing probe did not report its 9 asserts (silent idle?)"; $lcOk = $false }
+    Remove-Item -Force $cprobe -ErrorAction SilentlyContinue
+    & node --check (Join-Path $extDir "extension.js") 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Output "  [FAIL] client: extension.js does not parse under node --check"; $lcOk = $false }
+}
+if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant" }
+else { $fail = $fail + 1 }
+
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }
 Write-Output "all demos: dialect and graduated Zig behave identically"
