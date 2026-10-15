@@ -14,7 +14,9 @@
 //!     语言包 keywords/aliases，详情分组与 155 轮补全描述同口径（`snippets.classify` 复用）。
 //!
 //! 坐标制：LSP Position 为 0 基行 + UTF-16 码元列（默认协商制、不声明 positionEncoding）；
-//! 换算集中在 positionOfOffset/byteOfPosition 两处、单测直钉（BMP 母语一字一码元）。
+//! 换算集中于 positionOfOffset/byteOfPosition 两处纯函数。第 165 轮起有直接边界单测钉往返不变量
+//! 与 null/行越界/行尾钳位/astral 代理四支（此前仅经诊断坐标测 (0,8) 间接碰 BMP 形，astral、
+//! 行越界 `nl orelse return null`、 astral 独占行低代理查询 else 尾 null 三真支零 fired）。
 
 const std = @import("std");
 const jsonrpc = @import("jsonrpc.zig");
@@ -912,4 +914,135 @@ test "lsp.server：semanticTokens 跳过未知母语词、空文档→空流（�
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/semanticTokens/full\",\"params\":{\"textDocument\":{\"uri\":\"file:///absent.zz\"}}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"data\":[]") != null);
+}
+
+// ---------------------------------------------------------------------------
+// 第 165 轮：纯函数核直接边界护栏（此前九测全经 handle() 间接触达、下列面零直钉）
+// ---------------------------------------------------------------------------
+
+// T1：cpWidth/seqLen 的 UTF-16 码宽与退化边界。既有语义 token/坐标测全用 BMP，
+// astral（≥ 0x10000 占 2 码元）与截断/非法字节退化面此前零覆盖。
+test "lsp.server：cpWidth/seqLen UTF-16 码宽边界（astral/截断/非法）（第 165 轮）" {
+    // seqLen：首字节声明的序列字节长；截断（i+l>len）/非法前导/坏续字节一律退化 1。
+    try testing.expectEqual(@as(usize, 1), seqLen("a", 0)); // ASCII
+    try testing.expectEqual(@as(usize, 2), seqLen("\u{00E9}", 0)); // é 二字节 C3 A9
+    try testing.expectEqual(@as(usize, 3), seqLen("\u{5E38}", 0)); // 常 三字节
+    try testing.expectEqual(@as(usize, 4), seqLen("\u{1F600}", 0)); // 😀 四字节 astral
+    try testing.expectEqual(@as(usize, 4), seqLen("\u{10000}", 0)); // 四字节、恰等 0x10000 下界
+    const t4 = "\u{10000}";
+    try testing.expectEqual(@as(usize, 1), seqLen(t4[0..2], 0)); // 四字节序列仅喂前两字节 → 截断退化 1
+    try testing.expectEqual(@as(usize, 1), seqLen("\xFF", 0)); // 非法前导字节
+    try testing.expectEqual(@as(usize, 1), seqLen("\xF0x", 0)); // F0 声明四字节但长度不足
+    // cpWidth：码点 ≥ 0x10000 占 2 UTF-16 码元、BMP/坏字节占 1。
+    try testing.expectEqual(@as(usize, 1), cpWidth("a", 0));
+    try testing.expectEqual(@as(usize, 1), cpWidth("\u{5E38}", 0)); // CJK 一码元
+    try testing.expectEqual(@as(usize, 2), cpWidth("\u{10000}", 0)); // 恰等阈值 >= 0x10000 → 2（承 >=）
+    try testing.expectEqual(@as(usize, 2), cpWidth("\u{1F600}", 0)); // astral → 2
+    try testing.expectEqual(@as(usize, 1), cpWidth(t4[0..2], 0)); // 截断退化 1
+    try testing.expectEqual(@as(usize, 1), cpWidth("\xFF", 0)); // 坏字节退化 1
+}
+
+// T2：positionOfOffset/byteOfPosition 往返不变量与行越界/行尾/astral 代理三 null 支。
+// 文件头 L17「两处单测直钉」此前实为仅经诊断坐标测 (0,8) 间接碰 BMP 形，本轮坐实直钉。
+test "lsp.server：positionOfOffset/byteOfPosition 往返与行越界/行尾/null 支（第 165 轮）" {
+    // doc = 「常😀b\n」：常(3B,1元)😀(4B,2元)b(1B,1元)\n(1B)。字节 0..2 常、3..6 😀、7 b、8 \n、len=9。
+    const doc = "\u{5E38}\u{1F600}b\n";
+    // positionOfOffset：CJK 计 1 码元、astral 计 2、'\n' 后行+1 列复位、off>len 钳到 len。
+    try testing.expectEqual(@as(usize, 0), positionOfOffset(doc, 0).line);
+    try testing.expectEqual(@as(usize, 0), positionOfOffset(doc, 0).character);
+    try testing.expectEqual(@as(usize, 1), positionOfOffset(doc, 3).character); // 常 之后 = 列1（😀 起点）
+    try testing.expectEqual(@as(usize, 3), positionOfOffset(doc, 7).character); // 😀(2元) 之后 b 在列3
+    try testing.expectEqual(@as(usize, 4), positionOfOffset(doc, 8).character); // b 之后 = 列4（行尾）
+    try testing.expectEqual(@as(usize, 1), positionOfOffset(doc, 9).line); // \n 后行1
+    try testing.expectEqual(@as(usize, 0), positionOfOffset(doc, 9).character);
+    try testing.expectEqual(@as(usize, 1), positionOfOffset(doc, 9999).line); // off>len 钳到 len
+    try testing.expectEqual(@as(usize, 0), positionOfOffset(doc, 9999).character);
+    // byteOfPosition 命中 + astral 中段查询前向钳到下一码元起点。
+    try testing.expectEqual(@as(usize, 0), byteOfPosition(doc, 0, 0).?);
+    try testing.expectEqual(@as(usize, 3), byteOfPosition(doc, 0, 1).?); // 列1 = 😀 起点
+    try testing.expectEqual(@as(usize, 7), byteOfPosition(doc, 0, 2).?); // 列2 落 😀 低代理 → 前向钳到 b(字节7)
+    try testing.expectEqual(@as(usize, 7), byteOfPosition(doc, 0, 3).?); // 列3 = b
+    // 列恰等行尾 / 列越行尾 → 均钳到 '\n' 偏移 8（尾支 chars<=character → i、非 null）。
+    try testing.expectEqual(@as(usize, 8), byteOfPosition(doc, 0, 4).?);
+    try testing.expectEqual(@as(usize, 8), byteOfPosition(doc, 0, 99).?);
+    // 行越界（超出 '\n' 数）→ null（nl orelse return null 真支）。
+    try testing.expectEqual(@as(?usize, null), byteOfPosition(doc, 5, 0));
+    // 单 astral 独占行、查低代理 → 尾 else null 真支（doc2 = 「😀\n」）。
+    const doc2 = "\u{1F600}\n";
+    try testing.expectEqual(@as(?usize, null), byteOfPosition(doc2, 0, 1));
+    try testing.expectEqual(@as(usize, 0), byteOfPosition(doc2, 0, 0).?);
+    try testing.expectEqual(@as(usize, 4), byteOfPosition(doc2, 0, 2).?); // 列2 = astral 之后 = EOL('\n' 偏移4)
+    // 往返不变量：对每个码点边界偏移 o，byteOfPosition(o 的 position) 精确回得 o。
+    for ([_]usize{ 0, 3, 7, 8 }) |ob| {
+        const p = positionOfOffset(doc, ob);
+        try testing.expectEqual(ob, byteOfPosition(doc, p.line, p.character).?);
+    }
+}
+
+// T3：点链段助手空段/首点/尾点/isChainWordByte 边界。既有链测仅「标准库.调试.打印」
+// 单点干净链，相邻点空段、buffer 首点、尾点越界三边界此前零直测。
+test "lsp.server：点链段助手空段/首点/尾点/isChainWordByte 边界（第 165 轮）" {
+    // stepLeftChainSegment(text, dot_idx)：从 '.' 向左吃一个词段返段起点、空段/越界 null。
+    try testing.expectEqual(@as(?usize, 0), stepLeftChainSegment("a..b", 1)); // 常规左段：首 '.'(idx1) 左吃 'a' → 起点0
+    try testing.expectEqual(@as(?usize, null), stepLeftChainSegment(".foo", 0)); // 首点：dot_idx==0 → null
+    try testing.expectEqual(@as(?usize, null), stepLeftChainSegment("a .c", 2)); // 点前非词字节（空格）→ 空段 null
+    try testing.expectEqual(@as(?usize, 0), stepLeftChainSegment("\u{7532}.\u{4E59}", 3)); // CJK 词段整体左吃（甲占 0..2）
+    // stepRightChainSegment(text, from)：从段起点向右吃一个词段返开区间尾、空段/越界 null。
+    try testing.expectEqual(@as(?usize, null), stepRightChainSegment("a..b", 2)); // 相邻点：from 指向另一 '.' → null
+    try testing.expectEqual(@as(?usize, null), stepRightChainSegment("foo.", 4)); // 尾点越界：from>=text.len → null
+    try testing.expectEqual(@as(?usize, 3), stepRightChainSegment("a.b", 2)); // 常规右段：from2='b' → 开区间尾3
+    // isChainWordByte：≥0x80（非 ASCII）、字母数字、下划线为词字节；空格/点非。
+    try testing.expect(isChainWordByte(0x80));
+    try testing.expect(isChainWordByte('_'));
+    try testing.expect(isChainWordByte('a'));
+    try testing.expect(isChainWordByte('9'));
+    try testing.expect(!isChainWordByte(' '));
+    try testing.expect(!isChainWordByte('.'));
+}
+
+// T4：classToTokenType 图例索引全分支钉。承第 162 轮「客户端↔服务端图例同序、错序即静默
+// 错色」共享真相源的服务端一侧——既有语义 token 测仅触发 keyword(0)/comment(5)/number(6)，
+// type(1)/function(2)/variable(3) 三索引此前全库零防线。
+test "lsp.server：classToTokenType 图例索引全分支钉（承 162 共享真相源·第 165 轮）" {
+    try testing.expectEqual(@as(u8, 0), classToTokenType("关键字")); // 关键字 → keyword
+    try testing.expectEqual(@as(u8, 0), classToTokenType("字面常量")); // 字面常量 → keyword
+    try testing.expectEqual(@as(u8, 1), classToTokenType("类型")); // 类型 → type
+    try testing.expectEqual(@as(u8, 2), classToTokenType("内建函数")); // 内建函数 → function
+    try testing.expectEqual(@as(u8, 3), classToTokenType("方言词")); // 方言词 → variable
+    try testing.expectEqual(@as(u8, 3), classToTokenType("未知标签")); // 兜底 → variable
+}
+
+// T5：semanticTokensData 跨行 delta（delta_line>0 时 delta_start 取本行绝对列而非 prev_char 差）。
+// 第 161 轮语义 token 测全单行、delta_line 恒 0、跨行 else 支此前零 fired。
+test "lsp.server：semanticTokensData 跨行 delta_line/delta_start 复位（第 165 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+    // 两行：line0「 常数」(keyword、列1、2 码元) + line1「 5」(number、列1)。空格/换行不发 token。
+    const txt = " \u{5E38}\u{6570}\n 5";
+    const out = try srv.semanticTokensData(txt);
+    defer gpa.free(out);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out, .{});
+    defer parsed.deinit();
+    const root = asObject(parsed.value).?;
+    const data = switch (root.get("data").?) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 10), data.len); // 2 token × 5 元组
+    // token1 常数：[0,1,2,0,0]（首 token、同行、delta_start=1-0）
+    try testing.expectEqual(@as(i64, 0), data[0].integer); // delta_line
+    try testing.expectEqual(@as(i64, 1), data[1].integer); // delta_start
+    try testing.expectEqual(@as(i64, 2), data[2].integer); // length（两个 BMP 码元）
+    try testing.expectEqual(@as(i64, 0), data[3].integer); // type=keyword
+    // token2 数字 5（第二行）：[1,1,1,6,0]——delta_line=1、delta_start 取本行绝对列 1
+    // （非「1 - prev_char(1) = 0」；若跨行漏复位即坠 0、本断言精确抓红）
+    try testing.expectEqual(@as(i64, 1), data[5].integer); // delta_line=1（跨行）
+    try testing.expectEqual(@as(i64, 1), data[6].integer); // delta_start=本行绝对列
+    try testing.expectEqual(@as(i64, 1), data[7].integer); // length
+    try testing.expectEqual(@as(i64, 6), data[8].integer); // type=number
 }
