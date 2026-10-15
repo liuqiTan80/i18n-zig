@@ -951,6 +951,9 @@ Add-Frame '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities
 Add-Frame '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 Add-Frame '{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///g156.zz","languageId":"zig-dialect","version":1,"text":"\u5E38\u6570 a = 1\uFF0C\n"}}}'
 Add-Frame '{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///g156.zz"},"position":{"line":0,"character":0}}}'
+# semanticTokens/full on the same doc: "\u5E38\u6570 a = 1\uFF0C" -> 常数 keyword(0) then a
+# standalone ASCII letter (skipped) and the fullwidth comma (no token) -> exactly one tuple [0,0,2,0,0].
+Add-Frame '{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///g156.zz"}}}'
 Add-Frame '{"jsonrpc":"2.0","id":3,"method":"shutdown"}'
 Add-Frame '{"jsonrpc":"2.0","method":"exit"}'
 $li = Join-Path $root ".zig-cache/lsp156.in"; $lo = Join-Path $root ".zig-cache/lsp156.out"; $le = Join-Path $root ".zig-cache/lsp156.err"
@@ -967,14 +970,15 @@ Remove-Item -Force $li, $lo, $le -ErrorAction SilentlyContinue
 if ($proc.ExitCode -ne 0) { Write-Output ("  [FAIL] lsp: handshake run exited " + $proc.ExitCode + " (expected 0)"); $lspOk = $false }
 if ($leString.Trim().Length -ne 0) { Write-Output ("  [FAIL] lsp: human text leaked to stderr: " + $leString.Trim()); $lspOk = $false }
 $msgs = @([regex]::Split($ltxt, "Content-Length:\s*\d+`r`n`r`n") | Where-Object { $_.Trim().Length -gt 0 })
-if ($msgs.Count -ne 4) { Write-Output ("  [FAIL] lsp: expected exactly 4 framed messages, got " + $msgs.Count); $lspOk = $false }
+if ($msgs.Count -ne 5) { Write-Output ("  [FAIL] lsp: expected exactly 5 framed messages, got " + $msgs.Count); $lspOk = $false }
 if ($lspOk) {
     $N_cifa = Native 0x8BCD, 0x6CD5        # ci-fa (lexical diagnostics kind)
     $N_gjz  = Native 0x5173, 0x952E, 0x5B57 # guan-jian-zi (hover group label)
-    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form)"; $lspOk = $false }
+    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true') -and $msgs[0].Contains('"semanticTokensProvider"'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form / semanticTokensProvider)"; $lspOk = $false }
     if (-not ($msgs[1].Contains('publishDiagnostics') -and $msgs[1].Contains('file:///g156.zz') -and $msgs[1].Contains($N_cifa))) { Write-Output "  [FAIL] lsp: didOpen did not publish native-lexical diagnostics for the fullwidth comma"; $lspOk = $false }
     if (-not ($msgs[2].Contains('"id":2') -and $msgs[2].Contains('const') -and $msgs[2].Contains($N_gjz))) { Write-Output "  [FAIL] lsp: hover on chang-shu did not resolve to const/keyword-group"; $lspOk = $false }
-    if (-not ($msgs[3].Contains('"id":3') -and $msgs[3].Contains('"result":null'))) { Write-Output "  [FAIL] lsp: shutdown reply not result-null"; $lspOk = $false }
+    if (-not ($msgs[3].Contains('"id":4') -and $msgs[3].Contains('"data":[0,0,2,0,0') -and -not $msgs[3].Contains('"data":[]'))) { Write-Output "  [FAIL] lsp: semanticTokens/full did not return the chang-shu keyword tuple [0,0,2,0,0]"; $lspOk = $false }
+    if (-not ($msgs[4].Contains('"id":3') -and $msgs[4].Contains('"result":null'))) { Write-Output "  [FAIL] lsp: shutdown reply not result-null"; $lspOk = $false }
     # framing self-consistency: every declared Content-Length must match its body bytes
     $pos = 0
     while ($pos -lt $raw.Length) {
@@ -991,7 +995,7 @@ if ($lspOk) {
     }
     if ($lspOk -and $pos -ne $raw.Length) { Write-Output "  [FAIL] lsp: trailing bytes after last frame"; $lspOk = $false }
 }
-if ($lspOk) { Write-Output "  [PASS] lsp guard: full handshake over real stdio -- init/didOpen-publish/hover/shutdown/exit, 4 frames byte-consistent, stderr clean, exit 0" }
+if ($lspOk) { Write-Output "  [PASS] lsp guard: full handshake over real stdio -- init/didOpen-publish/hover/semanticTokens/shutdown/exit, 5 frames byte-consistent, stderr clean, exit 0" }
 else { $fail = $fail + 1 }
 
 # --- zzc lsp on-save SEMANTIC diagnostics e2e guard (round 159). didSave must trigger a

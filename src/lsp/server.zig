@@ -236,8 +236,10 @@ pub const Server = struct {
         if (std.mem.eql(u8, method, "initialize")) {
             // textDocumentSync 升级为对象形（第 159 轮）：声明 openClose + 全量 change + save（includeText:false，
             // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
+            // semanticTokensProvider（第 161 轮）：声明语义 token 图例（token 类型索引即下表顺序）+ full 供给，
+            // 把方言母语词汇的语义高亮据 LSP 标准面供任意客户端（编辑端渲染留 162）。
             const res =
-                \\{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"hoverProvider":true},"serverInfo":{"name":"zzc-lsp"}}
+                \\{"capabilities":{"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}},"hoverProvider":true,"semanticTokensProvider":{"legend":{"tokenTypes":["keyword","type","function","variable","string","comment","number"],"tokenModifiers":[]},"full":true}},"serverInfo":{"name":"zzc-lsp"}}
             ;
             try self.respond(out, idv, res);
             return;
@@ -297,6 +299,10 @@ pub const Server = struct {
         }
         if (std.mem.eql(u8, method, "textDocument/hover")) {
             try self.hover(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, "textDocument/semanticTokens/full")) {
+            try self.semanticTokensFull(out, idv, params_obj);
             return;
         }
 
@@ -494,6 +500,80 @@ pub const Server = struct {
         defer gpa.free(range);
         return std.fmt.allocPrint(gpa, "{{\"contents\":{{\"kind\":\"markdown\",\"value\":{s}}},\"range\":{s}}}", .{ md_js, range }) catch return null;
     }
+
+    /// `textDocument/semanticTokens/full`（第 161 轮）：对文档全文产语义 token 稀疏流。
+    /// 语义高亮仅「被请求才返回」——编辑端未注册 provider 前不应用、无 tmLanguage 降级风险。
+    fn semanticTokensFull(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var data_json: ?[]const u8 = null;
+        if (params_obj) |p| {
+            if (objIn(p.get("textDocument"))) |td| {
+                if (strField(td, "uri")) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        data_json = self.semanticTokensData(text) catch null;
+                    }
+                }
+            }
+        }
+        const dj = data_json orelse "{\"data\":[]}"; // 文档不在表/无参/分配失败 → 空流（与 hover 缺文本同策）
+        try self.respond(out, idv, dj);
+        if (data_json) |d| gpa.free(d);
+    }
+
+    /// 纯编码器：按源码序遍历可发词元，产 LSP `data` 五元组稀疏数组
+    /// `[deltaLine, deltaStart, length, tokenType, tokenModifiers]`（坐标 0 基行 + UTF-16 码元列、
+    /// modifiers 恒 0、token 均不跨行）。分类全取 `lexer`+`lang.keywords`+`classify`、不硬编码词表。
+    fn semanticTokensData(self: *Server, text: []const u8) ![]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(gpa);
+        try out.appendSlice(gpa, "{\"data\":[");
+
+        var prev_line: usize = 0;
+        var prev_char: usize = 0;
+        var first = true;
+        for (toks) |t| {
+            const tt = self.tokenTypeOf(t, text) orelse continue;
+            const pos = positionOfOffset(text, t.off);
+            var w: usize = 0;
+            var i = t.off;
+            while (i < t.off + t.len) : (i += seqLen(text, i)) w += cpWidth(text, i);
+            const delta_line = pos.line - prev_line;
+            const delta_start = if (delta_line == 0) pos.character - prev_char else pos.character;
+            if (!first) try out.append(gpa, ',');
+            first = false;
+            const tup = try std.fmt.allocPrint(gpa, "{d},{d},{d},{d},0", .{ delta_line, delta_start, w, tt });
+            defer gpa.free(tup);
+            try out.appendSlice(gpa, tup);
+            prev_line = pos.line;
+            prev_char = pos.character;
+        }
+        try out.appendSlice(gpa, "]}");
+        return out.toOwnedSlice(gpa);
+    }
+
+    /// 词元 → LSP tokenTypes 图例索引（null = 不发此 token）。
+    /// 跳过策略：未命中 keywords 的母语词/标准库别名段/非数字 ascii 词/punct 一律不发——
+    /// 保 tmLanguage 既有着色不被降级、且不越俾符号分析区分标识符作用域（超 MVP）。
+    fn tokenTypeOf(self: *Server, t: lexer.Token, text: []const u8) ?u8 {
+        return switch (t.kind) {
+            .comment => 5, // comment
+            .string, .char, .multiline, .symbol => 4, // string
+            .nonascii_word => blk: {
+                const word = text[t.off..][0..t.len];
+                const v = self.lang.keywords.get(word) orelse break :blk null;
+                break :blk classToTokenType(snippets.classify(v));
+            },
+            .ascii_word => blk: {
+                const word = text[t.off..][0..t.len];
+                break :blk if (word.len > 0 and std.ascii.isDigit(word[0])) @as(u8, 6) else null; // number
+            },
+            .punct => null,
+        };
+    }
 };
 
 /// 从 `.` 位向左吃一个词段（词字节=非 ASCII 或 [0-9A-Za-z_]），返回段起点；空段 null。
@@ -515,6 +595,15 @@ fn stepRightChainSegment(text: []const u8, from: usize) ?usize {
 
 fn isChainWordByte(c: u8) bool {
     return c >= 0x80 or std.ascii.isAlphanumeric(c) or c == '_';
+}
+
+/// `snippets.classify` 词类标签 → LSP tokenTypes 图例索引（与 initialize 图例顺序同绑）。
+fn classToTokenType(group: []const u8) u8 {
+    if (std.mem.eql(u8, group, "关键字")) return 0;
+    if (std.mem.eql(u8, group, "字面常量")) return 0;
+    if (std.mem.eql(u8, group, "类型")) return 1;
+    if (std.mem.eql(u8, group, "内建函数")) return 2;
+    return 3; // 方言词 → variable
 }
 
 // ---------------------------------------------------------------------------
@@ -545,6 +634,8 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":7") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"hoverProvider\":true") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}}") != null);
+    // 第 161 轮：新增语义 token 供给能力（图例七类 + full），供任意 LSP 客户端语义高亮。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"semanticTokensProvider\":{\"legend\":{\"tokenTypes\":[\"keyword\",\"type\",\"function\",\"variable\",\"string\",\"comment\",\"number\"],\"tokenModifiers\":[]},\"full\":true}") != null);
 }
 
 test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 UTF-16（第 156 轮）" {
@@ -751,4 +842,74 @@ test "lsp.server：didSave 合并语义项、didOpen 不含语义（保存门控
     // 未 open 的 uri：didSave 无文本可算，静默不发布。
     try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"file:///never.zz\"}}}", &out);
     try testing.expectEqual(@as(usize, 0), out.items.len);
+}
+
+test "lsp.server：semanticTokens/full 基本映射 + delta 编码（第 161 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    // 常数(→const 关键字、type0) 甲(未入 keywords、不发) = (punct、不发) 1(数字、type6) // 注(注释、type5)
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///sem.zz\",\"text\":\"常数 甲 = 1 // 注\"}}}", &out);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/semanticTokens/full\",\"params\":{\"textDocument\":{\"uri\":\"file:///sem.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+    defer parsed.deinit();
+    const root = asObject(parsed.value).?;
+    try testing.expectEqual(@as(i64, 5), intField(root, "id").?);
+    const result = objIn(root.get("result")).?;
+    const data = switch (result.get("data").?) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    // 3 个可发 token × 5 元组 = 15（甲/= 被跳过、故仅 3）
+    try testing.expectEqual(@as(usize, 15), data.len);
+    // token1 常数：[0,0,2,0,0]
+    try testing.expectEqual(@as(i64, 0), data[0].integer);
+    try testing.expectEqual(@as(i64, 0), data[1].integer);
+    try testing.expectEqual(@as(i64, 2), data[2].integer); // length：两个 BMP 码元
+    try testing.expectEqual(@as(i64, 0), data[3].integer); // type=keyword
+    // token2 数字 1：同行、delta_start=7（常(0)数(1)空(2)甲(3)空(4)=(5)空(6)1(7)）、type=number(6)
+    try testing.expectEqual(@as(i64, 0), data[5].integer); // delta_line
+    try testing.expectEqual(@as(i64, 7), data[6].integer); // delta_start
+    try testing.expectEqual(@as(i64, 1), data[7].integer); // length
+    try testing.expectEqual(@as(i64, 6), data[8].integer); // type=number
+    // token3 注释 // 注：同行、delta_start=2（自 1 后）、length=4、type=comment(5)
+    try testing.expectEqual(@as(i64, 2), data[11].integer); // delta_start
+    try testing.expectEqual(@as(i64, 4), data[12].integer); // length
+    try testing.expectEqual(@as(i64, 5), data[13].integer); // type=comment
+}
+
+test "lsp.server：semanticTokens 跳过未知母语词、空文档→空流（第 161 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    // 纯母语标识符（均未入 keywords）+ 空文档 → 无可发 token
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///id.zz\",\"text\":\"甲乙 丙\"}}}", &out);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/semanticTokens/full\",\"params\":{\"textDocument\":{\"uri\":\"file:///id.zz\"}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"data\":[]") != null);
+    freeOut(gpa, &out);
+
+    // 未 open 的 uri → 空流（不报错）
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/semanticTokens/full\",\"params\":{\"textDocument\":{\"uri\":\"file:///absent.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"data\":[]") != null);
 }
