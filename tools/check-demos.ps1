@@ -1097,6 +1097,15 @@ $extSrc = Get-Content -Raw (Join-Path $extDir "extension.js") -Encoding UTF8
 if (-not $extSrc.Contains("const LANGUAGE_ID = 'zig-dialect'")) { Write-Output "  [FAIL] client: LANGUAGE_ID constant no longer matches manifest language id"; $lcOk = $false }
 if (-not $extSrc.Contains("'lsp'")) { Write-Output "  [FAIL] client: extension no longer spawns the lsp subcommand"; $lcOk = $false }
 if ($extSrc.Contains("registerCompletionItemProvider")) { Write-Output "  [FAIL] client: completion registered via LSP although README keeps it declarative"; $lcOk = $false }
+# client didSave wiring (round 160): the client must flip the didSave capability,
+# register a save handler, and emit a uri-only textDocument/didSave (server declares
+# save{includeText:false}). The raw-JSON-RPC on-save guard (round 159) already proves
+# the server side; these pins close the client end-to-end gap in the editor host.
+if (-not $extSrc.Contains("didSave: true")) { Write-Output "  [FAIL] client: didSave capability not declared true (server on-save never driven)"; $lcOk = $false }
+if (-not $extSrc.Contains("onDidSaveTextDocument")) { Write-Output "  [FAIL] client: onDidSaveTextDocument handler missing (editor save not wired)"; $lcOk = $false }
+if (-not $extSrc.Contains("textDocument/didSave")) { Write-Output "  [FAIL] client: didSave notification never sent"; $lcOk = $false }
+$saveLine = ($extSrc -split "`n" | Where-Object { $_ -match 'textDocument/didSave' -and $_ -match 'send' }) -join "`n"
+if (-not ($saveLine.Length -gt 0) -or ($saveLine -match 'text:')) { Write-Output "  [FAIL] client: didSave must be uri-only (includeText:false contract broken by inline text)"; $lcOk = $false }
 $frs = Get-Content -Raw (Join-Path $extDir "client_frames.js") -Encoding UTF8
 if (-not $frs.Contains("10 * 1024 * 1024")) { Write-Output "  [FAIL] client: framing cap no longer spelled 10 * 1024 * 1024 (server max_frame_len drift risk)"; $lcOk = $false }
 if (-not $frs.Contains("toLowerCase")) { Write-Output "  [FAIL] client: header name match lost case-insensitivity (server parses case-insensitive)"; $lcOk = $false }
@@ -1158,7 +1167,7 @@ if (-not $node) {
     & node --check (Join-Path $extDir "extension.js") 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "  [FAIL] client: extension.js does not parse under node --check"; $lcOk = $false }
 }
-if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone)" }
+if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit)" }
 else { $fail = $fail + 1 }
 
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }

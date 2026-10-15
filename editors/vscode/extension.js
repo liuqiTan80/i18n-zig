@@ -4,6 +4,10 @@
 // (fast checks: fullwidth / lexical / pure-native) and textDocument/hover.
 // Completions and highlighting stay declarative (rounds 154/155), so this
 // file deliberately registers NO completion provider.
+// Round 160: the client now declares didSave and fires textDocument/didSave on
+// editor save, which drives the round-159 server-side on-save semantic
+// diagnostics end-to-end (previously reachable only via the declarative
+// task/problemMatcher).
 'use strict';
 
 const vscode = require('vscode');
@@ -152,7 +156,7 @@ function activate(context) {
     clientInfo: { name: 'zzc-vscode-client' },
     capabilities: {
       textDocument: {
-        synchronization: { didSave: false },
+        synchronization: { didSave: true }, // round 160: server declares save{includeText:false}; we drive it on save
         hover: { contentFormat: ['markdown', 'plaintext'] },
       },
       window: {},
@@ -170,6 +174,11 @@ function activate(context) {
     vscode.workspace.onDidOpenTextDocument(onOpened),
     vscode.workspace.onDidChangeTextDocument((e) => fullChange(e.document)),
     vscode.workspace.onDidCloseTextDocument(onClose),
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (doc.languageId !== LANGUAGE_ID) return;
+      // includeText:false -> uri only; server reads its own doc table (kept current by didChange).
+      send({ jsonrpc: '2.0', method: 'textDocument/didSave', params: { textDocument: { uri: doc.uri.toString() } } });
+    }),
     vscode.languages.registerHoverProvider({ language: LANGUAGE_ID }, {
       provideHover: async (doc, pos) => {
         if (!ready) return null;
