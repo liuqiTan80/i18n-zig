@@ -1213,3 +1213,95 @@ test "lsp.server：idJson 对字符串 id 特殊字符做 JSON 转义（第 166 
 
     // 断言数： 4
 }
+
+// 第 170 轮·JSON-RPC 报文骨架构建器零直调面增量审计（证伪撤号不占号）。
+// 承 108-129/165/166 通读模块证伪方法论：下列五函数（rangeJson/strField/resultResponse/
+// errorResponse/itemsJoinAndFree）156/159/166 仅经 handle 端到端间接触达、全仓零直调。
+// 逐函数推演 + 两处调用点 errdefer 对账坐实皆 stated-behavior 无在线缺陷（itemsJoinAndFree
+// 错误路径下 items 原样留、由调用方 publishSave/diagnosticsJson 的 errdefer free 元素、无泄）
+// →不占 D 号，落直钉测补零防线。load-bearing 亮点：errorResponse 对**客户端可控**的 method
+// 串（L314 经 strField 取入）走 jsonrpc.jsonString 转义——缺之则 method 含引号即破帧结构（承 166
+// idJson 同面·156 jsonString 自测钉的是转义器本体、钉不到 errorResponse 是否接线用它）。
+
+// T1：strField 三分支（命中字符串/命中非字符串/缺键） + resultResponse 骨架 verbatim 嵌套 +
+// errorResponse 客户端可控 message 经 jsonString 转义不破 JSON 结构（reparse 不变量）。
+test "lsp.server：strField 三分支 + result/errorResponse 骨架与 message 转义（承 166 idJson 同面·第 170 轮）" {
+    var asserts: usize = 0;
+    const gpa = testing.allocator;
+
+    // strField：命中 .string 取值、命中非字符串（integer/bool）与缺键皆 null。
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, "{\"method\":\"foo\",\"id\":7,\"flag\":true}", .{});
+    defer parsed.deinit();
+    const obj = asObject(parsed.value).?;
+    try testing.expectEqualStrings("foo", strField(obj, "method").?);
+    asserts += 1;
+    try testing.expect(strField(obj, "id") == null); // integer 非字符串
+    asserts += 1;
+    try testing.expect(strField(obj, "absent") == null); // 缺键
+    asserts += 1;
+
+    // resultResponse：id/result 原样（{s}）嵌入，帧恰形且可 reparse 出 result 对象。
+    const rs = try resultResponse(gpa, "1", "{\"ok\":true}");
+    defer gpa.free(rs);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}", rs);
+    asserts += 1;
+    var pr = try std.json.parseFromSlice(std.json.Value, gpa, rs, .{});
+    defer pr.deinit();
+    try testing.expect(asObject(pr.value).?.get("result") != null);
+    asserts += 1;
+
+    // errorResponse：message 含引号+反斜杠（模拟客户端 method 串）须被转义——缺转义则 parseFromSlice 即失败。
+    const emsg = "不支持的方法：x\"y\\z";
+    const er = try errorResponse(gpa, "2", -32601, emsg);
+    defer gpa.free(er);
+    var pe = try std.json.parseFromSlice(std.json.Value, gpa, er, .{});
+    defer pe.deinit();
+    const eerr = asObject(asObject(pe.value).?.get("error").?).?;
+    try testing.expectEqualStrings(emsg, strField(eerr, "message").?);
+    asserts += 1;
+    try testing.expectEqual(@as(i64, -32601), intField(eerr, "code").?);
+    asserts += 1;
+
+    std.debug.print("T1 asserts={d}\n", .{asserts});
+}
+
+// T2：rangeJson 字节区间→Range（ASCII 跨行 + CJK 每 3 字节 BMP 汉字 = 1 UTF-16 码元列） +
+// itemsJoinAndFree 空→[]/多元素逗号拼接不加引号（元素本已是 JSON 串）/成功后接管清空元素。
+test "lsp.server：rangeJson 字节区间→Range 与 itemsJoinAndFree 拼数组+元素接管（第 170 轮）" {
+    var asserts: usize = 0;
+    const gpa = testing.allocator;
+
+    // rangeJson：text "ab\ncd"、off 3→{line1,char0}、off 5→{line1,char2}（跨行、行内 ASCII）。
+    const ascii = "ab\ncd";
+    const r1 = try rangeJson(gpa, ascii, 3, 5);
+    defer gpa.free(r1);
+    try testing.expectEqualStrings("{\"start\":{\"line\":1,\"character\":0},\"end\":{\"line\":1,\"character\":2}}", r1);
+    asserts += 1;
+
+    // rangeJson：CJK "甲乙"、off 0→{0,0}、off 3→{0,1}——3 字节 BMP 汉字经 cpWidth 计 1 UTF-16 码元。
+    const cjk = "甲乙";
+    const r2 = try rangeJson(gpa, cjk, 0, 3);
+    defer gpa.free(r2);
+    try testing.expectEqualStrings("{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":1}}", r2);
+    asserts += 1;
+
+    // itemsJoinAndFree 空清单→"[]"。
+    var l0: std.ArrayList([]const u8) = .empty;
+    const j0 = try itemsJoinAndFree(gpa, &l0);
+    defer gpa.free(j0);
+    try testing.expectEqualStrings("[]", j0);
+    asserts += 1;
+
+    // itemsJoinAndFree 两元素：仅逗号拼接、原样嵌入（不加引号）；成功后 clearAndFree 使 items 空（元素所有权已接管）。
+    var l2: std.ArrayList([]const u8) = .empty;
+    try l2.append(gpa, try gpa.dupe(u8, "{\"a\":1}"));
+    try l2.append(gpa, try gpa.dupe(u8, "{\"b\":2}"));
+    const j2 = try itemsJoinAndFree(gpa, &l2);
+    defer gpa.free(j2);
+    try testing.expectEqualStrings("[{\"a\":1},{\"b\":2}]", j2);
+    asserts += 1;
+    try testing.expectEqual(@as(usize, 0), l2.items.len);
+    asserts += 1;
+
+    std.debug.print("T2 asserts={d}\n", .{asserts});
+}
