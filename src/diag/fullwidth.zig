@@ -799,3 +799,111 @@ test "check 作用域与首命中短路：串/注释天然不参与、多危险�
         try std.testing.expectEqualStrings(";", vs[0].ascii);
     }
 }
+
+// 护栏（第 176 轮证伪落位）：`invisibleFormHint`（L193·仅经 `check` L311 间接触达、全仓零直调）
+// 依赖两个私有纯谓词 `isInvisibleSpace`（L157）/ `isZeroWidthFormat`（L172）划分「不可见字符总网」的
+// 两类归属——空格类→提示「改用半角空格」（ascii=" "）、零宽/格式类→提示「请删除」（ascii=""）；二者皆
+// 不落的字符透传给逐码点白名单泛拒（对肉眼不可见字符极为误导）。第 126 轮直钉了 `isAllowedScalar` 与
+// `fullwidthFormHint` 的边界，但这两个 switch 集合的每条区间含端性、界外一格、两集互斥、以及 0x2065
+// 间隙全库零直钉：现有测仅经 `check` 碰了 U+2009/U+FEFF/U+2060/U+200B 四个代表点。误删某区间端点（如
+// 把 0x205F 那格漏出、或将 0x202A...0x202E 收窄）即令该不可见字符静默降级为泛白名单拒绝、无测可红。
+// 本测直调逐点钉两集含端/界外一格 + 邻域全扫互斥不变量 + 0x2065 双假间隙。
+test "isInvisibleSpace/isZeroWidthFormat 不可见字符总网双集合边界直钉：区间含端性 + 界外一格 + 两集互斥 + 0x2065 间隙（invisibleFormHint 独一判据、零直调，第 176 轮证伪落位）" {
+    // isInvisibleSpace 集合成员（逐点含端 + 界外一格）
+    try std.testing.expect(isInvisibleSpace(0x1680)); // 欧甘空格（孤立点）
+    try std.testing.expect(!isInvisibleSpace(0x167F));
+    try std.testing.expect(!isInvisibleSpace(0x1681));
+    try std.testing.expect(isInvisibleSpace(0x2000)); // EN QUAD 下界含端
+    try std.testing.expect(isInvisibleSpace(0x2005)); // 区间内部
+    try std.testing.expect(isInvisibleSpace(0x200A)); // HAIR SPACE 上界含端
+    try std.testing.expect(!isInvisibleSpace(0x200B)); // 上界外一格（此点属零宽集、非空格集）
+    try std.testing.expect(isInvisibleSpace(0x2028)); // 行分隔符
+    try std.testing.expect(isInvisibleSpace(0x2029)); // 段分隔符
+    try std.testing.expect(!isInvisibleSpace(0x2027));
+    try std.testing.expect(!isInvisibleSpace(0x202A)); // 此点属零宽集
+    try std.testing.expect(isInvisibleSpace(0x202F)); // 窄不间断空格（孤立点）
+    try std.testing.expect(!isInvisibleSpace(0x202E));
+    try std.testing.expect(!isInvisibleSpace(0x2030));
+    try std.testing.expect(isInvisibleSpace(0x205F)); // 中数学空格（孤立点）
+    try std.testing.expect(!isInvisibleSpace(0x205E));
+    try std.testing.expect(!isInvisibleSpace(0x2060)); // 此点属零宽集
+    try std.testing.expect(!isInvisibleSpace('a')); // 非本集合的普通/字母/汉字码点恒假
+    try std.testing.expect(!isInvisibleSpace(0x4E00));
+
+    // isZeroWidthFormat 集合成员（逐点含端 + 界外一格）
+    try std.testing.expect(isZeroWidthFormat(0x00AD)); // 软连字符
+    try std.testing.expect(!isZeroWidthFormat(0x00AC));
+    try std.testing.expect(!isZeroWidthFormat(0x00AE));
+    try std.testing.expect(isZeroWidthFormat(0x180E)); // 蒙古元音分隔符
+    try std.testing.expect(!isZeroWidthFormat(0x180D));
+    try std.testing.expect(!isZeroWidthFormat(0x180F));
+    try std.testing.expect(isZeroWidthFormat(0x200B)); // 零宽空格
+    try std.testing.expect(isZeroWidthFormat(0x200C));
+    try std.testing.expect(isZeroWidthFormat(0x200D)); // 零宽连字
+    try std.testing.expect(isZeroWidthFormat(0x200E));
+    try std.testing.expect(isZeroWidthFormat(0x200F)); // 右到左标记
+    try std.testing.expect(!isZeroWidthFormat(0x2010)); // 区间上界外一格
+    try std.testing.expect(isZeroWidthFormat(0x202A)); // bidi 嵌入下界含端
+    try std.testing.expect(isZeroWidthFormat(0x202C)); // 内部
+    try std.testing.expect(isZeroWidthFormat(0x202E)); // bidi 覆盖上界含端
+    try std.testing.expect(!isZeroWidthFormat(0x2029)); // 下界外一格（属空格集）
+    try std.testing.expect(!isZeroWidthFormat(0x202F)); // 上界外一格（属空格集）
+    try std.testing.expect(isZeroWidthFormat(0x2060)); // 单词连接符下界含端
+    try std.testing.expect(isZeroWidthFormat(0x2062)); // 内部
+    try std.testing.expect(isZeroWidthFormat(0x2064)); // 隐形运算符上界含端
+    try std.testing.expect(!isZeroWidthFormat(0x2065)); // ★间隙：两集皆不含（2060-2064 / 2066-2069 留空 2065）
+    try std.testing.expect(isZeroWidthFormat(0x2066)); // bidi 隔离下界含端
+    try std.testing.expect(isZeroWidthFormat(0x2069)); // 上界含端
+    try std.testing.expect(!isZeroWidthFormat(0x206A)); // 界外一格
+    try std.testing.expect(!isZeroWidthFormat(0x205F)); // 下界外（属空格集）
+    try std.testing.expect(isZeroWidthFormat(0xFEFF)); // BOM / 零宽不换行空格
+    try std.testing.expect(!isZeroWidthFormat(0xFE00));
+    try std.testing.expect(!isZeroWidthFormat('a'));
+
+    // 两集互斥不变量：邻域全扫不得同时为真（若误把某点并入两集，invisibleFormHint 先判空格类会掩盖零宽语义）
+    for (0x1600..0x2100) |cp| {
+        const p: u21 = @intCast(cp);
+        try std.testing.expect(!(isInvisibleSpace(p) and isZeroWidthFormat(p)));
+    }
+    // 0x2065 间隙双向坐实：既非空格亦非零宽（防有人补区间补过头把 2065 误并入致语义漂移）
+    try std.testing.expect(!isInvisibleSpace(0x2065));
+    try std.testing.expect(!isZeroWidthFormat(0x2065));
+}
+
+// 护栏（第 176 轮证伪落位）：`invisibleFormHint` 全仓零直调（仅经 `check` L311 间接触达）。既有测经
+// `check` 只喂空格/零宽各代表点、且从未断言其返回结构 FwHint 的 at/len/danger/ascii/label 五字段真形。
+// 本测直调钉住三类分派与首命中：①空格类→ascii " "、label「不可见空格」；②零宽类→ascii ""、label 含
+// 「零宽/格式控制字符」；③正常/合法词元→null（交由白名单或放行）；④词元内含多个不可见字符取首个（字节偏移 at 精确）。
+test "invisibleFormHint 分派与首命中直钉：空格类→半角空格、零宽类→空替换、正常词元→null（check 不可见总网独一防线、零直调，第 176 轮证伪落位）" {
+    // ① 空格类（U+205F 中数学空格、不在危险表也不在全角变体区）→「不可见空格」、建议半角一个空格
+    {
+        const h = invisibleFormHint("\u{205F}") orelse return error.ExpectedHint;
+        try std.testing.expectEqualStrings("不可见空格", h.label);
+        try std.testing.expectEqualStrings(" ", h.ascii);
+        try std.testing.expectEqual(@as(usize, 0), h.at);
+        try std.testing.expectEqual(@as(usize, 3), h.len); // U+205F = E2 81 9F（3 字节）
+        try std.testing.expectEqualStrings("\u{205F}", h.danger);
+    }
+    // ② 零宽/格式类（U+200D 零宽连字）→无可见半角替换（ascii 空）、label 含「零宽/格式控制字符」
+    {
+        const h = invisibleFormHint("\u{200D}") orelse return error.ExpectedHint;
+        try std.testing.expectEqual(@as(usize, 0), h.ascii.len);
+        try std.testing.expect(std.mem.indexOf(u8, h.label, "零宽/格式控制字符") != null);
+        try std.testing.expectEqual(@as(usize, 3), h.len); // U+200D = E2 80 8D
+    }
+    // ③ 正常 CJK 词元无可命中 → null（不误触发不可见网、交由白名单放行合法汉字）
+    try std.testing.expect(invisibleFormHint("\u{4E00}\u{4E8C}") == null);
+    // ④ 首命中字节偏移：「名」(E5 90 8D，3 字节) 后接零宽空格 U+200B → at=3、len=3、归零宽类
+    {
+        const h = invisibleFormHint("\u{540D}\u{200B}") orelse return error.ExpectedHint;
+        try std.testing.expectEqual(@as(usize, 3), h.at);
+        try std.testing.expectEqual(@as(usize, 3), h.len);
+        try std.testing.expect(std.mem.indexOf(u8, h.label, "零宽/格式控制字符") != null);
+    }
+    // ⑤ 首命中位置优先：词元同时含空格类 U+205F（首）与后随零宽 U+200B，须返回首个（空格类、at=0）
+    {
+        const h = invisibleFormHint("\u{205F}\u{200B}") orelse return error.ExpectedHint;
+        try std.testing.expectEqual(@as(usize, 0), h.at);
+        try std.testing.expectEqualStrings("不可见空格", h.label);
+    }
+}
