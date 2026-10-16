@@ -35,13 +35,20 @@ fn emitAlternation(out: *std.ArrayList(u8), gpa: std.mem.Allocator, words: []con
     out.appendSlice(gpa, ")") catch @panic("OOM");
 }
 
-/// 转义 Oniguruma 正则特殊字符并输出 JSON 安全形（每个 `\` 变为 `\\`）。
+/// 转义 Oniguruma 正则特殊字符并输出 JSON 安全形：正则元字符前缀一个反斜杠、
+/// 该反斜杠在 JSON 里再翻倍为 `\\`（故输出 3 字节 `\.` 形）；但字面反斜杠 `\`
+/// 本身在正则里须先转义成 `\\`、再按 JSON 每根翻倍 → 4 字节 `\\\\`（D55：旧通用臂
+/// 对反斜杠只产 3 字节成奇数、破坏 JSON）。
 fn escapeRegex(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u8) void {
     for (s) |c| {
         switch (c) {
-            '.', '*', '+', '?', '{', '}', '(', ')', '[', ']', '|', '\\', '^', '$' => {
-                out.appendSlice(gpa, "\\\\") catch @panic("OOM"); // JSON: two backslashes
+            '.', '*', '+', '?', '{', '}', '(', ')', '[', ']', '|', '^', '$' => {
+                out.appendSlice(gpa, "\\\\") catch @panic("OOM"); // JSON: 一根正则转义反斜杠 = 两字节
                 out.append(gpa, c) catch @panic("OOM");
+            },
+            '\\' => {
+                // 字面反斜杠：正则 `\\` 的 JSON 编码 = 4 字节 `\\\\`。
+                out.appendSlice(gpa, "\\\\\\\\") catch @panic("OOM");
             },
             '"' => {
                 out.appendSlice(gpa, "\\\"") catch @panic("OOM");
@@ -281,4 +288,85 @@ test "tmlang.generate：空 Pack 不崩溃、输出有效 JSON 骨架（第 154 
     // 至少包含 scopeName 和空模式组。
     try testing.expect(std.mem.indexOf(u8, json_bytes, "\"scopeName\"") != null);
     try testing.expect(std.mem.indexOf(u8, json_bytes, "(?!)") != null); // 空组占位
+}
+
+test "tmlang.wordLess：长度降序 + 同长字节字典序升序 tie-break（第 167 轮）" {
+    var arr = [_]Word{
+        .{ .text = "bb", .len = 2 },
+        .{ .text = "ab", .len = 2 },
+        .{ .text = "ccc", .len = 3 },
+        .{ .text = "a", .len = 1 },
+    };
+    std.mem.sort(Word, &arr, {}, wordLess);
+    // 长者优先。
+    try testing.expectEqualStrings("ccc", arr[0].text);
+    // 同长按字节字典序升序（确定性）。
+    try testing.expectEqualStrings("ab", arr[1].text);
+    try testing.expectEqualStrings("bb", arr[2].text);
+    try testing.expectEqualStrings("a", arr[3].text);
+    // 严格弱序：同元素不自反（保 alternation 排序稳定前提）。
+    try testing.expect(!wordLess({}, .{ .text = "x", .len = 1 }, .{ .text = "x", .len = 1 }));
+}
+
+test "tmlang.escapeRegex：正则元字符 JSON 转义 + 反斜杠 4 字节 + 引号 + 透传（第 167 轮·D55）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    inline for ([_]struct { in: []const u8, exp: []const u8 }{
+        .{ .in = "\\", .exp = "\\\\\\\\" }, // 单反斜杠 → 4 字节（D55：旧形仅 3 字节）
+        .{ .in = "a.b", .exp = "a\\\\.b" }, // 点号 → \\. （3 字节正则转义）
+        .{ .in = "c*d", .exp = "c\\\\*d" }, // 星号同理
+        .{ .in = "a\"b", .exp = "a\\\"b" }, // 引号 → \"
+        .{ .in = "\u{5e38}\u{6570}", .exp = "\u{5e38}\u{6570}" }, // CJK 透传
+        .{ .in = "abc", .exp = "abc" }, // ASCII 透传
+    }) |c| {
+        var out: std.ArrayList(u8) = .empty;
+        escapeRegex(&out, gpa, c.in);
+        try testing.expectEqualStrings(c.exp, out.items);
+    }
+}
+
+test "tmlang.jsonEscape：控制字符/引号/反斜杠转义臂 + reparse 不变量（第 167 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    inline for ([_]struct { in: []const u8, exp: []const u8 }{
+        .{ .in = "\n", .exp = "\\n" },
+        .{ .in = "\t", .exp = "\\t" },
+        .{ .in = "\r", .exp = "\\r" },
+        .{ .in = "\x01", .exp = "\\u0001" }, // c < 0x20 → \u00XX
+        .{ .in = "\"", .exp = "\\\"" },
+        .{ .in = "\\", .exp = "\\\\" }, // 单反斜杠 → 2 字节（jsonEscape 本就正确，区 escapeRegex）
+        .{ .in = "abc", .exp = "abc" },
+        .{ .in = "\u{5e38}\u{6570}", .exp = "\u{5e38}\u{6570}" },
+    }) |c| {
+        var out: std.ArrayList(u8) = .empty;
+        jsonEscape(&out, gpa, c.in);
+        try testing.expectEqualStrings(c.exp, out.items);
+    }
+
+    // reparse 不变量：转义串包进 JSON 字符串值后能解回原串。
+    const src = "a\"b\\c\nd";
+    var esc: std.ArrayList(u8) = .empty;
+    jsonEscape(&esc, gpa, src);
+    const wrapped = try std.fmt.allocPrint(gpa, "\"{s}\"", .{esc.items});
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, wrapped, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings(src, parsed.value.string);
+}
+
+test "tmlang.isLanguageConstant：恰四常量 + near-miss 判 false（第 167 轮）" {
+    try testing.expect(isLanguageConstant("true"));
+    try testing.expect(isLanguageConstant("false"));
+    try testing.expect(isLanguageConstant("null"));
+    try testing.expect(isLanguageConstant("undefined"));
+    // near-miss 全 false：大小写 / 超串 / 前缀 / 尾空格 / 空串。
+    try testing.expect(!isLanguageConstant("True"));
+    try testing.expect(!isLanguageConstant("truex"));
+    try testing.expect(!isLanguageConstant("nulll"));
+    try testing.expect(!isLanguageConstant("undefined "));
+    try testing.expect(!isLanguageConstant("un"));
+    try testing.expect(!isLanguageConstant(""));
 }
