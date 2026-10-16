@@ -1305,3 +1305,70 @@ test "lsp.server：rangeJson 字节区间→Range 与 itemsJoinAndFree 拼数组
 
     std.debug.print("T2 asserts={d}\n", .{asserts});
 }
+
+// 第 171 轮·JSON-RPC id 回显构造器 idJson 零直调面增量审计（证伪撤号不占号）：idJson 此前仅经
+// handle/respond 间接驱动（156 initialize id:7 走 .integer、166 T3 经 handle 钉 .string 转义）、全仓零直调。
+// 逐分支探针实测真形：.integer→裸数字、.number_string（超 i64 大整数）→原样保文（不丢精度）、
+// .string→jsonString 加引号转义、.bool→true/false、.null/缺失→null、.float/.object/.array→null（非合形防御兜底）。
+// 全部产出均为合法 JSON 字面量、绝不破坏响应帧结构（承 166/170 同面）；非合规范 id 形（float/对象/数组）
+// 防御性回落 null——真实 LSP 客户端 id 恒为整数或字符串、此路不可达 → 证伪不占号，仅补零直调护栏测。
+test "lsp.server：idJson 六分支回显真形与非法 id 形防御回落（第 171 轮）" {
+    var asserts: usize = 0;
+    const gpa = testing.allocator;
+
+    // .integer：裸数字原样回显
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"id\":7}", .{});
+        defer p.deinit();
+        const s = try idJson(gpa, asObject(p.value).?.get("id"));
+        defer gpa.free(s);
+        try testing.expectEqualStrings("7", s);
+        asserts += 1;
+    }
+    // .number_string：超 i64 大整数原样保文（不丢精度、不改写为 null）
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"id\":99999999999999999999999}", .{});
+        defer p.deinit();
+        const s = try idJson(gpa, asObject(p.value).?.get("id"));
+        defer gpa.free(s);
+        try testing.expectEqualStrings("99999999999999999999999", s);
+        asserts += 1;
+    }
+    // .string：jsonString 加引号并转义嵌入引号（缺此则裸引号破坏响应帧结构）
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"id\":\"a\\\"b\"}", .{});
+        defer p.deinit();
+        const s = try idJson(gpa, asObject(p.value).?.get("id"));
+        defer gpa.free(s);
+        try testing.expectEqualStrings("\"a\\\"b\"", s);
+        asserts += 1;
+    }
+    // .bool：原样 true（合法 JSON 字面量、不破帧）
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"id\":true}", .{});
+        defer p.deinit();
+        const s = try idJson(gpa, asObject(p.value).?.get("id"));
+        defer gpa.free(s);
+        try testing.expectEqualStrings("true", s);
+        asserts += 1;
+    }
+    // .float（非合规范 id 形）：防御回落 null（真实客户端不发浮点 id、此路不可达）
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"id\":7.5}", .{});
+        defer p.deinit();
+        const s = try idJson(gpa, asObject(p.value).?.get("id"));
+        defer gpa.free(s);
+        try testing.expectEqualStrings("null", s);
+        asserts += 1;
+    }
+    // 缺失 id：null
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"method\":\"x\"}", .{});
+        defer p.deinit();
+        const s = try idJson(gpa, asObject(p.value).?.get("id"));
+        defer gpa.free(s);
+        try testing.expectEqualStrings("null", s);
+        asserts += 1;
+    }
+    std.debug.print("T3 asserts={d}\n", .{asserts});
+}
