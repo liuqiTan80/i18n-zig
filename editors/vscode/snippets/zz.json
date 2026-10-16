@@ -717,7 +717,7 @@
   "kw-假": {
     "prefix": "假",
     "body": "假",
-    "description": "类型 → false"
+    "description": "字面常量 → false"
   },
   "kw-允许零": {
     "prefix": "允许零",
@@ -1002,7 +1002,7 @@
   "kw-未定义": {
     "prefix": "未定义",
     "body": "未定义",
-    "description": "类型 → undefined"
+    "description": "字面常量 → undefined"
   },
   "kw-本类型": {
     "prefix": "本类型",
@@ -1042,7 +1042,7 @@
   "kw-真": {
     "prefix": "真",
     "body": "真",
-    "description": "类型 → true"
+    "description": "字面常量 → true"
   },
   "kw-短整数": {
     "prefix": "短整数",
@@ -1062,7 +1062,7 @@
   "kw-空值": {
     "prefix": "空值",
     "body": "空值",
-    "description": "类型 → null"
+    "description": "字面常量 → null"
   },
   "kw-类型信息": {
     "prefix": "类型信息",

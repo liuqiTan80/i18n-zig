@@ -1025,6 +1025,25 @@ test "lsp.server：classToTokenType 图例索引全分支钉（承 162 共享真
     try testing.expectEqual(@as(u8, 3), classToTokenType("未知标签")); // 兜底 → variable
 }
 
+// D56 真数据路由钉（第 169 轮）：中文包 真/假/空值/未定义 映射 true/false/null/undefined——
+// D56 前 classify 先判 isPrimitive 把四值遮蔽成「类型」→classToTokenType→1（类型色，且字面常量支为死）；
+// 修后 classify 先判 isLanguageConstant→「字面常量」→classToTokenType→0（keyword）。坐实设计意图支由死变活。
+test "lsp.server：classify→classToTokenType 字面量四值经图例归 keyword(0)（承 162/165 共享真相源·第 169 轮 D56）" {
+    var asserts: usize = 0;
+    for ([_][]const u8{ "true", "false", "null", "undefined" }) |v| {
+        try testing.expectEqualStrings("字面常量", snippets.classify(v));
+        asserts += 1;
+        try testing.expectEqual(@as(u8, 0), classToTokenType(snippets.classify(v))); // 字面常量 → keyword
+        asserts += 1;
+    }
+    // 对照：真类型名仍走 isPrimitive→「类型」→token 1（坐实判序调整未过度捕获）。
+    try testing.expectEqualStrings("类型", snippets.classify("bool"));
+    asserts += 1;
+    try testing.expectEqual(@as(u8, 1), classToTokenType(snippets.classify("bool")));
+    asserts += 1;
+    std.debug.print("D56 route asserts={d}\n", .{asserts});
+}
+
 // T5：semanticTokensData 跨行 delta（delta_line>0 时 delta_start 取本行绝对列而非 prev_char 差）。
 // 第 161 轮语义 token 测全单行、delta_line 恒 0、跨行 else 支此前零 fired。
 test "lsp.server：semanticTokensData 跨行 delta_line/delta_start 复位（第 165 轮）" {

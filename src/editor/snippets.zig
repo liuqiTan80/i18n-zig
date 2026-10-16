@@ -24,10 +24,16 @@ fn isLanguageConstant(value: []const u8) bool {
 
 /// 按映射值归类方言词的分组标签（判据全取自注册表，语言无关）。
 /// 公开供 LSP hover 复用（第 156 轮）：同一词在补全描述与悬停详情里分组口径一致。
+///
+/// 判序（第 169 轮 D56 修正）：`isLanguageConstant` 必先于 `isPrimitive`。因
+/// `std.zig.isPrimitive` 的 names 集合本就含 true/false/null/undefined 四个值名（不止类型名），
+/// 若先判 isPrimitive 会把这四个字面量误归「类型」、使「字面常量」支永不可达（真/假/空值/未定义
+/// 补全描述与悬停被错标为「类型」、语义 token 错着类型色，而 classToTokenType 的字面常量支成死分支）。
+/// 四字面量名与任何类型名互斥，故本序调整不影响 bool/void/u8/i32 等真类型名（仍走 isPrimitive→「类型」）。
 pub fn classify(value: []const u8) []const u8 {
     if (value.len > 0 and value[0] == '@') return "内建函数";
-    if (std.zig.isPrimitive(value)) return "类型";
     if (isLanguageConstant(value)) return "字面常量";
+    if (std.zig.isPrimitive(value)) return "类型";
     if (std.zig.Token.keywords.has(value)) return "关键字";
     return "方言词";
 }
@@ -323,17 +329,21 @@ test "snippets.classify：五分支优先级 + 空值守卫（第 168 轮）" {
     asserts += 1;
     try testing.expectEqualStrings("类型", classify("i32"));
     asserts += 1;
-    // 真形钉：std.zig.isPrimitive 的 names 集合本就含 true/false/null/undefined 四个值名
-    // （primitives.zig），classify 先判 isPrimitive（→类型）再判 isLanguageConstant（→字面常量），
-    // 故这四值经 classify 恒归「类型」——「字面常量」支在 classify 路径上被 isPrimitive 遮蔽、
-    // 实际不可达；isLanguageConstant 自身正确性另由 T4 直钉。承探针定盘不臆造理想语义（观察面登记）。
-    try testing.expectEqualStrings("类型", classify("true"));
+    // D56 修复行为钉（第 169 轮）：classify 判序改为 isLanguageConstant 先于 isPrimitive 后，
+    // true/false/null/undefined 四值归「字面常量」（而非旧被 isPrimitive 遮蔽时的「类型」）。
+    // 中文包真关键词 真/假/空值/未定义 即映射至此四值，故其补全描述/hover/语义 token 现正确归字面常量。
+    try testing.expectEqualStrings("字面常量", classify("true"));
     asserts += 1;
-    try testing.expectEqualStrings("类型", classify("false"));
+    try testing.expectEqualStrings("字面常量", classify("false"));
     asserts += 1;
-    try testing.expectEqualStrings("类型", classify("null"));
+    try testing.expectEqualStrings("字面常量", classify("null"));
     asserts += 1;
-    try testing.expectEqualStrings("类型", classify("undefined"));
+    try testing.expectEqualStrings("字面常量", classify("undefined"));
+    asserts += 1;
+    // 判序调整不得过度捕获：bool/void 非 isLanguageConstant 成员、仍走 isPrimitive 归「类型」。
+    try testing.expectEqualStrings("类型", classify("bool"));
+    asserts += 1;
+    try testing.expectEqualStrings("类型", classify("void"));
     asserts += 1;
     try testing.expectEqualStrings("关键字", classify("const"));
     asserts += 1;
