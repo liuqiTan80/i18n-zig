@@ -1372,3 +1372,101 @@ test "lsp.server：idJson 六分支回显真形与非法 id 形防御回落（�
     }
     std.debug.print("T3 asserts={d}\n", .{asserts});
 }
+
+// 第 172 轮·JSON-RPC 入向取值器零直调面增量审计（证伪撤号不占号）：asObject/objIn/intField（L122-148）
+// 此前仅被 handle 生产链消费（既有测皆以 asObject(...)? 当解包工具、非锁定其分支行为）；三处防御面端到端
+// 从未 fired：①帧根非对象形→-32600 应答（156 仅测坏 JSON→-32700）；②hover position.line 非整数形；③params 非对象形。
+// 探针实测真形：asObject/objIn 仅 .object 返回对象、余形（integer/number_string/float/string/bool/null/array）皆 null；
+// intField 仅 .integer 取值、float/number_string（大整数不回落 int）/string/bool/null/缺键皆 null。
+// 防御面产物：非法帧根→合法 -32600 帧（id 恒 null）、非法 position/params→result:null 不崩——皆不破坏帧结构
+// → 证伪撤号不占 D 号（真实 LSP 客户端从不发非对象帧根/非整数 position，此路防御性可达但规范上不可达），仅补零直调护栏测。
+test "lsp.server：asObject/objIn/intField 取值器分支真形与帧根非对象形 -32600 防御面（第 172 轮）" {
+    var asserts: usize = 0;
+    const gpa = testing.allocator;
+
+    // asObject：恰 .object 放行，七非对象形皆 null（含 number_string 大整数与 float）
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"k\":1}", .{});
+        defer p.deinit();
+        try testing.expect(asObject(p.value) != null);
+        asserts += 1;
+    }
+    const non_obj = [_][]const u8{ "7", "7.5", "\"s\"", "true", "null", "[1,2]", "99999999999999999999999" };
+    for (non_obj) |body| {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, body, .{});
+        defer p.deinit();
+        try testing.expect(asObject(p.value) == null);
+        asserts += 1;
+        try testing.expect(objIn(p.value) == null); // objIn 值在形同走 asObject
+        asserts += 1;
+    }
+    // objIn：缺省 null 入参先于取值即 null（ornull 短路边与值形边分立）
+    {
+        try testing.expect(objIn(null) == null);
+        asserts += 1;
+    }
+    // intField：恰 .integer 取值；float/大整数 number_string（不回落 int）/string/bool/null/缺键皆 null
+    {
+        var p = try std.json.parseFromSlice(std.json.Value, gpa, "{\"i\":7,\"f\":7.5,\"s\":\"x\",\"b\":true,\"n\":null,\"big\":99999999999999999999999}", .{});
+        defer p.deinit();
+        const obj = asObject(p.value).?;
+        try testing.expectEqual(@as(?i64, 7), intField(obj, "i"));
+        asserts += 1;
+        try testing.expect(intField(obj, "f") == null);
+        asserts += 1;
+        try testing.expect(intField(obj, "big") == null); // 超 i64 不回落 number_string→int，拒而不猜
+        asserts += 1;
+        try testing.expect(intField(obj, "s") == null);
+        asserts += 1;
+        try testing.expect(intField(obj, "b") == null);
+        asserts += 1;
+        try testing.expect(intField(obj, "n") == null);
+        asserts += 1;
+        try testing.expect(intField(obj, "absent") == null);
+        asserts += 1;
+    }
+
+    // 端到端防御面：逐非对象帧根形→合法 -32600 帧、id 回 null、可 reparse 不破帧
+    {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const ag = arena.allocator();
+        var lang = try Pack.parse(ag, @embedFile("../lang/packs/中文.txt"));
+        defer lang.deinit();
+
+        for (non_obj) |body| {
+            var srv = Server.init(ag, &lang);
+            defer srv.deinit();
+            var out: OutList = .empty;
+            defer freeOut(ag, &out);
+
+            try srv.handle(body, &out);
+            try testing.expectEqual(@as(usize, 1), out.items.len);
+            asserts += 1;
+            try testing.expect(std.mem.indexOf(u8, out.items[0], "\"code\":-32600") != null);
+            asserts += 1;
+            try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":null") != null);
+            asserts += 1;
+            var pr = try std.json.parseFromSlice(std.json.Value, ag, out.items[0], .{});
+            defer pr.deinit();
+            try testing.expect(asObject(pr.value) != null); // 防御帧本身合法 JSON
+            asserts += 1;
+            freeOut(ag, &out);
+        }
+
+        // hover position.line 非整数形（字符串）→ result:null 不崩（intField 防御面经 handle 端到端坐实）
+        var srv2 = Server.init(ag, &lang);
+        defer srv2.deinit();
+        var out2: OutList = .empty;
+        defer freeOut(ag, &out2);
+        try srv2.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"file:///d172.zz\",\"text\":\"a\\n\"}}}", &out2);
+        freeOut(ag, &out2);
+        try srv2.handle("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///d172.zz\"},\"position\":{\"line\":\"0\",\"character\":0}}}", &out2);
+        try testing.expectEqual(@as(usize, 1), out2.items.len);
+        asserts += 1;
+        try testing.expect(std.mem.indexOf(u8, out2.items[0], "\"result\":null") != null);
+        asserts += 1;
+    }
+
+    std.debug.print("T4 asserts={d}\n", .{asserts});
+}
