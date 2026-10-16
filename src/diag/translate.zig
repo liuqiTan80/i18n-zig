@@ -2927,3 +2927,104 @@ fn hasSub(hay: []const u8, needle: []const u8) !void {
 fn noSub(hay: []const u8, needle: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, hay, needle) == null);
 }
+
+// 第 174 轮：机读格式化（`--machine` 出口）私有助手 machineHead / flushMachine 零直调分支面。
+// 二者仅经 machineLines（第 154 轮两测）端到端触及：machineHead 的前导空白/冒号在 0/冒号后非空格/冒号在末
+// 四拒绝臂在 machineLines 流中被 `--> `/`| `/tip 的 startsWith 前置分支截获或从未构造→零直钉；接受臂的
+// msg 切片恰从 colon+2 起（吞冒号后空格）未字节钉；flushMachine 的「无位量却带 tip 丢 tip」臂 machineLines 表测从未构造。
+// 经探针坐实全部为正确防御行为、无在线缺陷（真 --machine 消费方 problemMatcher/LSP/CI 只收合规行）→证伪撤号不占号。
+test "lsp.diag 机读格式化：machineHead 头判据拒绝/接受臂 + flushMachine 四格式臂（含无位量丢 tip）零直调分支真形（第 174 轮）" {
+    const testing = std.testing;
+    var asserts: usize = 0;
+    const err_kind = "\u{9519}\u{8bef}"; // 错误
+    const note_kind = "\u{8bf4}\u{660e}"; // 说明
+
+    // A. machineHead 六拒绝臂（皆 null）——决定一行不被当诊断块头、走透传。
+    try testing.expect(machineHead("") == null); // 空行 L196
+    asserts += 1;
+    try testing.expect(machineHead(" " ++ err_kind ++ ": x") == null); // 前导空格 L197
+    asserts += 1;
+    try testing.expect(machineHead("\t" ++ err_kind ++ ": x") == null); // 前导 tab L197
+    asserts += 1;
+    try testing.expect(machineHead("foo bar") == null); // 无冒号 L198
+    asserts += 1;
+    try testing.expect(machineHead(": foo") == null); // 冒号在 0 L199
+    asserts += 1;
+    try testing.expect(machineHead(err_kind ++ ":x") == null); // 冒号后非空格 L200（锁「种类: 消息」须有空格分隔）
+    asserts += 1;
+    try testing.expect(machineHead(err_kind ++ ":") == null); // 冒号在末尾 len<colon+2 L200
+    asserts += 1;
+    // kind 在但不在 kind_zh 值面（防任意「文本: 内容」行误判为诊断头）：ASCII 与 CJK 两形。
+    try testing.expect(machineHead("error: x") == null); // L205（"error" 是 key 非 value）
+    asserts += 1;
+    try testing.expect(machineHead("\u{968f}\u{673a}: x") == null); // 「随机: x」非五 kind 之一 L205
+    asserts += 1;
+
+    // B. machineHead 接受臂（kind ∈ kind_zh 值面）：返回 .{kind,msg} 且 msg 恰从 colon+2 起（吞冒号后空格）。
+    if (machineHead(err_kind ++ ": msg")) |h| {
+        try testing.expectEqualStrings(err_kind, h.kind);
+        asserts += 1;
+        try testing.expectEqualStrings("msg", h.msg); // 无领前空格
+        asserts += 1;
+    } else return error.TestUnexpectedResult;
+    if (machineHead(note_kind ++ ": headsup")) |h| {
+        try testing.expectEqualStrings(note_kind, h.kind);
+        asserts += 1;
+        try testing.expectEqualStrings("headsup", h.msg);
+        asserts += 1;
+    } else return error.TestUnexpectedResult;
+    if (machineHead(err_kind ++ ": ")) |h| { // 空消息体仍认头
+        try testing.expectEqualStrings(err_kind, h.kind);
+        asserts += 1;
+        try testing.expectEqualStrings("", h.msg);
+        asserts += 1;
+    } else return error.TestUnexpectedResult;
+
+    // C. flushMachine 四格式臂（loc×tip）字节形钉 + null pending 零输出。
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    const L = FrameLoc{ .file = "a.zz", .line = 5, .col = 7 };
+    // 有位量 + 有提示 → `路:行:列: 种类: 消息（提示：…）`
+    {
+        var out: std.ArrayList(u8) = .empty;
+        try flushMachine(gpa, &out, .{ .kind = err_kind, .msg = "m", .loc = L, .tip = "t" });
+        try testing.expectEqualStrings("a.zz:5:7: " ++ err_kind ++ ": m\u{FF08}\u{63D0}\u{793A}\u{FF1A}t\u{FF09}\n", out.items);
+        asserts += 1;
+    }
+    // 有位量无提示 → `路:行:列: 种类: 消息`（无括号尾）
+    {
+        var out: std.ArrayList(u8) = .empty;
+        try flushMachine(gpa, &out, .{ .kind = err_kind, .msg = "m", .loc = L, .tip = null });
+        try testing.expectEqualStrings("a.zz:5:7: " ++ err_kind ++ ": m\n", out.items);
+        asserts += 1;
+    }
+    // 无位量无提示 → 原样 `{种类}: {消息}`
+    const no_loc_no_tip = blk: {
+        var out: std.ArrayList(u8) = .empty;
+        try flushMachine(gpa, &out, .{ .kind = err_kind, .msg = "m", .loc = null, .tip = null });
+        break :blk try dupStr(gpa, out.items);
+    };
+    defer gpa.free(no_loc_no_tip);
+    try testing.expectEqualStrings(err_kind ++ ": m\n", no_loc_no_tip);
+    asserts += 1;
+    // 无位量却带 tip → tip 被丢（else 臂不含提示），与上臂逐字节相同——坐实真形、经 machineLines 不可达的防御态。
+    {
+        var out: std.ArrayList(u8) = .empty;
+        try flushMachine(gpa, &out, .{ .kind = err_kind, .msg = "m", .loc = null, .tip = "t" });
+        try testing.expectEqualStrings(no_loc_no_tip, out.items);
+        asserts += 1;
+    }
+    // null pending 零输出。
+    {
+        var out: std.ArrayList(u8) = .empty;
+        try flushMachine(gpa, &out, null);
+        try testing.expectEqual(@as(usize, 0), out.items.len);
+        asserts += 1;
+    }
+    std.debug.print("T174 asserts={d}\n", .{asserts});
+}
+
+fn dupStr(gpa: std.mem.Allocator, s: []const u8) ![]const u8 {
+    return gpa.dupe(u8, s);
+}
