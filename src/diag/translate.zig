@@ -1749,6 +1749,38 @@ test "unmangleText：只反查极大词元 z_<数字>（右边界防 z_1x、跨�
     try check(gpa, table, "az_1", "az_1");
 }
 
+// 护栏（第 175 轮证伪落位·diag/translate isIdentChar 零直调面增量审计）：
+// isIdentChar 系 unmangleText 反查 z_<n> 极大词元左右两端的词边界判据（L68 左界、L73 右界），
+// 与 transpiler/mangle.isIdentByte（reserveZInText 正向避让的同模式词边界谓词）函数体逐字节相同、
+// 合起来构成「反向识别 ↔ 正向避让」的边界对称不变量（记忆：识别/避让同模式的函数须边界对称）。
+// isIdentByte 已于第 111 轮直钉，独此 isIdentChar 全仓零直调——历轮仅经 unmangleText 整串喂入
+// 间接触达、其精确字节集从未被钉。若被误改（丢 `_`、改用 std.unicode 收非 ASCII 字母、增 `$` 等），
+// 反向反查边界与正向避让边界即失对称，D36 类「不同母语名撞同一 z_N」前缀误反查静默回归，
+// 且恰藏在 unmangleText 端到端测不喂该字节形状的缝隙里隐身。本测以独立 oracle（不依赖
+// std.ascii.isAlphanumeric）对全 256 字节做 iff 穷举，钉 isIdentChar 恰为 [0-9A-Za-z_]、
+// 非 ASCII 字节恒判词边界；令两模块各自独立钉同一集，任一侧漂移即各自抓红。
+test "护栏：isIdentChar 词边界谓词全字节穷举——与 mangle.isIdentByte 对称不变量（第 175 轮证伪落位）" {
+    for (0..256) |c| {
+        const b: u8 = @intCast(c);
+        // 独立 oracle：显式列出合法标识符续字节集，与 std.ascii 实现无关（防 tautology 空转）。
+        const want = (b >= '0' and b <= '9') or
+            (b >= 'A' and b <= 'Z') or
+            (b >= 'a' and b <= 'z') or
+            (b == '_');
+        try std.testing.expectEqual(want, isIdentChar(b));
+    }
+    // 关键边界逐例点名（承第 111 轮 isIdentByte 矩阵，形异实同、双侧独立可钉）：
+    try std.testing.expect(isIdentChar('a')); // 字母
+    try std.testing.expect(isIdentChar('Z')); // 大写字母
+    try std.testing.expect(isIdentChar('0')); // 数字
+    try std.testing.expect(isIdentChar('_')); // 下划线系 D36 撞号避让依赖的续字节，绝不可从集内丢失
+    try std.testing.expect(!isIdentChar(' ')); // 空白断边界
+    try std.testing.expect(!isIdentChar('.')); // 点非标识符字节 → 跨模块链 z_1.z_2 两侧各自反查
+    try std.testing.expect(!isIdentChar('-')); // 连字符断边界
+    try std.testing.expect(!isIdentChar(0x80)); // 非 ASCII 字节（CJK 续字节等）恒判词边界
+    try std.testing.expect(!isIdentChar(0xFF)); // 同上：谓词纯 ASCII、高字节永不续标识符
+}
+
 test "顶格（第 1 列）语句报错：gen 源码回显与波浪线不泄漏" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
