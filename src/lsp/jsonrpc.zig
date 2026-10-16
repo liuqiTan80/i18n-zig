@@ -146,3 +146,76 @@ test "jsonrpc.jsonString：转义矩阵 + 母语透传（第 156 轮）" {
     defer testing.allocator.free(zh);
     try testing.expectEqualStrings("\"词法 → const\"", zh);
 }
+
+test "lsp.jsonrpc：jsonString 控制字符转义臂 + parseFrame 头值 trim/分隔符/空值 零直调分支真形（第 173 轮）" {
+    // 承 156 帧层七测，补其零直调分支：jsonString 转义矩阵独缺 CR 短转义臂、
+    // 控制字符阈值恰等边界 0x1f/0x20、NUL 四位补零；parseFrame 空头部块/头值 trim 集含 tab/
+    // 裸 \n 分隔（null 待续 vs 坏帧）/空 Content-Length 值。皆经探针坐实为正确防御行为、无在线缺陷。
+    var asserts: usize = 0;
+
+    // A. jsonString 控制字符转义分支
+    {
+        const cr = try jsonString(testing.allocator, "a\rb");
+        defer testing.allocator.free(cr);
+        try testing.expectEqualStrings("\"a\\rb\"", cr); // CR → 短转义 \r（非 \u000d）
+        asserts += 1;
+    }
+    {
+        const crlf = try jsonString(testing.allocator, "x\r\ny");
+        defer testing.allocator.free(crlf);
+        try testing.expectEqualStrings("\"x\\r\\ny\"", crlf); // CR+LF 各短转义
+        asserts += 1;
+    }
+    {
+        const u1f = try jsonString(testing.allocator, "\u{1f}");
+        defer testing.allocator.free(u1f);
+        try testing.expectEqualStrings("\"\\u001f\"", u1f); // 0x1f 末位转义（c<0x20 恰等边界）
+        asserts += 1;
+    }
+    {
+        const nul = try jsonString(testing.allocator, "\u{0}");
+        defer testing.allocator.free(nul);
+        try testing.expectEqualStrings("\"\\u0000\"", nul); // NUL → \u0000 四位补零
+        asserts += 1;
+    }
+    {
+        const sp = try jsonString(testing.allocator, "\u{20}");
+        defer testing.allocator.free(sp);
+        try testing.expectEqualStrings("\" \"", sp); // 0x20 空格透传不转义（边界另一侧）
+        asserts += 1;
+    }
+    // reparse 不变量：CR 转义串可被 std.json 解回原串（缺转义则帧结构破损）
+    {
+        const cr = try jsonString(testing.allocator, "a\rb");
+        defer testing.allocator.free(cr);
+        const doc = try std.fmt.allocPrint(testing.allocator, "{{\"s\":{s}}}", .{cr});
+        defer testing.allocator.free(doc);
+        var parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, doc, .{});
+        defer parsed.deinit();
+        try testing.expectEqualStrings("a\rb", parsed.value.object.get("s").?.string);
+        asserts += 1;
+    }
+
+    // B. parseFrame 帧头状态机边界
+    {
+        try testing.expectError(error.InvalidFrame, parseFrame("\r\n\r\nbody")); // 空头部块：无 Content-Length
+        asserts += 1;
+    }
+    {
+        const f = (try parseFrame("Content-Length:   7\t\r\n\r\n{\"a\":1}")).?; // 值 trim 剥前导多空格+尾随 tab
+        try testing.expectEqualStrings("{\"a\":1}", f.body);
+        asserts += 1;
+        try testing.expectEqual(@as(usize, 31), f.consumed);
+        asserts += 1;
+    }
+    {
+        try testing.expectEqual(@as(?Frame, null), try parseFrame("Content-Length: 2\n\nab")); // 裸 \n 分隔（非 \r\n\r\n）→ null 待续非坏帧
+        asserts += 1;
+    }
+    {
+        try testing.expectError(error.InvalidFrame, parseFrame("Content-Length:\r\n\r\nab")); // 空值：parseInt("") 失败
+        asserts += 1;
+    }
+
+    std.debug.print("T asserts={d}\n", .{asserts});
+}
