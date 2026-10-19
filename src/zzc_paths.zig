@@ -62,6 +62,17 @@ pub const bin_dir: []const u8 = root ++ "/bin";
 /// 外置语言包安装目录（`--lang-file` 装包后的落点，`userpack.default_dir` 即本值的公开面）。
 pub const lang_dir: []const u8 = root ++ "/lang";
 
+/// 语言包文件扩展名（第 237 轮 D105）：`userpack.fileRel` 拼出的安装落点名 `<dir>/<key>.txt`
+/// 与 `main.cmdLangAdd` 成功/已存在两处提示文案里宣称的落点路径形共用的唯一真值。旧形制下
+/// 这枚 `.txt` 分散内联硬编在 `lang/userpack.zig` 的 `fileRel`（`"{s}/{s}.txt"`·写/读侧唯一变换）
+/// 与 `main.zig` 两枚 `printOut`/`printErr` 文案（`{s}/{s}.txt`·用户照此定位/删除文件）三处互不引用：
+/// t2 探针 P1 实锤独漂 main 两文案路径形（`.txt`→`.PACKEXT`）而 fileRel 不动 → 整清缓存 fresh
+/// 611/611 全绿静默，真跑 `zzc lang add` 成功文案宣称落点 `…/tst-ja.PACKEXT`、实际写入（且 `--lang`
+/// 经 fileRel 读取）却是 `…/tst-ja.txt`——文案指错文件名的活路径可观测断裂（P2 对照：独漂 fileRel
+/// 值 → 其自照形制测转红，证值侧本有钉而文案↔落盘耦合面零锚）。本枚落地后三处皆由它派生、
+/// 单边漂移不可能（`--lang` 选用仍走 fileRel 精确路径·无 glob 枚举，扩展名漂移不改读侧命中）。
+pub const pack_ext: []const u8 = ".txt";
+
 /// 符号表文件：跨会话稳定的母语名 → ASCII 名映射（D16/D36 语义，恢复失败须传播）。
 pub const symbols_file: []const u8 = root ++ "/symbols.txt";
 
@@ -525,4 +536,20 @@ test "第 234 轮 T0 源扩展名对族：std_ext 值钉 + 两枚改写后缀派
         @as(isize, @intCast(dialect_import_suffix.len - dialect_ext.len)),
         @as(isize, @intCast(std_import_suffix.len - std_ext.len)),
     );
+}
+
+test "第 237 轮 T0 语言包扩展名族：pack_ext 值钉＋形制契约（防 fileRel↔cmdLangAdd 两文案三处手抄单边漂移）" {
+    // A1 值钉：`.txt` 是对外可见的安装落名形（`zzc lang add` 两文案照此宣示、用户照此定位/删除
+    // 文件、`--lang` 经 fileRel 拼此名取盘），不复用常量、直接写死（196/197 通则）。改本枚即
+    // 本钉红，连带要求 `userpack.fileRel`（写/读侧）与 `main.cmdLangAdd`（两文案）同步复跑。
+    try std.testing.expectEqualStrings(".txt", pack_ext);
+    // A2 形制契约（独立 oracle）：包扩展名必以 `.` 起手且不含路径分隔——若误改为带目录段或漏点，
+    //    fileRel 拼出的落名与文案宣示的落名将结构失形（用户照文案找不到文件）。
+    try std.testing.expect(std.mem.startsWith(u8, pack_ext, "."));
+    try std.testing.expect(std.mem.indexOfScalar(u8, pack_ext, '/') == null);
+    try std.testing.expect(pack_ext.len > 1); // 不接受裸一个点（`<dir>/<key>.` 非合法落名）
+    // A3 与符号表同尾不同源（防错用）：`symbols_file` 的 `.txt` 尾是自身落名、不属 pack_ext 族，
+    //    本锚仅坐实两者恰同尾而互不引用（pack_ext 漂移不改 symbols_file 形）。
+    try std.testing.expect(std.mem.endsWith(u8, symbols_file, ".txt"));
+    try std.testing.expectEqualStrings(".zzc/symbols.txt", symbols_file);
 }

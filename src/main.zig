@@ -561,13 +561,13 @@ fn cmdLangAdd(args: []const []const u8) void {
     userpack.install(io_, gpa_, userpack.default_dir, key, bytes) catch |e| switch (e) {
         error.BadKey => unreachable, // 上面已拦
         error.AlreadyInstalled => {
-            printErr(zzc.prog_prefix ++ cli.np_dup_installed ++ cli.np_pack_word ++ "「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
+            printErr(zzc.prog_prefix ++ cli.np_dup_installed ++ cli.np_pack_word ++ "「{s}」（{s}/{s}" ++ zzc.pack_ext ++ "）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
             werr.flush() catch {};
             std.process.exit(cli.usage_exit_code); // 与 init 防覆盖形制一致：退 2 且原文件逐 字节不动
         },
         else => bail(e), // 权限/IsDir/超限等：bail 的 localizeFsErr 母语兜底既有形
     };
-    printOut("✔ " ++ cli.np_installed ++ cli.np_pack_word ++ "「{s}({s})」→ {s}/{s}.txt；用 `--lang {s}` 选用（免重编译，仅本工程可见）。", .{ pk.name, key, userpack.default_dir, key, key });
+    printOut("✔ " ++ cli.np_installed ++ cli.np_pack_word ++ "「{s}({s})」→ {s}/{s}" ++ zzc.pack_ext ++ "；用 `--lang {s}` 选用（免重编译，仅本工程可见）。", .{ pk.name, key, userpack.default_dir, key, key });
 }
 
 fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {

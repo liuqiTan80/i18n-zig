@@ -42,9 +42,11 @@ pub fn keyIsSafe(key: []const u8) bool {
     return true;
 }
 
-/// 某注册名在给定目录下的包文件相对路径 `<dir>/<key>.txt`。不校验 key（调用方先过 `keyIsSafe`）。
+/// 某注册名在给定目录下的包文件相对路径 `<dir>/<key>` ++ `pack_ext`。不校验 key（调用方先过 `keyIsSafe`）。
+/// 第 237 轮 D105：扩展名段委派 `zzc.pack_ext` 单源（与 `main.cmdLangAdd` 两处提示文案同一真值派生、
+/// 单边漂移即文案指错文件名——见 `zzc_paths.pack_ext` 顶注）。
 pub fn fileRel(gpa: std.mem.Allocator, dir: []const u8, key: []const u8) ![]const u8 {
-    return std.fmt.allocPrint(gpa, "{s}/{s}.txt", .{ dir, key });
+    return std.fmt.allocPrint(gpa, "{s}/{s}" ++ zzc.pack_ext, .{ dir, key });
 }
 
 /// 安装失败的种类（供调用方翻译成母语可操作提示；fs 错误另由 `localizeFsErr` 兜底）。
@@ -182,4 +184,27 @@ test "installedFile：装后可查、未装为 null、不安全名先于磁盘�
     // 穿越形选择名：即便 `<dir>/../..` 下真有同名文件，也须因白名单先拒而不返回路径。
     try std.testing.expect(installedFile(io, gpa, dir, "../../build") == null);
     try std.testing.expect(installedFile(io, gpa, dir, "C:/windows/x") == null);
+}
+
+test "第 237 轮 T1 fileRel 扩展名段委派 hub pack_ext：落名 = dir '/' key ++ pack_ext 且尾缀随 hub（防 fileRel 退回内联手抄）" {
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const gpa = arena_impl.allocator();
+    const rel = try fileRel(gpa, default_dir, "zh");
+    // A1 组合钉：输出必恰为 dir + "/" + key + pack_ext——扩展名段由 hub 派生，若 fileRel 退回内联
+    //    `.txt` 而 pack_ext 漂为异值，本钉红（与 237 T0 的 pack_ext 值钉合力封住值侧漂移）。
+    try std.testing.expectEqualStrings(default_dir ++ "/" ++ "zh" ++ zzc.pack_ext, rel);
+    // A2 尾缀随 hub：endsWith pack_ext（串面直连，不引入另一侧字面量）。
+    try std.testing.expect(std.mem.endsWith(u8, rel, zzc.pack_ext));
+}
+
+test "第 237 轮 T2 cmdLangAdd 两文案委派 hub pack_ext（@embedFile 反锚 main.zig·防落名↔文案手抄静默脱钩）" {
+    // 本锚系 D105 主靶：旧形制下 main 两处 lang-add 文案各自内联 `{s}/{s}.txt`、与 fileRel 互不引用
+    // （t2 探针 P1：独漂两文案 fresh 611/611 全绿静默、真跑文案说 PACKEXT 实落 txt）。落盘名与文案
+    // 宣示名同源于 hub pack_ext 后，main 不得再内联裸扩展名。
+    const src = @embedFile("../main.zig");
+    // A1 委派形必现两处（已存在报错文案 + 成功文案）：皆以 `++ zzc.pack_ext ++` 拼接。
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "++ zzc.pack_ext ++"));
+    // A2 反锚：旧内联手抄形 `{s}/{s}.txt`（裸 `.txt` 接在 `{s}/{s}` 后）必 0 处——任一文案退回硬编即本锚红。
+    try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, src, "{s}/{s}.txt"));
 }
