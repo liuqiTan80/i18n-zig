@@ -1228,7 +1228,8 @@ test "extractEmbedPaths：无 embedFile 时为空、不报错" {
 /// 字节是否为“词内字符”（ASCII 字母数字/下划线或非 ASCII 字节）：用于词边界判定，
 /// 防止方言词 lead 被超串拆分命中（如 `我的嵌入文件`、`嵌入文件1` 都不算独立词）。
 fn isWordCharByte(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
+    // 第 241 轮 D109：词边界字节集取单一真值（与 lsp/server 链式词字节、transpiler/lexer 非 ASCII 续读同源）。
+    return zzc.isWordByte(c);
 }
 
 /// 从**方言原文**里扫出全部 `lead(路径实参)` 形（lead 取词列表：ASCII 直通形 + 语言包词表形）。

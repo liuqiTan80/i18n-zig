@@ -9,6 +9,7 @@
 //!     并吸收紧随其后的 ASCII 字母/数字/下划线（使 `变量1` 这类“CJK+ASCII 尾”成为单个标识符），由上层决定翻译/转码/报错；
 
 const std = @import("std");
+const zzc = @import("../zzc_paths.zig"); // 第 241 轮 D109：母语词字节集取单一真值（与 cli/args、lsp/server 同源）
 
 pub const Kind = enum {
     /// [A-Za-z0-9_] 序列（含数字字面量、i7 等）
@@ -139,7 +140,7 @@ pub fn scan(gpa: std.mem.Allocator, src: []const u8) ![]Token {
             // 改语义 + 误导诊断），也破坏了 `对象.字段1` 这类成员名的原子性。合并成一个词元后
             // `变量1` 被整体 intern，杜绝拼接撞名、且语义正确（它就是一整个名字）。
             kind = .nonascii_word;
-            while (i < src.len and (src[i] >= 0x80 or isAsciiWordChar(src[i]))) i += 1;
+            while (i < src.len and zzc.isWordByte(src[i])) i += 1;
             try out.append(gpa, .{ .kind = kind, .off = start, .len = i - start });
             continue;
         }

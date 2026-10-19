@@ -888,7 +888,8 @@ fn stepRightChainSegment(text: []const u8, from: usize) ?usize {
 }
 
 fn isChainWordByte(c: u8) bool {
-    return c >= 0x80 or std.ascii.isAlphanumeric(c) or c == '_';
+    // 第 241 轮 D109：词字节集取单一真值（与 cli/args isWordCharByte、transpiler/lexer 非 ASCII 续读同源）。
+    return paths.isWordByte(c);
 }
 
 /// `snippets.classify` 词类标签 → LSP tokenTypes 图例索引（第 214 轮 D82：词元名与索引皆取

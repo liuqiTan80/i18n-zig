@@ -368,6 +368,15 @@ pub fn firstFalselyIgnored(rules: []const u8) ?[]const u8 {
     return null;
 }
 
+/// 第 241 轮 D109：母语「词内字符」字节集单一真值 = `[0-9A-Za-z_] ∪ [0x80..0xFF]`。
+/// 旧形制下 `cli/args.isWordCharByte`、`lsp/server.isChainWordByte`、`transpiler/lexer` 非 ASCII
+/// 词元续读三处各自内联同一判据（高字节并入 + ASCII 字母数字 + 下划线），系跨模块手抄、无共同真值：
+/// 任一单边漂移（如误并入 `-`）即词边界判定分道，而三处各只有自测、无跨模块一致性锚（server 仅 6 点
+/// 采样，未覆盖字节漂移即静默全绿）。收敛于此，三点委派本函数即结构同源、杜绝单边漂。
+pub fn isWordByte(c: u8) bool {
+    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
+}
+
 test "第 200 轮 T0 .zzc 族单一真值：八枚字面量全员钉 + 形制契约（相对、正斜杠、前缀多一个分隔符）" {
     // A1 族真值逐枚字面量钉（判据不复用常量，遵 196/197 通则）：改本模块任一枚即本钉红，
     //    连带要求消费/生产两侧与 `diag/translate.zig` 的组合锚同步复跑。
@@ -616,4 +625,20 @@ test "第 238 轮 T0 内置默认包身份族：四形 embed + cwd 形的值钉�
     try std.testing.expect(std.mem.endsWith(u8, builtin_pack_embed_src, builtin_pack_embed_lang));
     // A4 内置默认包文件名尾必与 pack_ext 同（防错用非包扩展名）：build.zig 扫描器只收 `.txt` 结尾的包。
     try std.testing.expect(std.mem.endsWith(u8, builtin_pack_file, pack_ext));
+}
+
+test "第 241 轮 T0 母语词字节集单一真值：全 256 字节 iff 穷举 oracle 钉 [0-9A-Za-z_] ∪ [0x80..0xFF]（跨 args/server/lexer 委派同源·D109）" {
+    // 独立 oracle：显式字节区间，不复用 isWordByte 的短路组合——两侧同写即失却对账意义（承 178 轮通则）。
+    var c: usize = 0;
+    while (c < 256) : (c += 1) {
+        const b: u8 = @intCast(c);
+        const word = (b >= '0' and b <= '9') or (b >= 'A' and b <= 'Z') or
+            (b >= 'a' and b <= 'z') or (b == '_') or (b >= 0x80);
+        try std.testing.expect(word == isWordByte(b));
+    }
+    try std.testing.expect(isWordByte('_'));
+    try std.testing.expect(isWordByte(0x80));
+    try std.testing.expect(isWordByte(0xFF));
+    try std.testing.expect(!isWordByte(0x7F));
+    try std.testing.expect(!isWordByte('-'));
 }
