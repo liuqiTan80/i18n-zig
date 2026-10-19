@@ -25,6 +25,15 @@ pub const header_name: []const u8 = "Content-Length";
 /// 头部块结束分隔符单一真值：解析搜索、编码尾串、`start` 偏移与 js 面 needle 皆自它派生。
 pub const header_sep: []const u8 = "\r\n\r\n";
 
+/// JSON-RPC 协议版本值单一真值（第 240 轮 D108·D85 帧族漏员）：每帧携带的 `"jsonrpc":"2.0"` 版
+/// 本值，此前散在四处互不引用的独立字面——① 服务端写侧 `server.zig` `ek_v20`（三应答模板）、② 服务
+/// 端自测 `resultResponse` want 逐字节钉、③ 守卫对面 `params_face` needle 内联 `'2.0'`（逐字节钉客户
+/// 端 `extension.js`）、④ 客户端 `extension.js` 九处发起面。t2 实锤：js 独漂被 ③ 捕获（P1 红）、写侧
+/// `ek_v20` 独漂被 ② 捕获（P2 红），而协同漂写侧＋②令服务端自洽、js 原值不动时 fresh 622/622 全绿静默
+/// （P3 主靶·两端版本碎片化零跨面锚）。自此枚派生令 ①②③ 同源，js 经 ③ 传递性钉到本真值（同 D81/D96
+/// 漏员判例·D85 收 header_name 却漏版本值）。
+pub const version_value: []const u8 = "2.0";
+
 pub const Frame = struct {
     /// 帧体字节（JSON-RPC 报文原文，不 NUL 结尾）
     body: []const u8,

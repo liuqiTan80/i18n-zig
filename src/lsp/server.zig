@@ -251,7 +251,7 @@ const ek_error = "\"" ++ k_error ++ "\"";
 const ek_code = "\"" ++ k_code ++ "\"";
 const em_markdown = "\"" ++ v_markdown ++ "\"";
 const eq_prog_name = "\"" ++ paths.prog_name ++ "\"";
-const ek_v20 = "\"" ++ "2.0" ++ "\"";
+const ek_v20 = "\"" ++ jsonrpc.version_value ++ "\"";
 const ek_method = "\"" ++ k_method ++ "\"";
 const f_result_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_result ++ ":{s}}}";
 const f_error_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_error ++ ":{{" ++ ek_code ++ ":{d}," ++ ek_message ++ ":{s}}}}}";
@@ -270,7 +270,7 @@ pub const f_hover_params = "{{" ++ ek_textDocument ++ ":{{" ++ ek_uri ++ ":{s}}}
 /// 判据入 hub、守卫视只读 I/O）。js 非 source dependency（203/214 轮判例：改 js 不触发测图重跑），
 /// 而 t2 探针 P1–P3 实锤漂键对构建链零信号、真跑 P4 坐实功能级断裂——逐字节钉住客户端书写形。
 pub const params_face = [_]jsonrpc.FaceCheck{
-    .{ .needle = "send({ " ++ k_jsonrpc ++ ": '2.0', " ++ k_id ++ ", " ++ k_method ++ ", " ++ k_params ++ " });", .why = "请求封装的消息骨四键 shorthand 须与服务端解析臂同名——漂则应答无 id/方法失踪，整条请求静默坠空（t2 P2 形）" },
+    .{ .needle = "send({ " ++ k_jsonrpc ++ ": '" ++ jsonrpc.version_value ++ "', " ++ k_id ++ ", " ++ k_method ++ ", " ++ k_params ++ " });", .why = "请求封装的消息骨四键 shorthand 须与服务端解析臂同名——漂则应答无 id/方法失踪，整条请求静默坠空（t2 P2 形）" },
     .{ .needle = "msg." ++ k_params, .why = "诊断通知参数体的读侧属性须等于服务端写侧键——漂则客户端取到 undefined，applyDiagnostics 首行短路、诊断面板恒空（t2 P2 静默面）" },
     .{ .needle = "msg." ++ k_result ++ " === undefined", .why = "应答体读侧属性须等于 respond 写侧键——漂则所有请求 resolve(null)，悬停/语义 token/握手全瞎（218 P2 同骨）" },
     .{ .needle = "!params." ++ k_uri, .why = "通知体 uri 守门读须等于 publishRaw 写侧键——漂即丢弃合法发布" },
@@ -1566,7 +1566,7 @@ test "lsp.server：strField 三分支 + result/errorResponse 骨架与 message �
     // resultResponse：id/result 原样（{s}）嵌入，帧恰形且可 reparse 出 result 对象。
     const rs = try resultResponse(gpa, "1", "{\"ok\":true}");
     defer gpa.free(rs);
-    try testing.expectEqualStrings("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":true}}", rs);
+    try testing.expectEqualStrings("{\"jsonrpc\":\"" ++ jsonrpc.version_value ++ "\",\"id\":1,\"result\":{\"ok\":true}}", rs);
     asserts += 1;
     var pr = try std.json.parseFromSlice(std.json.Value, gpa, rs, .{});
     defer pr.deinit();
@@ -1586,6 +1586,29 @@ test "lsp.server：strField 三分支 + result/errorResponse 骨架与 message �
     asserts += 1;
 
     std.debug.print("T1 asserts={d}\n", .{asserts});
+}
+
+// 第 240 轮 T0：JSON-RPC 协议版本值单源派生——写侧 `ek_v20`、自测 `resultResponse` want、守卫
+// `params_face` needle 三面皆由 `jsonrpc.version_value` 派生，服务端实际应答的版本形与钉给客户端的
+// needle 版本片段经同一 hub 同源（t2 P3 主靶「协同漂令服务端↔客户端版本分道却 fresh 全绿」自此转锚）。
+test "第 240 轮 T0 JSON-RPC 协议版本值单源与写侧-自测-守卫needle 三面同源 round-trip 锈" {
+    const gpa = testing.allocator;
+
+    // A1 值钉：hub 真值逐字节 = "2.0"（协议标准版本，漂即与所有合规客户端失联）。
+    try testing.expectEqualStrings("2.0", jsonrpc.version_value);
+
+    // A2 写侧 ek_v20 由 hub 拼接（带 JSON 引号的 `"2.0"`），非独立字面。
+    try testing.expectEqualStrings("\"" ++ jsonrpc.version_value ++ "\"", ek_v20);
+
+    // A3 跨面 round-trip：服务端 resultResponse 真产物以 hub 版本形起头，守卫 params_face[0]
+    //    needle 钉给客户端的版本片段亦由同一 hub 派生——两端同源，写侧/自测/js 不可分道。
+    const rs = try resultResponse(gpa, "1", "{}");
+    defer gpa.free(rs);
+    try testing.expect(std.mem.startsWith(u8, rs, "{\"jsonrpc\":\"" ++ jsonrpc.version_value ++ "\""));
+    try testing.expect(std.mem.indexOf(u8, params_face[0].needle, ": '" ++ jsonrpc.version_value ++ "',") != null);
+
+    // A4 反锚：漂版本伪造形（hub 值换号）不得与写侧 ek_v20 等价，杜绝同值旁路蒙混。
+    try testing.expect(!std.mem.eql(u8, ek_v20, "\"" ++ "2.1" ++ "\""));
 }
 
 // T2：rangeJson 字节区间→Range（ASCII 跨行 + CJK 每 3 字节 BMP 汉字 = 1 UTF-16 码元列） +
