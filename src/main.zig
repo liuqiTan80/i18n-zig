@@ -1768,6 +1768,36 @@ test "第 234 轮 T1 源扩展名对跨模块往返锚：真 translate 改写目
     try std.testing.expectEqualStrings(std_operand, std.fs.path.basename(gen_rel));
 }
 
+test "第 235 轮 T1 入口检测形跨模块往返锚：真 buildInitTemplate→translate 产物喂进 zigHasMainFn 必认（防读侧与写侧涌现形漂移失联）" {
+    // 本锚是 D103 的核心缺口补位：t2 探针 P1 实锤——把读侧 `zigHasMainFn` 的两枚行首前缀漂成双空格
+    // `pub fn  main(`、并协同改其自身单测输入，写侧 translate 测（断产物含 `pub fn main()`）与之互不引用→
+    // fresh 606/606 全绿静默；真跑坐实同漂移下 `zzc check` 对 `u8=300` 溢出错返回 rc=0（漏检语义根→
+    // 跳 build-exe→仅浅层 ast-check→类型错静默放过·D47 类假过）。既有两测各钉同串却各测各，无「写侧真产物
+    // 喂进读侧真函数」的往返耦合。本锚驱 **真** buildInitTemplate → **真** translate → **真** zigHasMainFn：
+    //   任一侧漂移（读侧常量改形 / 写侧生成形变）皆使本锚红——正是要补的缺口。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    // A1 往返主证：init 模板（含真入口）经真翻译后的产物，读侧必认其为可执行语义根。
+    const tmpl = try cli.buildInitTemplate(gpa, lang);
+    const res = try translate.translate(gpa, tmpl, lang, &table);
+    try std.testing.expect(cli.zigHasMainFn(res.zig_str));
+    // A1b 直钉两侧同形：产物里必现读侧常量 `entry_pub_prefix` 原形（写侧若改生成形、此钉翻红）。
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, cli.entry_pub_prefix) != null);
+
+    // A2 反证防恒真：无入口的库形翻译产物（函数名被 intern 成 z_N、绝不以 `fn main(`/`pub fn main(` 起）
+    //    读侧必判 false——否则 A1 的 true 可能来自读侧恒绿的假锚。
+    var lib_table = Mangle.init(gpa);
+    defer lib_table.deinit();
+    const lib_res = try translate.translate(gpa, "函数 助手() 空 { }\n", lang, &lib_table);
+    try std.testing.expect(!cli.zigHasMainFn(lib_res.zig_str));
+}
+
 // 第 190 轮审计注：承 189 对账，main.zig 再锁定测面零直调两域——
 // ①findUnit（L394·入口→unit 三层检索：samePathRel 精确臂（分隔符归一）→ stem
 //   宽松臂 → null）唯 cmdCheck L549 / cmdBuild L609 两生产直调；samePathRel/stem

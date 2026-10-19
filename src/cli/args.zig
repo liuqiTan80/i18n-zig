@@ -940,6 +940,15 @@ test "zigDriftNote：基线内 null、非基线产母语告警、buf 过小静�
     try std.testing.expect(zigDriftNote(0, 99, &tiny) == null);
 }
 
+/// 入口检测形（读侧单一真值，第 235 轮 D103）：`zigHasMainFn` 认出「生成 Zig 顶层入口」所依据的
+/// 两枚行首前缀——公开形 `pub fn main(`、非公开形 `fn main(`。二者皆是 transpiler 逐 token 翻译
+/// 方言 `公开 函数 主函数(` 的**涌现产物形**（写侧无此字面量），本模块仅按串面识别；写侧生成形与
+/// 读侧识别形此前各测各钉同一串、互不引用，任一侧漂移即静默错检语义根（D47 类假过）。收编为常量后
+/// 由 main.zig 的 235 T1 往返锚（真 `buildInitTemplate`→`translate` 产物喂进本函数）钉死两侧必同形。
+/// 后缀形制契约：公开形 `pub fn main(` 以非公开形 `fn main(` 结尾（`pub ` 前缀差异），235 T0 钉之。
+pub const entry_pub_prefix: []const u8 = "pub fn main(";
+pub const entry_prefix: []const u8 = "fn main(";
+
 /// 判断一段**生成 Zig 源码**是否含顶层入口函数 `main`（无论是否公开）。
 /// 只认同同行首（无缩进）且紧跟 `(` 的 `pub fn main(` 或 `fn main(`——要求行首无缩进（入口必为顶层）、
 /// 紧跟 `(` 以免误配 `fn main_helper(` 等含 main 前缀的非入口函数。非公开的 `fn main(` 也算入口：
@@ -950,8 +959,8 @@ pub fn zigHasMainFn(zig_src: []const u8) bool {
     var it = std.mem.splitScalar(u8, zig_src, '\n');
     while (it.next()) |line| {
         // 顶层入口无论是否 pub 都算“可执行根”（`pub fn main(` 不满足第二个判定，二者互斥）。
-        if (std.mem.startsWith(u8, line, "pub fn main(")) return true;
-        if (std.mem.startsWith(u8, line, "fn main(")) return true;
+        if (std.mem.startsWith(u8, line, entry_pub_prefix)) return true;
+        if (std.mem.startsWith(u8, line, entry_prefix)) return true;
     }
     return false;
 }
@@ -1001,6 +1010,24 @@ test "zigHasMainFn：认顶层 pub/非公开 fn main(，不缩进、不被 main_
     try std.testing.expect(!zigHasMainFn("    fn main() void {}\n"));
     // 字符串里含 pub fn main 但不在行首 → false（逐行行首才判）。
     try std.testing.expect(!zigHasMainFn("const s = \"pub fn main(\";\n"));
+}
+
+test "235 T0（第 235 轮 D103）：入口检测形常量值钉＋后缀形制契约＋识别判据" {
+    // ① 两枚常量值钉（独立字面量·承消缺测内判据不复用常量）：
+    //    读侧识别形必须恰为 transpiler 逐 token 翻译方言入口的涌现产物串首段。
+    try std.testing.expectEqualStrings("pub fn main(", entry_pub_prefix);
+    try std.testing.expectEqualStrings("fn main(", entry_prefix);
+    // ② 后缀形制契约：公开形 `pub fn main(` 必以非公开形 `fn main(` 结尾（仅差 `pub ` 前缀），
+    //    两枚不可各自漂成无关串——漂则本契约红（捕获单侧被改成不同词形）。
+    try std.testing.expect(std.mem.endsWith(u8, entry_pub_prefix, entry_prefix));
+    try std.testing.expectEqual(
+        entry_pub_prefix.len - entry_prefix.len,
+        std.mem.indexOf(u8, entry_pub_prefix, entry_prefix).?,
+    ); // 公开形内 `fn main(` 必居首（偏移==`pub ` 长度==4）
+    // ③ 识别判据：zigHasMainFn 必认这两枚常量拼出的行首形、不认缺 `(` 或缩进形（与常量同源行为）。
+    try std.testing.expect(zigHasMainFn(entry_pub_prefix ++ ") void {}\n"));
+    try std.testing.expect(zigHasMainFn(entry_prefix ++ ") void {}\n"));
+    try std.testing.expect(!zigHasMainFn("pub fn main) void {}\n")); // 缺紧跟 `(`
 }
 
 /// 跳过空白（空格/制表/换行），返回首个非空白下标（越界则返回 src.len）。
