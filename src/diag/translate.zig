@@ -15,6 +15,7 @@ const Mangle = @import("../transpiler/mangle.zig");
 const Pack = @import("../lang/pack.zig");
 const PureFilter = @import("pure_filter.zig").PureFilter; // 取嵌套 struct，非文件根命名空间
 const UntranslatedList = @import("pure_filter.zig").UntranslatedList;
+const untranslated_marker = @import("pure_filter.zig").untranslated_marker; // 239 D107 兜底提示前缀单源（消费测反锚 fallback 默认值同源）
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：内部路径族的隐藏判据与族成员同源
 const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读单行格式串取契约 hub 真值
 const kdiag = @import("kind.zig"); // 第 208 轮 D76：机读 kind 词汇(en↔zh↔severity)取单一真值 hub
@@ -1677,7 +1678,7 @@ test "纯母语过滤器：英文残留被拦截" {
     // 测试过滤（本过滤器未注入落盘清单：只拦不记，时间传 nowEpochS(null)=0 即可）
     const result = try filter.filterMessage(gpa, "expected type, found 'i64'", "src/main.zz:5:10", nowEpochS(null));
     defer gpa.free(result);
-    try std.testing.expect(std.mem.indexOf(u8, result, "[未翻译]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, untranslated_marker) != null);
 }
 
 fn diag_parse_one(s: []const u8) DiagLine {

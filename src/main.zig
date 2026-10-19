@@ -28,6 +28,7 @@ const UntranslatedList = @import("diag/pure_filter.zig").UntranslatedList;
 const renderUntranslatedJson = @import("diag/pure_filter.zig").renderUntranslatedJson;
 const UntranslatedPhrase = @import("diag/pure_filter.zig").UntranslatedPhrase; // 192 T1 造清单 entry 用（生产侧经 UntranslatedList 间接引用、无此别名先例）
 const untranslated_log_path_default = @import("diag/pure_filter.zig").default_log_path; // 197 D64 单一真值（此处取作默认初值、198 D66 下改为可覆写变量）
+const pending_marker = @import("diag/pure_filter.zig").pending_marker; // 239 D107 未翻译清单建议译形标记单源（消费测反锚两面同源）
 const cli = @import("cli/args.zig");
 const zzc = @import("zzc_paths.zig"); // 第 200 轮 D68：内部状态/产物路径族（符号表、产物目录、深检临时发射物）取单一真值
 const mcon = @import("machine_contract.zig"); // 第 203 轮 D71：机读出口契约族（旗标名/子命令名/单行骨架）取单一真值
@@ -2120,7 +2121,7 @@ test "第 192 轮 T1 flushUntranslated：空清单不建文件/落盘字段透�
     try std.testing.expectEqualStrings(PHRASE, e0.get("phrase").?.string);
     try std.testing.expectEqualStrings(LOC, e0.get("location").?.string);
     try std.testing.expectEqual(TS, e0.get("timestamp").?.integer);
-    try std.testing.expectEqualStrings("[待翻译] " ++ PHRASE, e0.get("suggested_translation").?.string);
+    try std.testing.expectEqualStrings(pending_marker ++ " " ++ PHRASE, e0.get("suggested_translation").?.string);
 
     // A3 去重清单多 entry 顺序透传：log 去重属纯函数面（已有钉），壳侧契约=条目序照传。
     var items_c = std.ArrayList(UntranslatedPhrase).empty;

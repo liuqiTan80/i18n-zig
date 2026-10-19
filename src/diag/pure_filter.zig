@@ -56,11 +56,20 @@ pub const Whitelist = struct {
 /// 族根真值与跨文件覆盖自此归一管（判据见 `zzc_paths.dirIgnored`，守卫见 `zig build check-ignore-coverage`）。
 pub const default_log_path: []const u8 = zzc_paths.logs_dir ++ "/" ++ zzc_paths.log_file_name;
 
+/// 未翻译状态标记族**单一真值**（第 239 轮 D107）：`pending_marker`＝清单条目的建议译形前缀
+/// （JSON 机读面 `renderUntranslatedJson` 与 Markdown 人读面 `renderReport` 两处 emit 共用），
+/// `untranslated_marker`＝整条兜底提示的前缀（`Config.fallback_message` 默认值用）。二者此前跨
+/// emit／测／`main` 消费／`diag/translate` 消费多点各自内联手抄、各锚各测——探针实锤：协同漂 JSON
+/// 面三处（emit＋其自测＋main 消费）而独留 Markdown 面不动，全库测试仍绿（618/618），同一未翻译条目
+/// 的机读面与人读面标记静默失联（第 239 轮 P1）。现全员取本二枚真值、两面 emit 自同源，跨面漂移面消除。
+pub const pending_marker: []const u8 = "[待翻译]";
+pub const untranslated_marker: []const u8 = "[未翻译]";
+
 /// 纯母语过滤器配置
 pub const Config = struct {
     enabled: bool = true,
     min_english_length: usize = 3,
-    fallback_message: []const u8 = "[未翻译] 此报错暂未提供中文翻译，请参考英文原文",
+    fallback_message: []const u8 = untranslated_marker ++ " 此报错暂未提供中文翻译，请参考英文原文",
     /// 落盘路径默认值（= `default_log_path`，与 main 层落盘点同源）。生效边界：实际落盘由 main 层按
     /// `default_log_path` 执行，本字段传非默认值**不改变**落盘点位——filter 系 `zigCompile` 帧内局部
     /// （`main.zig` L444）、进程出口 `flushUntranslated` 拿不到它；要按实例生效须把 filter 或路径
@@ -148,7 +157,7 @@ pub fn renderUntranslatedJson(gpa: std.mem.Allocator, items: []const Untranslate
             .phrase = it.phrase,
             .location = it.location,
             .timestamp = it.timestamp,
-            .suggested_translation = try std.fmt.allocPrint(gpa, "[待翻译] {s}", .{it.phrase}),
+            .suggested_translation = try std.fmt.allocPrint(gpa, pending_marker ++ " {s}", .{it.phrase}),
         };
         filled += 1;
     }
@@ -329,7 +338,7 @@ pub const PureFilter = struct {
             // 传递给 appendSlice（拷贝字节入 out）却从不 free 那块临时串 → 每行泄 1 块（第 65 轮 D23 坐实）。
             const row = try std.fmt.allocPrint(
                 gpa,
-                "| {d} | {s} | {s} | [待翻译] {s} |\n",
+                "| {d} | {s} | {s} | " ++ pending_marker ++ " {s} |\n",
                 .{ idx, phrase.phrase, phrase.location, phrase.phrase },
             );
             defer gpa.free(row);
@@ -522,7 +531,7 @@ test "filterMessage - 兜底翻译，且记入落盘清单（F3）" {
     );
     defer gpa.free(result);
 
-    try std.testing.expect(std.mem.indexOf(u8, result, "[未翻译]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, untranslated_marker) != null);
     try std.testing.expect(std.mem.indexOf(u8, result, "expected type, found 'i64'") != null);
     try std.testing.expectEqual(@as(usize, 1), list.items.items.len);
     try std.testing.expectEqualStrings("expected type, found 'i64'", list.items.items[0].phrase);
@@ -583,7 +592,7 @@ test "F3 - JSON 渲染：合法可解析、中文原样、特殊字符转义、�
     try std.testing.expectEqualStrings(items[0].phrase, parsed.value.phrases[0].phrase);
     try std.testing.expectEqualStrings("src/主程序.zz:5:10", parsed.value.phrases[0].location);
     try std.testing.expectEqual(@as(i64, 1762000000), parsed.value.phrases[0].timestamp);
-    const want_suggested = try std.fmt.allocPrint(gpa, "[待翻译] {s}", .{items[0].phrase});
+    const want_suggested = try std.fmt.allocPrint(gpa, pending_marker ++ " {s}", .{items[0].phrase});
     defer gpa.free(want_suggested);
     try std.testing.expectEqualStrings(want_suggested, parsed.value.phrases[0].suggested_translation);
 }
@@ -597,7 +606,7 @@ test "renderUntranslatedJson - mid-loop OOM 不得泄漏已分配字符串（D22
         .{ .phrase = "beta", .location = "main.zz:2:2", .timestamp = 2 },
     };
     // 旧实现：string-free 清理 defer 登记在循环之后，mid-loop OOM 时 try 已返回、defer 未登记
-    // → 已分配的 entries[0].suggested_translation（"[待翻译] alpha"，17 字节）泄漏（std.testing.allocator 会报）。
+    // → 已分配的 entries[0].suggested_translation（pending_marker 拼 " alpha"，17 字节）泄漏（std.testing.allocator 会报）。
     // 期望：干净返回 OutOfMemory 且无泄漏（filled 计数 + errdefer 精确回滚已填部分）。
     try std.testing.expectError(error.OutOfMemory, renderUntranslatedJson(gpa, &items, 123));
 }
@@ -616,12 +625,56 @@ test "renderReport - Markdown 渲染内容正确且不泄漏行临时串（D23 �
         "# 未翻译短语报告\n\n" ++
             "| 序号 | 短语 | 位置 | 建议翻译 |\n" ++
             "|------|------|------|----------|\n" ++
-            "| 1 | alpha | main.zz:1:1 | [待翻译] alpha |\n" ++
-            "| 2 | beta | src/主.zz:2:3 | [待翻译] beta |\n",
+            "| 1 | alpha | main.zz:1:1 | " ++ pending_marker ++ " alpha |\n" ++
+            "| 2 | beta | src/主.zz:2:3 | " ++ pending_marker ++ " beta |\n",
         result,
     );
     // 兼做泄漏回归：旧实现循环内 `try out.appendSlice(gpa, try allocPrint(...))` 的行临时串从不 free
     // → 每行泄 1 块（happy path 即泄），std.testing.allocator 会在测毕报 leaked——本测同钉此回归。
+}
+
+test "第 239 轮 T0 未翻译状态标记族单源真值钉 + 形制契约 + 反锚方括号字面量唯定义处（D107）" {
+    // A1 值钉：两枚标记的规范字面量（判据独立写死、不复用被测常量的拼装）。
+    try std.testing.expectEqualStrings("[待翻译]", pending_marker);
+    try std.testing.expectEqualStrings("[未翻译]", untranslated_marker);
+    // A2 形制契约：皆方括号包裹的状态词、二者互异（防两枚被误并同值而语义坍缩）。
+    for ([_][]const u8{ pending_marker, untranslated_marker }) |m| {
+        try std.testing.expect(m.len >= 3);
+        try std.testing.expectEqual(@as(u8, '['), m[0]);
+        try std.testing.expectEqual(@as(u8, ']'), m[m.len - 1]);
+    }
+    try std.testing.expect(!std.mem.eql(u8, pending_marker, untranslated_marker));
+    // A3 反锚裸字面量：@embedFile 读本模块源码，两枚方括号字面量各自仅允许出现于两处——
+    //   其 pub const 定义行与上方 A1 值钉行（值钉需独立写死字面量作判据）；emit／测其余点位全委派
+    //   `pending_marker`／`untranslated_marker`。任一 emit 侧回退内联同串手抄即使本锚计数超 2 而红（与 T1 互补：
+    //   T1 抓两面标记值分叉、A3 抓单面回退内联）。
+    const src = @embedFile("pure_filter.zig");
+    var cnt_pending: usize = 0;
+    var cnt_untranslated: usize = 0;
+    var i: usize = 0;
+    while (i <= src.len) : (i += 1) {
+        const rest = src[i..];
+        if (rest.len >= pending_marker.len and std.mem.eql(u8, rest[0..pending_marker.len], pending_marker)) cnt_pending += 1;
+        if (rest.len >= untranslated_marker.len and std.mem.eql(u8, rest[0..untranslated_marker.len], untranslated_marker)) cnt_untranslated += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 2), cnt_pending);
+    try std.testing.expectEqual(@as(usize, 2), cnt_untranslated);
+}
+
+test "第 239 轮 T1 同一未翻译条目经 JSON 机读面与 Markdown 人读面 emit 标记必同源（D107 核心牙）" {
+    const gpa = std.testing.allocator;
+    const items = [_]UntranslatedPhrase{
+        .{ .phrase = "alpha", .location = "main.zz:1:1", .timestamp = 1 },
+    };
+    const json = try renderUntranslatedJson(gpa, &items, 1);
+    defer gpa.free(json);
+    const md = try PureFilter.renderReport(gpa, &items);
+    defer gpa.free(md);
+    // 同源串：机读面 suggested_translation 与人读面「建议翻译」列对同一 phrase 必同为 pending_marker ＋ 空格 ＋ phrase。
+    const same_field = pending_marker ++ " alpha";
+    try std.testing.expect(std.mem.indexOf(u8, json, same_field) != null);
+    try std.testing.expect(std.mem.indexOf(u8, md, same_field) != null);
+    // 反锚：任一 emit 绕开单源自持异标记（如 P1 形制 JSON 面改内联它串），两面即不同时含同源串——本锚独红捕获该静默失联。
 }
 
 test "fromConfig 构造默认过滤器（第 66 轮：文档面公开 API 此前从不被编译，补测钉住并防断代）" {
