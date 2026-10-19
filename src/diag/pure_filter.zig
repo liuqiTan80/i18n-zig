@@ -9,7 +9,7 @@ const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack;
 const zzc_paths = @import("../zzc_paths.zig");
 
-const zh_pack = @embedFile("../lang/packs/中文.txt");
+const zh_pack = @embedFile(zzc_paths.builtin_pack_embed_child); // 第 238 轮 D106：内置默认包文件名由 hub 单源派生（child 层 embed）
 
 /// 白名单规则：允许某些英文内容（如标识符、类型名）
 pub const Whitelist = struct {

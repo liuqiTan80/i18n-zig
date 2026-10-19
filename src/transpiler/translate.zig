@@ -373,7 +373,7 @@ fn emitReplacement(
     });
 }
 
-const zh_pack = @embedFile("../lang/packs/中文.txt");
+const zh_pack = @embedFile(zzc.builtin_pack_embed_child); // 第 238 轮 D106：内置默认包文件名由 hub 单源派生（child 层 embed）
 
 test "翻译快照：hello 方言 -> 标准 Zig（逐字节）" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

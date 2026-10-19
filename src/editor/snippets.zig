@@ -13,6 +13,7 @@
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack;
 const lang_id = @import("lang_identity.zig"); // 第 231 轮 D99：语言常量词集与词类判序取单一真值（与 tmlang 高亮侧同源）
+const zzc_paths = @import("../zzc_paths.zig"); // 第 238 轮 D106：内置默认包文件名取 hub 单源真值
 
 /// 判断映射值是否属于语言常量（true/false/null/undefined）。第 231 轮 D99：词集下沉 hub、
 /// 本函数委派 `lang_identity.is_language_constant` 单源（与 tmlang 侧共词集·不再同体手抄）。
@@ -182,7 +183,7 @@ test "snippets.generate：合法 JSON、含方言词补全、附标准映射描�
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
     defer lang.deinit();
 
     const json_bytes = try generate(gpa, lang);
@@ -215,7 +216,7 @@ test "snippets.generate：确定性——两次生成逐字节一致（第 155 �
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
     defer lang.deinit();
 
     const a = try generate(gpa, lang);
@@ -231,7 +232,7 @@ test "snippets.generate：对象键唯一、无静默覆盖（第 155 轮·D40 �
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
     defer lang.deinit();
 
     const json_bytes = try generate(gpa, lang);

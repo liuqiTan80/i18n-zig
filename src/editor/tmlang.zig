@@ -11,6 +11,7 @@
 const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack;
 const lang_id = @import("lang_identity.zig"); // 第 215 轮 D83：scopeName／fileTypes 取语言标识族真值
+const zzc_paths = @import("../zzc_paths.zig"); // 第 238 轮 D106：内置默认包文件名取 hub 单源真值
 
 /// 词形条目：方言词 + 长度（排序用）。
 const Word = struct { text: []const u8, len: usize };
@@ -249,7 +250,7 @@ test "tmlang.generate：合法 JSON、包含方言词、分类正确（第 154 �
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
     defer lang.deinit();
 
     const json_bytes = try generate(gpa, lang);
@@ -285,7 +286,7 @@ test "tmlang.generate 确定性——同包两次生成逐字节一致（第 228
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
     defer lang.deinit();
 
     // 同一 Pack 连生两次——若生成侧引入任何不稳定序（哈希迭代序、未排序 append 等），
@@ -302,7 +303,7 @@ test "第 231 轮 T0 tmlang.generate 语言常量路由落 literals 组（承 hu
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
     defer lang.deinit();
     const json_bytes = try generate(gpa, lang);
     defer gpa.free(json_bytes);

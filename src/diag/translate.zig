@@ -764,7 +764,7 @@ pub fn translateStderr(
     return out.toOwnedSlice(gpa);
 }
 
-const zh_pack = @embedFile("../lang/packs/中文.txt");
+const zh_pack = @embedFile(zzc.builtin_pack_embed_child); // 第 238 轮 D106：内置默认包文件名由 hub 单源派生（child 层 embed）
 
 test "报错回译快照：常量重赋值 -> 母语译文 + 教学提示" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

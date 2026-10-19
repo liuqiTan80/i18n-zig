@@ -73,6 +73,52 @@ pub const lang_dir: []const u8 = root ++ "/lang";
 /// 单边漂移不可能（`--lang` 选用仍走 fileRel 精确路径·无 glob 枚举，扩展名漂移不改读侧命中）。
 pub const pack_ext: []const u8 = ".txt";
 
+/// 内置默认语言包（`zh` 包·包内 `# @default` 所指）的**词干**（第 238 轮 D106）。
+/// 旧形制下这枚文件名 `中文.txt` 被 **42 处** `@embedFile`（`src/root.zig`/`main.zig` 的 src 形、
+/// `diag`/`transpiler`/`editor`/`lsp` 各模块的 child 形、`lang/pack.zig` 测试的 lang 形）连同
+/// `build.zig` 两枚 `addFileArg` 与两枚 `gen-*-main` 的 emit 缺省包路径共 **46 处**按**文件名**各自
+/// 内联手抄、无一共同真值；而 `registry` 依包内 `# @default` **内容指令**发现默认包（`build.zig` 扫描
+/// 生成 `pack_registry` 模块、默认包恒置 `entries[0]`），与上述**按名认包**的 embed/资产面**无对拍**。
+/// 后果：移动 `# @default`（或增第二基包设默认）时，产品默认（走 registry 内容）与编辑器资产/内嵌默认
+/// （走 build.zig/`@embedFile` 硬编文件名）**静默分道**——`root.zig` 导出的 `zh_pack_bytes`（按名 embed）
+/// 与 `registry.defaultEntry().bytes`（按内容发现）一旦不等也无任何测交叉。t2 探针实锤（`.scratch238/`）：
+/// P1 把 `root.zig` 的 embed 目标 `中文.txt`→`繁体.txt` → 整清缓存 fresh 615/615 全绿（导出零消费·无锚）；
+/// P3 把 `gen_tmlang_main` 的 emit 缺省包路径改 `繁体.txt` → CI 不可见绿（check 模式吃 build.zig `addFileArg`
+/// 传参、缺省值不被触发；emit 手工活路才读错包）。本族落地后文件名只存于此处、四形 embed 与 cwd 形皆派生，
+/// 并由 `root.zig` 的 238 T1 内容↔名字一致性锚 + `build.zig` 对面十一 needle 双向钉死，名字默认与内容默认
+/// 不再可能单边漂移。
+pub const builtin_pack_stem: []const u8 = "中文";
+
+/// 内置默认语言包文件名 = 词干 + 包扩展名（`zh` 包·`# @default` 所指·与 `pack_ext` 同源）。
+pub const builtin_pack_file: []const u8 = builtin_pack_stem ++ pack_ext;
+
+/// 语言包目录相对 `src/` 的路径段（`src/root.zig`、`src/main.zig` 层的 embed 前缀）。
+const packs_subpath_from_src: []const u8 = "lang/packs/";
+
+/// `src/` 层 embed 相对形（`src/root.zig`、`src/main.zig` 的 `@embedFile`）：`lang/packs/中文.txt`。
+pub const builtin_pack_embed_src: []const u8 = packs_subpath_from_src ++ builtin_pack_file;
+
+/// `src/*/` 子层 embed 相对形（`diag`/`transpiler`/`editor`/`lsp` 各模块）：`../lang/packs/中文.txt`。
+pub const builtin_pack_embed_child: []const u8 = "../" ++ builtin_pack_embed_src;
+
+/// `src/lang/` 层 embed 相对形（`lang/pack.zig` 测试）：`packs/中文.txt`。
+pub const builtin_pack_embed_lang: []const u8 = "packs/" ++ builtin_pack_file;
+
+/// 仓根 cwd 相对形（`build.zig` 的 `addFileArg`／`gen-*-main` 的 emit 缺省包路径）：`src/lang/packs/中文.txt`。
+pub const builtin_pack_cwd_rel: []const u8 = src_dir ++ "/" ++ builtin_pack_embed_src;
+
+/// 一次对面核对项（needle 与「分道即何为」说明）：`machine_matcher` 的 `checkFace` 以 anytype 只读
+/// `.needle`/`.why` 两字段、跨 hub 复用同一判据（同 `lang_identity.FaceCheck` 形制，不另立第三套搜索逻辑）。
+pub const BuildFace = struct { needle: []const u8, why: []const u8 };
+
+/// 对面二十一·`build.zig` 的内置默认包 `addFileArg` 路径（第 238 轮 D106）：`build.zig` 系构建脚本独立
+/// 编译单元、无法 `@import` 本 hub，故 needle 由 `builtin_pack_cwd_rel` 派生、守卫读 `build.zig` 逐字节对账——
+/// 把两枚 `addFileArg(b.path("src/lang/packs/中文.txt"))` 钉到 hub 真值，改任一侧即分道转红（同 D78
+/// `buildDeclaresExe`／D94 `ps1_face` 的「读 build.zig/外部文件、needle 派生自 hub」形制）。
+pub const build_pack_face = [_]BuildFace{
+    .{ .needle = "addFileArg(b.path(\"" ++ builtin_pack_cwd_rel ++ "\"))", .why = "build.zig 声明给编辑器生成物守卫的语言包输入路径须与内置默认包真值同源，分道即 committed 资产按旧包名生成而产品默认已换包（资产与默认包静默失联）" },
+};
+
 /// 符号表文件：跨会话稳定的母语名 → ASCII 名映射（D16/D36 语义，恢复失败须传播）。
 pub const symbols_file: []const u8 = root ++ "/symbols.txt";
 
@@ -552,4 +598,22 @@ test "第 237 轮 T0 语言包扩展名族：pack_ext 值钉＋形制契约（�
     //    本锚仅坐实两者恰同尾而互不引用（pack_ext 漂移不改 symbols_file 形）。
     try std.testing.expect(std.mem.endsWith(u8, symbols_file, ".txt"));
     try std.testing.expectEqualStrings(".zzc/symbols.txt", symbols_file);
+}
+
+test "第 238 轮 T0 内置默认包身份族：四形 embed + cwd 形的值钉与层间派生互洽（防 中文.txt 跨 46 处文件名手抄单边漂移）" {
+    // A1 值钉：文件名 = 词干 + pack_ext（与 D105 pack_ext 同源）；改词干或改 pack_ext 皆动本钉。
+    try std.testing.expectEqualStrings("中文", builtin_pack_stem);
+    try std.testing.expectEqualStrings("中文.txt", builtin_pack_file);
+    // A2 四形 embed 逐字节钉（旧形制散在各模块的内联字面量，本轮收敛后由独立硬编字面量钉住其真形）。
+    try std.testing.expectEqualStrings("lang/packs/中文.txt", builtin_pack_embed_src);
+    try std.testing.expectEqualStrings("../lang/packs/中文.txt", builtin_pack_embed_child);
+    try std.testing.expectEqualStrings("packs/中文.txt", builtin_pack_embed_lang);
+    try std.testing.expectEqualStrings("src/lang/packs/中文.txt", builtin_pack_cwd_rel);
+    // A3 层间派生互洽（独立 oracle）：child = "../" + src；cwd = src_dir + "/" + src；lang 与 src 尾同名。
+    //    若某一层漏写分隔符或错拼目录，四形会不一致——embed 相对形是相对各调用文件解析的，层间错位即编译期找不到文件。
+    try std.testing.expectEqualStrings("../" ++ builtin_pack_embed_src, builtin_pack_embed_child);
+    try std.testing.expectEqualStrings(src_dir ++ "/" ++ builtin_pack_embed_src, builtin_pack_cwd_rel);
+    try std.testing.expect(std.mem.endsWith(u8, builtin_pack_embed_src, builtin_pack_embed_lang));
+    // A4 内置默认包文件名尾必与 pack_ext 同（防错用非包扩展名）：build.zig 扫描器只收 `.txt` 结尾的包。
+    try std.testing.expect(std.mem.endsWith(u8, builtin_pack_file, pack_ext));
 }

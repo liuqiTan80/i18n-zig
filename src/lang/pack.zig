@@ -18,6 +18,8 @@
 
 const std = @import("std");
 
+const zzc_paths = @import("../zzc_paths.zig"); // 第 238 轮 D106：测试内嵌内置默认包文件名取 hub 单源真值
+
 pub const Pack = @This();
 
 pub const Entry = struct {
@@ -333,7 +335,7 @@ pub fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
 
 test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优先、aliases 兼容多段链键、未命中 null" {
     const gpa = std.testing.allocator;
-    var lang = try parse(gpa, @embedFile("packs/中文.txt"));
+    var lang = try parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_lang));
     defer lang.deinit();
 
     // keywords 段命中：结构词反查形与真包一致。
@@ -350,7 +352,7 @@ test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优
 
 test "keywordFormsFor/embedWordForms（第 61 轮下沉真测）：ASCII 直通形居首 + 真实 zh 包方言词形被枚举" {
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var lang = try parse(gpa, zh);
     defer lang.deinit();
 
@@ -411,7 +413,7 @@ test "语言包解析" {
 
 test "内置中文包别名表不变量（第 141 轮）：键除 `.` 分隔外须纯非 ASCII、新模块名到位、全量覆盖" {
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var p = try parse(gpa, zh);
     defer p.deinit();
 
@@ -447,7 +449,7 @@ test "别名键段数不变量（第 143 轮逐段镜像）：每条 alias 中�
     // 「段数相等」是「逐段一一对应」的可机械化形式。旧压扁形（标准库.打印 = std.debug.print 段数 2≠3）
     // 吞掉中间模块段，是「参数不知所云」这类迷惑的根源——本测把镜像定理钓死，任何人再写压扁形即红。
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var p = try parse(gpa, zh);
     defer p.deinit();
 
@@ -465,7 +467,7 @@ test "内置中文包 keywords 内建存在性不变量（第 151 轮·D53 防�
     // 本测无硬编码词表、不随内建增删漂移，长效钉死「死内建映射」（如曾误登的 `类型 = @Type`，
     // @Type 系旧 Zig 匿名类型构造内建、0.17 已移除），任何人再写不存在的内建映射即被此门拦下。
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var p = try parse(gpa, zh);
     defer p.deinit();
 
@@ -508,7 +510,7 @@ test "内置中文包 keywords 关键字存在性不变量（第 152 轮·D54 �
     // `异步 = async` / `等待 = await`（async/await 不在 0.17 关键字注册表、且语法层直接拒 parse），
     // 保留即端到端产 `var z_1 = async f();` 非法码（D53 同族、该拒绝未拒绝）。
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var p = try parse(gpa, zh);
     defer p.deinit();
 
@@ -553,7 +555,7 @@ test "内置中文包 whitelist 存在性不变量（第 153 轮·护栏盲区�
     // 从未经任何存在性把关；写错一字节即「该豁免不生效」的静默漏拦。另拦非 @ token 的
     // 空白/非法词法形（含空格即永不命中、纯占位死条目）。
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var p = try parse(gpa, zh);
     defer p.deinit();
 
@@ -596,7 +598,7 @@ test "内置中文包 keywords 复合多 token 类型表达式值不变量（第
     // 第三区 151/152 测仅记「跳过」而无任何覆盖——值被手滑改坏（如 []cosnt u8）要到真编译才暴。
     // 本测钉分区计数下限与两锚点值；新增复合值须同步 translate.zig 逐字节快照测（153 轮已备）。
     const gpa = std.testing.allocator;
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var p = try parse(gpa, zh);
     defer p.deinit();
 
@@ -641,7 +643,7 @@ test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全
     try std.testing.expect(imp_only.hasMappedValue("@import"));
 
     // 内置真实语言包必须全量通过（契约清单以实际包为真值源，防两处漂移）。
-    const zh = @embedFile("packs/中文.txt");
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
     var real = try parse(gpa, zh);
     defer real.deinit();
     try real.validate();

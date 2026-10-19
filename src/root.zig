@@ -21,7 +21,19 @@ pub const lsp_legend = @import("lsp/server.zig"); // 第 214 轮 D82：语义 to
 pub const lang_id = @import("editor/lang_identity.zig"); // 第 215 轮 D83：编辑器语言标识族单一真值（守卫步据此对账清单/客户端/示例三面）
 pub const lsp_cfg = @import("editor/lsp_config.zig"); // 第 216 轮 D84：LSP 客户端接线族单一真值（守卫步据此对账清单/客户端两面）
 
-pub const zh_pack_bytes = @embedFile("lang/packs/中文.txt");
+pub const zh_pack_bytes = @embedFile(paths.builtin_pack_embed_src); // 第 238 轮 D106：内置默认包文件名由 hub 单源派生（旧硬编 `lang/packs/中文.txt`）
+
+test "第 238 轮 T1 内置默认包一致性锚：按名 embed 的字节 == 按内容 `# @default` 发现的默认包字节" {
+    // 这是 D106 的牙：旧形制下 `zh_pack_bytes`（按文件名 embed）导出后零消费、与
+    // `registry.defaultEntry().bytes`（按包内 `# @default` 内容指令发现）无任何交叉——
+    // t2 探针 P1 实锤将本 embed 目标改 `繁体.txt` 而 fresh 615/615 全绿（静默失联）。
+    // 本锚坐实两个出口的默认包字节逐字节相同：一旦移动 `# @default` 或换名，立即转红。
+    const std = @import("std");
+    std.testing.expectEqualStrings(zh_pack_bytes, registry.defaultEntry().bytes) catch |e| {
+        std.debug.print("zh_pack_bytes 与 registry.defaultEntry() 分道（内置默认包名↔内容失联）\\n", .{});
+        return e;
+    };
+}
 
 test {
     _ = lexer;

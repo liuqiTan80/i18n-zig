@@ -28,7 +28,7 @@ pub fn main(init: std.process.Init) !void {
     // 读取语言包。第 228 轮 D96：check 模式下包路径由 `build.zig` 以 `addFileArg` 作
     // 第三参传入（声明为文件依赖·改包即重跑守卫），不再固定 cwd 相对读；
     // emit 模式（手工调用）缺省仍取仓根包。
-    const pack_path = if (args.len >= 4) args[3] else "src/lang/packs/中文.txt";
+    const pack_path = if (args.len >= 4) args[3] else zzc.paths.builtin_pack_cwd_rel; // 第 238 轮 D106：emit 缺省包路径由 hub 单源派生
     const pack_bytes = std.Io.Dir.cwd().readFileAlloc(io, pack_path, gpa, .unlimited) catch |e| {
         std.debug.print("无法读取语言包 {s}（{s}）\n", .{ pack_path, @errorName(e) });
         std.process.exit(1);

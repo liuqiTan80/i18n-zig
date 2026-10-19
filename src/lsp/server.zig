@@ -918,7 +918,7 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -968,7 +968,7 @@ test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1005,7 +1005,7 @@ test "lsp.server：hover 方言词命中 keywords、与补全描述同口径；�
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1034,7 +1034,7 @@ test "lsp.server：didChange 全文替换后诊断更新；didClose 清空发布
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1065,7 +1065,7 @@ test "lsp.server：exit 置停、未知请求 -32601、坏 JSON -32700、通知�
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1097,7 +1097,7 @@ test "lsp.server：hover 点链别名整体取词（标准库.调试.打印 形�
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1153,7 +1153,7 @@ test "lsp.server：didSave 合并语义项、didOpen 不含语义（保存门控
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1187,7 +1187,7 @@ test "lsp.server：semanticTokens/full 基本映射 + delta 编码（第 161 轮
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1232,7 +1232,7 @@ test "lsp.server：semanticTokens 跳过未知母语词、空文档→空流（�
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1373,7 +1373,7 @@ test "lsp.server：semanticTokensData 跨行 delta_line/delta_start 复位（第
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1407,7 +1407,7 @@ test "lsp.server：semItem char_len/severity 归一化臂（第 166 轮）" {
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1461,7 +1461,7 @@ test "lsp.server：handle 未 open 退/空数组退/重复 open 覆盖（第 166
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1499,7 +1499,7 @@ test "lsp.server：idJson 对字符串 id 特殊字符做 JSON 转义（第 166 
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -1754,7 +1754,7 @@ test "lsp.server：asObject/objIn/intField 取值器分支真形与帧根非对�
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         const ag = arena.allocator();
-        var lang = try Pack.parse(ag, @embedFile("../lang/packs/中文.txt"));
+        var lang = try Pack.parse(ag, @embedFile(paths.builtin_pack_embed_child));
         defer lang.deinit();
 
         for (non_obj) |body| {
@@ -1812,7 +1812,7 @@ test "第 195 轮 T1 upsertDoc 文档表所有权：首插/替换/双 uri/入参
     // lang 走独立 arena（不入被计数的 fa）：本测计数面只管 Server 的分配成交。
     var lang_arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer lang_arena.deinit();
-    var lang = try Pack.parse(lang_arena.allocator(), @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(lang_arena.allocator(), @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
 
     // A1..A5 直调形：首插读回 / 同 uri 替换（count 不增、文本换新）/ 双 uri 互不串 /
@@ -1918,7 +1918,7 @@ test "第 214 轮 T0 语义图例 round-trip：initialize 应答图例反查 tok
     defer arena.deinit();
     const gpa = arena.allocator();
 
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -2042,7 +2042,7 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -2097,7 +2097,7 @@ test "219 T0 词类标签族：六员值钉 + 全域 round-trip + 双出口同�
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     const gpa = arena.allocator();
-    var lang = try Pack.parse(gpa, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(gpa, &lang);
     defer srv.deinit();
@@ -2150,7 +2150,7 @@ test "220 T0：消息本体键族 hub 单源＋骨架渲染＋round-trip＋漂�
         defer tg.free(r3);
         try testing.expectEqualStrings("{\"start\":{\"line\":1,\"character\":2},\"end\":{\"line\":3,\"character\":4}}", r3);
     }
-    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(tg, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(tg, &lang);
     defer srv.deinit();
@@ -2251,7 +2251,7 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
         try testing.expectEqual(@as(i64, ec_method_not_found), intField(e4, k_code).?);
         try testing.expectEqualStrings("甲", strField(e4, k_message).?);
     }
-    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(tg, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(tg, &lang);
     defer srv.deinit();
@@ -2318,7 +2318,7 @@ test "222 T0：诊断严重度码值族 hub 单源＋clamp 边界 round-trip＋�
     try testing.expectEqual(@as(u8, 3), sv_information);
     try testing.expectEqual(@as(u8, 4), sv_hint);
     // A2：semItem clamp 边界 round-trip——界内四支透传、界外（5／0）兜底 sv_error。
-    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(tg, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(tg, &lang);
     defer srv.deinit();
@@ -2392,7 +2392,7 @@ test "223 T0：JSON-RPC 错误码族 hub 单源＋应答体 round-trip＋客户�
         try testing.expectEqual(code, intField(e, k_code).?);
     }
     // A3 handle 活体三臂改严形钉（键前缀＋派生数值逐字节）
-    var lang = try Pack.parse(tg, @embedFile("../lang/packs/中文.txt"));
+    var lang = try Pack.parse(tg, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
     var srv = Server.init(tg, &lang);
     defer srv.deinit();
