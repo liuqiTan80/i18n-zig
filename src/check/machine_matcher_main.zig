@@ -245,6 +245,13 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(main_txt);
     checkFace(main_path, &cli_hub.tl_face, main_txt);
 
+    // —— 对面十六第二清单：`src/main.zig` 的 CLI 退码契约委派形（第 236 轮 D104）。
+    //   usage=2／fail=1 此前全仓无共同真值：main 七处直接 `exit(2)` 臂与 bail 的
+    //   `if (e == error.Usage) 2 else 1` 各抄字面量——`process.exit` 系 noreturn、`zig build test`
+    //   门内不可观测，t2 探针漂 bail/裸 exit 皆 fresh 609/609 全绿静默。本步读同一 main_txt
+    //   （零新增 I/O）验委派形在位（消费侧改回手抄字面量即红）；频次全等钉另由 236 T0 反锚守。
+    checkFace(main_path, &cli_hub.exit_code_face, main_txt);
+
     // —— 对面十七：`package.json` 的 problemMatcher pattern 字段映射五枚（第 225 轮 D93）。
     //   「file/location/column/code/message 各取第几捕获组」与机读行段序（line_fmt 占位符序）同骨，
     //   而对面一只核 regexp 词、从不读这五枚数字——t2 探针 P1/P2/P3 改数字 fresh 585/585 全绿
@@ -268,6 +275,12 @@ pub fn main(init: std.process.Init) !void {
     //   第二份手抄，码点形绕过第 226 轮字面量普查；t2 探针 P1 src 文案漂／P2 ps1 码点漂
     //   双路 fresh 589/589 全绿静默。本步读同一 ps1 文本（零新增 I/O）按 hub 派生码点 needle 对账。
     checkFace(ps1_path, &cli_hub.ps1_native_face, ps1_txt);
+
+    // —— 对面十八第三清单：`tools/check-demos.ps1` 的 usage 错退码断言（第 236 轮 D104）。
+    //   脚本以 PowerShell 字面量 `ExitCode -ne 2` 断言同一退码契约（≥7 处），ps1 非测图
+    //   source dep＋本机 NO_PWSH 双盲——漂 usage_exit_code 或 ps1 断言即外部基线对契约失保。
+    //   needle 由 hub `usage_exit_code` comptime 派生（承 D94 presence 形制），读同一 ps1_txt 对账。
+    checkFace(ps1_path, &cli_hub.exit_code_ps1_face, ps1_txt);
 
     // —— 对面十九：编辑器注释标记族（第 229 轮 D97）。`language-configuration.json` 的注释声明
     //   （lineComment/blockComment/折叠起止）与 `zz.tmLanguage.json` 的注释高亮正则互为同一词形

@@ -894,6 +894,67 @@ test "224 T0：工具链 spawn argv 词族单一真值＋委派形双向钉（�
     }
 }
 
+// ---------------------------------------------------------------------------
+// CLI 退码契约单一真值（第 236 轮 · D104）
+//
+// 用法错（未知子命令/旗标、非法注册名、互斥参数等）退 `usage_exit_code`、一般
+// 编译/运行失败退 `failure_exit_code`（POSIX 惯例：usage=2、fail=1）。此二枚值此前
+// 全仓无共同真值：`src/main.zig` 七处直接 `std.process.exit(2)` 臂与 `bail` 的
+// `if (e == error.Usage) 2 else 1` 各自手抄字面量；外部消费者 `tools/check-demos.ps1`
+// 又以 PowerShell 字面量 `ExitCode -ne 2` 断言同一契约（≥7 处）。`process.exit` 在
+// `zig build test` 门内不可观测（noreturn、测试进程无法捕获）、ps1 非测试图 source dep
+// 且本机 NO_PWSH——t2 探针坐实：漂 bail 规范 `2`→`3`、漂单点裸 `exit(2)`→`exit(3)`，
+// fresh 609/609 皆全绿静默。修法：本对二枚常量为单一真值，main.zig 八点位全委派；
+// `exit_code_face` 交守卫对面（读 main.zig 验委派形＋236 T0 @embedFile 反锚裸字面 0 处）、
+// `exit_code_ps1_face` 交守卫对面（读 ps1 验 `-ne 2` 断言与 usage_exit_code comptime 同源）。
+// ---------------------------------------------------------------------------
+
+/// 用法错退出码（未知子命令/旗标、非法名、互斥参数等，与 error.Usage 同码）。
+pub const usage_exit_code: u8 = 2;
+/// 一般失败退出码（编译/运行/IO 等非用法类失败，与 error.Usage 相异码）。
+pub const failure_exit_code: u8 = 1;
+
+/// 数 needle 在 hay 中的非重叠出现次数（236 T0 反锚/频次钉共用）。
+fn countOccurrences(hay: []const u8, needle: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOf(u8, hay[i..], needle)) |k| {
+        i += k + needle.len;
+        n += 1;
+    }
+    return n;
+}
+
+/// 对面（src/main.zig 退码委派形清单·第 236 轮 D104）：守卫读 main.zig 文本逐字节对账，
+/// 消费侧若改回手抄字面量、委派形 needle 即消失、守卫红；`count` 由 236 T0 以 @embedFile 钉死。
+pub const exit_code_face = .{
+    .{ .needle = "std.process.exit(cli.usage_exit_code);", .count = @as(usize, 7), .why = "main.zig 七处 usage 直接退出臂皆委派单源，漂即某路 usage 退码分道（外部脚本 misjudge）" },
+    .{ .needle = "if (e == error.Usage) cli.usage_exit_code else cli.failure_exit_code", .count = @as(usize, 1), .why = "bail 规范映射臂：error.Usage→usage 码、余→fail 码同源，漂即经 bail 的退码分道" },
+};
+
+/// 对面（tools/check-demos.ps1 退码断言 needle·第 236 轮 D104）：由 usage_exit_code comptime
+/// 派生——改常量 needle 随动、ps1 旧字面 `-ne 2` 即失配红；承 D94 ps1_face presence 形制。
+pub const exit_code_ps1_face = [_]Ps1Needle{
+    .{ .needle = "ExitCode -ne " ++ std.fmt.comptimePrint("{d}", .{usage_exit_code}), .why = "ps1 usage 错退码断言与 usage_exit_code 同源——漂即外部基线守卫对退码契约失保（第 236 轮 D104）" },
+};
+
+test "236 T0：CLI 退码契约单一真值＋main 委派反锚＋ps1 消费对拍（第 236 轮）——D104" {
+    // A1 值钉（独立字面量，防 hub 本体漂移）：POSIX usage=2、fail=1。
+    try std.testing.expectEqual(@as(u8, 2), usage_exit_code);
+    try std.testing.expectEqual(@as(u8, 1), failure_exit_code);
+    // A2 反锚：@embedFile 直读 main.zig，裸 exit(2)/exit(1) 字面量必 0 处（全委派单源）。
+    const main_src = @embedFile("../main.zig");
+    try std.testing.expectEqual(@as(usize, 0), countOccurrences(main_src, "std.process.exit(2);"));
+    try std.testing.expectEqual(@as(usize, 0), countOccurrences(main_src, "std.process.exit(1);"));
+    // A3 委派形频次钉：七处 usage 臂 + bail 映射各恰其数（消费侧回退手抄即此红）。
+    inline for (exit_code_face) |c| {
+        try std.testing.expectEqual(c.count, countOccurrences(main_src, c.needle));
+    }
+    // A4 ps1 消费 needle 独立手抄对拍：派生形须逐字节等于旧 ps1 断言字面 `ExitCode -ne 2`。
+    try std.testing.expectEqual(@as(usize, 1), exit_code_ps1_face.len);
+    try std.testing.expectEqualStrings("ExitCode -ne 2", exit_code_ps1_face[0].needle);
+}
+
 test "parseZigVersion：取前两级、dev/hash 后缀容忍、垃圾输入 null（第 164 轮 R11）" {
     const v1 = parseZigVersion("0.17.0\n");
     try std.testing.expect(v1 != null);

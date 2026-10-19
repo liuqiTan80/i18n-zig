@@ -539,7 +539,7 @@ fn cmdLangAdd(args: []const []const u8) void {
     const file = if (args.len > 0) args[0] else {
         printErr(zzc.prog_prefix ++ "lang add 需要语言包文件：`zzc lang add <文件> [--as 注册名]`。", .{});
         werr.flush() catch {};
-        std.process.exit(2); // 用法错与未知包/未知动词同码（与 error.Usage 一致）
+        std.process.exit(cli.usage_exit_code); // 用法错与未知包/未知动词同码（与 error.Usage 一致）
     };
     var pk = loadExternalPack(file) catch |e| bail(e); // 不存在/$format 过新/语法错均已在源头母语报出
     defer pk.deinit();
@@ -554,7 +554,7 @@ fn cmdLangAdd(args: []const []const u8) void {
     if (!userpack.keyIsSafe(key)) {
         printErr(zzc.prog_prefix ++ cli.np_reg_key_open ++ "{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
         werr.flush() catch {};
-        std.process.exit(2);
+        std.process.exit(cli.usage_exit_code);
     }
     // 二次读同一文件：校验用的是 Pack 结构、落位用原字节（包体不得被加工——第一档装载器同样吃它）。
     const bytes = readWhole(file) catch |e| bail(e);
@@ -563,7 +563,7 @@ fn cmdLangAdd(args: []const []const u8) void {
         error.AlreadyInstalled => {
             printErr(zzc.prog_prefix ++ cli.np_dup_installed ++ cli.np_pack_word ++ "「{s}」（{s}/{s}.txt）。不覆盖既有包：请 --as 另起注册名，或先手工删除该文件。", .{ key, userpack.default_dir, key });
             werr.flush() catch {};
-            std.process.exit(2); // 与 init 防覆盖形制一致：退 2 且原文件逐字节不动
+            std.process.exit(cli.usage_exit_code); // 与 init 防覆盖形制一致：退 2 且原文件逐 字节不动
         },
         else => bail(e), // 权限/IsDir/超限等：bail 的 localizeFsErr 母语兜底既有形
     };
@@ -716,7 +716,7 @@ fn cmdInit(name: []const u8, lang: Pack) !void {
         werr.flush() catch |e| {
             printErr(zzc.prog_prefix ++ "刷新错误输出失败：{s}", .{@errorName(e)});
         };
-        std.process.exit(2);
+        std.process.exit(cli.usage_exit_code);
     }
     const main_zz = try zzc.initEntryPathFor(gpa_, name); // 第 201 轮 D69：入口构造取族 hub（旧形制本处自持一枚 "{s}/src/main.zz"）
     // 防覆盖：入口文件已存在则不写盘，避免清空用户已有工程的劳动成果（幂等、非破坏）。
@@ -959,7 +959,7 @@ fn bail(e: anyerror) noreturn {
     werr.flush() catch |flush_err| {
         printErr(zzc.prog_prefix ++ "刷新错误输出失败：{s}", .{@errorName(flush_err)});
     };
-    std.process.exit(if (e == error.Usage) 2 else 1);
+    std.process.exit(if (e == error.Usage) cli.usage_exit_code else cli.failure_exit_code);
 }
 
 // ---------------------------------------------------------------- LSP 接线
@@ -1236,7 +1236,7 @@ pub fn main(init: std.process.Init) !void {
     if (lang_name != null and lang_file != null) {
         printErr(zzc.prog_prefix ++ "--lang 与 --lang-file 互斥：内置选包、外部包文件二选一。", .{});
         werr.flush() catch {};
-        std.process.exit(2); // 用法错与未知包同码；此刻表未建、无派生状态待落盘（D46 形安全）
+        std.process.exit(cli.usage_exit_code); // 用法错与未知包同码；此刻表未建、无派生状态 待落盘（D46 形安全）
     }
     // R9g 第二档（第 140 轮）：命名来源标——内置注册表 / 工程级已装包（.zzc/lang）。仅用于
     // 把“契约不完整”消息归位：已装包被手工改坏不能报成“工具自身缺陷”（内置包的措辞）。
@@ -1258,7 +1258,7 @@ pub fn main(init: std.process.Init) !void {
                 for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
                 printErr("\n", .{});
                 werr.flush() catch {};
-                std.process.exit(2); // 尚未编译、无兼底项待落盘；直接退 2（与 error.Usage 同码）
+                std.process.exit(cli.usage_exit_code); // 尚未编译、无兼底项待落盘；直接退 2 （与 error.Usage 同码）
             }
         else
             registry.defaultEntry();
@@ -1323,7 +1323,7 @@ pub fn main(init: std.process.Init) !void {
         }
         printErr(zzc.prog_prefix ++ "lang 只有 add " ++ cli.np_subcmd ++ "：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与" ++ cli.np_reg_packs ++ "）；「{s}」不是有效" ++ cli.np_subcmd ++ "。", .{verb});
         werr.flush() catch {};
-        std.process.exit(2); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
+        std.process.exit(cli.usage_exit_code); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }
     if (std.mem.eql(u8, cmd, cli.sub_init)) {
         if (argv.len < 1) bail(error.Usage);
