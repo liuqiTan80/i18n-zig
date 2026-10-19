@@ -32,8 +32,21 @@ pub const Entry = struct {
 /// 包内 `$format` 声明高于此值必须明确拒绝（旧包无 `$format` 行、缺省视为 1，永不破坏已流通的包）。
 pub const supported_format: u32 = 1;
 
-name: []const u8 = "未知语言",
-code: []const u8 = "??",
+/// 第 242 轮 D110：R9g 语言包对外契约词法的**单一真值**——元数据键三枚 + 未设哨兵两枚。
+/// 这五枚是「解析器读的 token」与「报错文案告诉包作者去写的 token」必须恒等的对外契约；
+/// 旧形制下 main.describePackError/loadExternalPack 的用户可见指引把 `$code`/`??`/`$format`
+/// 各手抄一份，与本源解析器分支（下方 meta_* 比较）互不交叉、全库无锚（P1 探针：改指引 token
+/// 且同步其自照测 189 T1 → fresh 626•626 全绿，二进制却对真实用户虚报解析器根本不认的 token）。
+/// 解析器分支、字段缺省、validate 三处内部用一并委派本组常量；main 指引 comptime 拼接引用；
+/// 242 T0/T1 双向钉住「解析器认的 == 指引写的」。
+pub const meta_format = "$format"; // 包格式版本头键（R9g）
+pub const meta_name = "$name"; // 展示名键
+pub const meta_code = "$code"; // 语言代码键
+pub const unset_code = "??"; // 代码未设哨兵：validate 首关即查此值
+pub const unset_name = "未知语言"; // 展示名未设缺省
+
+name: []const u8 = unset_name,
+code: []const u8 = unset_code,
 keywords: std.StringHashMap([]const u8),
 aliases: std.StringHashMap([]const u8),
 diagnostics: std.ArrayList(Entry),
@@ -94,7 +107,7 @@ fn hasMappedValue(self: Pack, want: []const u8) bool {
 /// ① `$code` 必须显式给出（`未知语言`/`??` 默认值混入产品输出属静默降级）；
 /// ② contract_values 逐项存在。错误值逐个命名，供调用方翻译成母语可操作提示。
 pub fn validate(self: Pack) ValidationError!void {
-    if (std.mem.eql(u8, self.code, "??")) return error.PackMissingCode;
+    if (std.mem.eql(u8, self.code, unset_code)) return error.PackMissingCode;
     const err_for = [_]ValidationError{
         error.PackMissingConst,  error.PackMissingVar,       error.PackMissingFn,   error.PackMissingIf,    error.PackMissingElse,
         error.PackMissingReturn, error.PackMissingStruct,    error.PackMissingEnum, error.PackMissingUnion, error.PackMissingSwitch,
@@ -205,7 +218,7 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 // 包格式版本头（R9g，第 103 轮）：外部分发包的前向兼容契约。
                 // 合法即吞不入表；高于 supported_format 拒并提示升级——否则新格式字段（如未来新段）
                 // 会被旧工具当非法行拒或静默丢弃，造成半翻译；0 与非十进制数属手误形拒。
-                if (std.mem.eql(u8, key, "$format")) {
+                if (std.mem.eql(u8, key, meta_format)) {
                     if (seen_format) |old| {
                         if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
                     }
@@ -217,7 +230,7 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                     }
                     continue;
                 }
-                if (std.mem.eql(u8, key, "$name")) {
+                if (std.mem.eql(u8, key, meta_name)) {
                     // 同层元数据矛盾两行（$name/$code 不同值）同族封口；同值幂等照放。
                     if (seen_name) |old| {
                         if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
@@ -226,7 +239,7 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                     self.name = value;
                     continue;
                 }
-                if (std.mem.eql(u8, key, "$code")) {
+                if (std.mem.eql(u8, key, meta_code)) {
                     if (seen_code) |old| {
                         if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
                     }
@@ -647,6 +660,25 @@ test "B6 契约校验 - 缺映射值/缺 $code 逐个报错，内置中文包全
     var real = try parse(gpa, zh);
     defer real.deinit();
     try real.validate();
+}
+
+// 第 242 轮 D110 单源↔解析器往返锚：用契约常量 meta_code/meta_name/meta_format 拼出的包必须
+// 被解析器识别（code/name 落真值、非落未设哨兵）；反向缺 meta_code 行则 code 落 unset_code、
+// validate 拒。若有人把某条解析分支重内联成与 meta_* 不同的字面量（旁通单源），本测喂常量键拼出
+// 的包将不再被认 → code 落 unset_code → 红。与 main 侧 242 T1 双向锁死「解析器认的 == 指引写的」。
+test "第 242 轮 T0 契约 token 单源↔解析器往返（meta_* 拼包即被认·D110）" {
+    const gpa = std.testing.allocator;
+    var p = try parse(gpa, meta_code ++ " = qq\n" ++ meta_name ++ " = 假名\n" ++ meta_format ++ " = 1\n[keywords]\n常数 = const\n");
+    defer p.deinit();
+    try std.testing.expectEqualStrings("qq", p.code);
+    try std.testing.expectEqualStrings("假名", p.name);
+    // meta_format 系元数据头、被吞不入 keywords/aliases（翻译链摸不到它）。
+    try std.testing.expect(p.keywords.get(meta_format) == null);
+    try std.testing.expect(p.aliases.get(meta_format) == null);
+    var q = try parse(gpa, "[keywords]\n常数 = const\n");
+    defer q.deinit();
+    try std.testing.expectEqualStrings(unset_code, q.code);
+    try std.testing.expectError(error.PackMissingCode, q.validate());
 }
 
 // 护栏（第 112 轮证伪落位）：`validate` 以循环指标 `i` 将 `contract_values[i]` 位置耦合到

@@ -486,7 +486,7 @@ fn zigCompile(lang: Pack, table: Mangle, proj: Project, argv: []const []const u8
 /// 告诉包作者缺哪条映射、为何工具链需要它（不透传英文错误名）。
 fn describePackError(e: PackParseError) []const u8 {
     return switch (e) {
-        error.PackMissingCode => "缺少 `$code = xx` 元数据行（语言代码用于版本/列表展示，不得默认为 `??`）",
+        error.PackMissingCode => "缺少 `" ++ Pack.meta_code ++ " = xx` 元数据行（语言代码用于版本/列表展示，不得默认为 `" ++ Pack.unset_code ++ "`）",
         error.PackMissingConst => "缺少映射到 `const` 的关键字（声明位识别与 `常数` 单跳数据流预扫描依赖它）",
         error.PackMissingVar => "缺少映射到 `var` 的关键字",
         error.PackMissingFn => "缺少映射到 `fn` 的关键字（入口链与声明位识别依赖它）",
@@ -507,6 +507,11 @@ fn describePackError(e: PackParseError) []const u8 {
 /// 各失败形面向贡献者母语报出（区别于内置包的「工具自身缺陷」措辞）；契约缺失由调用处
 /// 统一 validate（同一消息形制、携路径）。字节不 free：Pack 键值为借用视图（pack.zig
 /// 存活期约定），gpa_ 为 arena 活到进程退出天然满足；FileNotFound 等可行动错误源头母语。
+// 第 242 轮 D110：loadExternalPack 两处 `$format` 指引文案抽为 comptime 常量、纳入 242 T1 跨面锚。
+// 旧形制此处 token 手抄、printErr 直出不入任何单测捕获（M4 探针：re-inline 旁通单源、fresh 629•629 全绿静默）。
+const fmt_too_new_hint = "外部语言包「{s}」声明的 " ++ Pack.meta_format ++ " 过新（当前 ";
+const pack_syntax_hint = "外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/" ++ Pack.meta_format ++ " 非数等），请按 docs/contributing-lang-pack.md 检查。";
+
 fn loadExternalPack(path: []const u8) !Pack {
     const bytes = readWhole(path) catch |e| switch (e) {
         error.FileNotFound => {
@@ -517,11 +522,11 @@ fn loadExternalPack(path: []const u8) !Pack {
     };
     return Pack.parse(gpa_, bytes) catch |e| switch (e) {
         error.PackFormatTooNew => {
-            printErr(zzc.prog_prefix ++ "外部语言包「{s}」声明的 $format 过新（当前 " ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ cli.np_upgrade ++ " " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
+            printErr(zzc.prog_prefix ++ fmt_too_new_hint ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ cli.np_upgrade ++ " " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
             return error.Failed;
         },
         error.InvalidLangPack => {
-            printErr(zzc.prog_prefix ++ "外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/$format 非数等），请按 docs/contributing-lang-pack.md 检查。", .{path});
+            printErr(zzc.prog_prefix ++ pack_syntax_hint, .{path});
             return error.Failed;
         },
         else => return e, // OOM 等工具层错误传播致 bail
@@ -1673,6 +1678,20 @@ test "第 189 轮 T1 describePackError：B6 报错文案表 14 臂一一映射�
             try std.testing.expect(!std.mem.eql(u8, a.want, b.want));
         }
     }
+}
+
+// 第 242 轮 D110 跨面锚：main 的用户可见报错指引（describePackError）须含 pack 单源的契约 token。
+// P1 探针坐实的静默形制——指引把 `$code`/`??` 手抄一份、与 pack 解析器互不交叉，改指引 token
+// 且同步其自照测 189 T1 → fresh 全绿而二进制对真实用户虚报解析器根本不认的 token。修法后指引
+// comptime 拼 Pack.meta_code/unset_code；本测把「输出串必含单源 token」钉死——若有人把
+// describePackError 重内联成与单源不同的字面量（即便同步改了 189 T1 的 want 字面量），indexOf 落空即红。
+test "第 242 轮 T1 指引↔解析器契约同 token 跨面锚（describePackError 必含 meta_code/unset_code·D110）" {
+    const msg = describePackError(error.PackMissingCode);
+    try std.testing.expect(std.mem.indexOf(u8, msg, Pack.meta_code) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg, Pack.unset_code) != null);
+    // loadExternalPack 两处 $format 指引文案亦必含单源 meta_format（M4 探针坐实的静默面转锚）。
+    try std.testing.expect(std.mem.indexOf(u8, fmt_too_new_hint, Pack.meta_format) != null);
+    try std.testing.expect(std.mem.indexOf(u8, pack_syntax_hint, Pack.meta_format) != null);
 }
 
 test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp 缺/有·行序·关键行措辞）" {
