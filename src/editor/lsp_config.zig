@@ -58,7 +58,8 @@ pub const pkg_face = [_]FaceCheck{
 };
 
 /// 对面·客户端 `extension.js`：命名空间／两枚取值键／回落程序名／spawn 子命令词／方言旗标／
-/// 启动失败提示里的程序名与设置键全名（第 250 轮 D117）。
+/// 启动失败提示里的程序名与设置键全名（第 250 轮 D117）／重启监听器 `affectsConfiguration` 监听的
+/// 两枚配置全名（第 251 轮 D118——全名的第三处消费者，独立于取值键尾段与提示句）。
 pub const client_face = [_]FaceCheck{
     .{ .needle = "getConfiguration('" ++ namespace ++ "')", .why = "客户端 getConfiguration 的命名空间须等于程序名派生真值，分道即用户设置一律读空（lspPath/lang 静默失效）" },
     .{ .needle = ".get('" ++ key_lsp_path ++ "')", .why = "客户端取值键须与清单属性尾段同名，分道即二进制路径设置永不生效" },
@@ -67,6 +68,8 @@ pub const client_face = [_]FaceCheck{
     .{ .needle = "['" ++ cli.sub_lsp ++ "']", .why = "spawn 参数首词须等于子命令真值 `cli.sub_lsp`，src 改名而 js 不随动即「未知子命令」——语言服务器整体失联" },
     .{ .needle = "push('" ++ cli.flag_lang ++ "'", .why = "拉起参数追加的方言旗标须等于 `cli.flag_lang` 真值，分道即非默认方言静默永不生效（js 传旧名、服务端按新名解析）" },
     .{ .needle = launch_hint, .why = "启动失败提示教用户装的二进制名（namespace 派生）与要改的设置键全名（pkg_key_lsp_path 派生）须逐字节等于 hub 真值——改名而提示不随动即误导用户设不存在的键、装错名二进制而构建链恒绿（第 250 轮 D117·t2 漂提示 fresh 642/642 全绿坐实）" },
+    .{ .needle = "affectsConfiguration('" ++ pkg_key_lang ++ "')", .why = "重启监听器 e.affectsConfiguration 监听的方言配置项须等于清单全名 pkg_key_lang——改 namespace 而此处不随动即用户换 zzc.lang 后 restartServer 永不触发、--lang 静默失效（第 251 轮 D118·t2 漂全名 fresh 全绿＋check-machine-matcher success 坐实）" },
+    .{ .needle = "affectsConfiguration('" ++ pkg_key_lsp_path ++ "')", .why = "重启监听器监听的二进制路径配置项须等于清单全名 pkg_key_lsp_path——改 namespace 而此处不随动即用户改 zzc.lspPath 后不重启、新路径静默不生效；本键全名与 launch_hint 尾段同字，但删本句时提示针 occ=1 仍命中 L79 故须独立立针（第 251 轮 D118）" },
 };
 
 /// `text`（运行时对面全文）是否缺 `needle`（命中即已同步；缺失即分道）。守卫据此循环报错、不自立判据。
@@ -110,9 +113,9 @@ test "第 216 轮 T0 LSP 客户端接线族派生与对面 needle 形钉：命�
     try testing.expect(missing("? p.trim() : 'zzq';", client_face[3].needle));
     try testing.expect(missing("\"zzc.lspPathX\": {", pkg_face[1].needle));
     try testing.expect(!missing("\"zzc.lang\": {", pkg_face[2].needle));
-    // A6 面清单覆盖钉：三／七 枚——新增配置键或接线点须在此随动（防只加常量不加对账面）。
+    // A6 面清单覆盖钉：三／九 枚——新增配置键或接线点须在此随动（防只加常量不加对账面）。
     try testing.expectEqual(@as(usize, 3), pkg_face.len);
-    try testing.expectEqual(@as(usize, 7), client_face.len);
+    try testing.expectEqual(@as(usize, 9), client_face.len);
 }
 
 // ———————————————————————————— 测试（250 T0）————————————————————————————
@@ -123,8 +126,8 @@ test "第 250 轮 T0 客户端启动失败提示面单源钉：launch_hint 派�
         "请把 zzc 装入 PATH，或将 zzc.lspPath 设置为其可执行文件路径",
         launch_hint,
     );
-    // A2 入面钉：client_face 第 7 枚（index 6）即本提示 needle，守卫据此对账 extension.js。
-    try testing.expectEqual(@as(usize, 7), client_face.len);
+    // A2 入面钉：client_face 第 7 枚（index 6）即本提示 needle（后因 251 轮 D118 末尾追加两枚全名针至 9 枚·index 6 位形不变），守卫据此对账 extension.js。
+    try testing.expectEqual(@as(usize, 9), client_face.len);
     try testing.expectEqualStrings(launch_hint, client_face[6].needle);
     // A3 同源反证：提示须内嵌 hub 派生的设置键全名子串；漂键名（zzc.lspPatX）即 missing 真（旧针落空→守卫红）。
     try testing.expect(std.mem.indexOf(u8, launch_hint, pkg_key_lsp_path) != null);
@@ -132,4 +135,19 @@ test "第 250 轮 T0 客户端启动失败提示面单源钉：launch_hint 派�
     // A4 程序名派生钉：提示首枚程序名由 namespace（=prog_name）派生，与回落二进制名同字一源。
     try testing.expectEqualStrings(paths.prog_name, namespace);
     try testing.expect(missing("请把 zzq 装入 PATH，或将 zzc.lspPath 设置为其可执行文件路径", launch_hint));
+}
+
+// ———————————————————————————— 测试（251 T0）————————————————————————————
+
+test "第 251 轮 T0 客户端重启监听器配置全名面单源钉：affectsConfiguration 两枚 needle 派生形／入面位钉／漂全名反证（D118）" {
+    // A1 派生形钉：两枚 needle 由清单全名 pkg_key_lang／pkg_key_lsp_path 内联拼装（改名即随动·非另抄）。
+    try testing.expectEqualStrings("affectsConfiguration('zzc.lang')", client_face[7].needle);
+    try testing.expectEqualStrings("affectsConfiguration('zzc.lspPath')", client_face[8].needle);
+    // A2 入面覆盖钉：client_face 共 9 枚，两枚全名针居末两位（新增接线点须在此随动）。
+    try testing.expectEqual(@as(usize, 9), client_face.len);
+    // A3 同源反证：命中形不缺、t2 漂全名（zzc.lanq／zzc.lspPatX）即 missing（旧零针→守卫红的转锚证据）。
+    try testing.expect(!missing("if (e.affectsConfiguration('zzc.lang')) restartServer();", client_face[7].needle));
+    try testing.expect(missing("if (e.affectsConfiguration('zzc.lanq')) restartServer();", client_face[7].needle));
+    try testing.expect(!missing("e.affectsConfiguration('zzc.lspPath')", client_face[8].needle));
+    try testing.expect(missing("e.affectsConfiguration('zzc.lspPatX')", client_face[8].needle));
 }
