@@ -409,10 +409,17 @@ pub fn buildInitTemplate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
     // std 方言名」判据——初版以 `w_std != null` 判系把已 orelse 兑底的量当可选比较，编译即拒。
     const opt_std = Pack.firstKeywordFor(lang, "std");
     const opt_std_dbg = Pack.firstKeywordFor(lang, "std.debug");
-    const print_callee = if (Pack.firstKeywordFor(lang, "std.debug.print")) |w| w else if (opt_std != null and opt_std_dbg != null)
-        std.fmt.allocPrint(gpa, "{s}.{s}", .{ opt_std.?, opt_std_dbg.? }) catch return error.OutOfMemory
-    else
-        "std.debug.print";
+    // 第 257 轮 D124：多段回退支（opt_std 与 opt_std_dbg 皆在、却无 `std.debug.print` 叶）以 allocPrint 造
+    // `"<std 名>.<std.debug 名>"` 临时串，下方 appendTemplateSegs 只把其字节拷入 out、该临时串自身从不 free
+    // （承 D23/D60/D121/D122/D123 守则：接住命名临时串 + defer free·覆盖 A()/toOwnedSlice 失败的全返回路径·
+    //   生产侧 gpa_ 为进程 arena、历轮测皆 arena 包裹故双侧掩盖·叶形/ASCII 兜底两支为借用不 free）。
+    var print_callee_owned: ?[]const u8 = null;
+    defer if (print_callee_owned) |s| gpa.free(s);
+    const print_callee = if (Pack.firstKeywordFor(lang, "std.debug.print")) |w| w else if (opt_std != null and opt_std_dbg != null) blk: {
+        const s = std.fmt.allocPrint(gpa, "{s}.{s}", .{ opt_std.?, opt_std_dbg.? }) catch return error.OutOfMemory;
+        print_callee_owned = s;
+        break :blk s;
+    } else "std.debug.print";
     const count_name = "数"; // 大白话名（任意包的合法方言标识符，intern 稳定）
 
     var out: std.ArrayList(u8) = .empty;
@@ -702,6 +709,28 @@ test "第 212 轮 T0 init 模板头注释与程序名×子命令名单源耦合�
     const text = try buildInitTemplate(gpa, lang);
     try std.testing.expect(std.mem.indexOf(u8, text, "// " ++ zzc.prog_name ++ " 方言工程模板") != null);
     try std.testing.expect(std.mem.indexOf(u8, text, "运行 `" ++ zzc.prog_name ++ " " ++ sub_run ++ "` 即可") != null);
+}
+
+test "第 257 轮 T0 buildInitTemplate 多段回退链 print_callee 临时串逐项释放：直喂裸 testing.allocator 坐实 std→std.debug 回退串无泄（D124·D23/D60/D121/D122/D123 同族）" {
+    // 造一枚含 `= std` 与 `= std.debug` 两段、却无 `= std.debug.print` 叶的合法包：命中 buildInitTemplate
+    // L413 的多段回退 allocPrint 支（`库.库调` 由 opt_std/opt_std_dbg 两段拼出）——旧形该临时串拷入 out
+    // 字节缓冲后即被覆盖，从不 free。以裸 testing.allocator（非 arena）直喂 gpa 破生产侧 arena 掩盖。
+    var lang_arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer lang_arena.deinit();
+    const pack_src =
+        "$format = 1\n" ++
+        "$code = d124\n$name = 回退语\n[keywords]\n" ++
+        "定 = const\n变 = var\n函 = fn\n若 = if\n否 = else\n" ++
+        "返 = return\n构 = struct\n枚 = enum\n结 = union\n选 = switch\n" ++
+        "取 = @import\n嵌 = @embedFile\n主 = main\n" ++
+        "库 = std\n库调 = std.debug\n";
+    var lang = try Pack.parse(lang_arena.allocator(), pack_src);
+    defer lang.deinit();
+    const raw = std.testing.allocator; // 裸 leak-checking 分配器（非 arena）：旧形内泄的 print_callee 于作用域退出即报 leaked
+    const tmpl = try buildInitTemplate(raw, lang);
+    defer raw.free(tmpl);
+    // 确证确走回退支：print_callee 系两段拼出的 `库.库调`（既非叶形 `标准库.调试.打印`、亦非 ASCII 兜底）。
+    try std.testing.expect(std.mem.indexOf(u8, tmpl, "库.库调(") != null);
 }
 
 test "子命令单一真值表自守：名无重复、check 与机读 hub 同源、判据正反（第 206 轮 D74）" {
