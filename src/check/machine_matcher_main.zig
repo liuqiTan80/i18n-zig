@@ -326,7 +326,7 @@ pub fn main(init: std.process.Init) !void {
     checkFace(build_path, &paths.build_pack_face, build);
 
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族十一/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族三 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族十一/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/七 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族三 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path, ps1_path },
     );
 }

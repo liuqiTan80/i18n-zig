@@ -36,6 +36,14 @@ pub const pkg_key_lsp_path: []const u8 = namespace ++ "." ++ key_lsp_path;
 /// 同上，方言包键。
 pub const pkg_key_lang: []const u8 = namespace ++ "." ++ key_lang;
 
+/// 客户端「语言服务器启动失败」人读提示里教用户「装哪个二进制／改哪个设置键」的那句文案
+/// （第 250 轮 · D117）：其中程序名 `zzc` 与设置键全名 `zzc.lspPath` 系 `extension.js` 手抄的第二份，
+/// 与 hub `namespace`／`pkg_key_lsp_path` 互不引用——改名而提示不随动即误导用户设一个不存在的键、
+/// 装一个不叫这名的二进制（`extension.js` 非测图 source dep、旧无针覆盖此句 → `zig build test` 恒绿静默·
+/// t2 探针实锤漂 `zzc.lspPath`→`zzc.lspPatX` fresh 642/642 全绿＋check-machine-matcher success）。本常量由
+/// 两枚真值 comptime 拼出，`client_face` 据此逐字节钉 `extension.js` 的书写形（一侧改名即分道转锚·D105 文案族）。
+pub const launch_hint: []const u8 = "请把 " ++ namespace ++ " 装入 PATH，或将 " ++ pkg_key_lsp_path ++ " 设置为其可执行文件路径";
+
 /// 一次对面核对项：逐字节 needle 与「分道即何为」的说明（守卫据此报错，判据不另立）。
 pub const FaceCheck = struct {
     needle: []const u8,
@@ -49,7 +57,8 @@ pub const pkg_face = [_]FaceCheck{
     .{ .needle = "\"" ++ pkg_key_lang ++ "\": {", .why = "configuration.properties 须以「<命名空间>.lang」声明方言键，客户端据此重启换包" },
 };
 
-/// 对面·客户端 `extension.js`：命名空间／两枚取值键／回落程序名／spawn 子命令词／方言旗标。
+/// 对面·客户端 `extension.js`：命名空间／两枚取值键／回落程序名／spawn 子命令词／方言旗标／
+/// 启动失败提示里的程序名与设置键全名（第 250 轮 D117）。
 pub const client_face = [_]FaceCheck{
     .{ .needle = "getConfiguration('" ++ namespace ++ "')", .why = "客户端 getConfiguration 的命名空间须等于程序名派生真值，分道即用户设置一律读空（lspPath/lang 静默失效）" },
     .{ .needle = ".get('" ++ key_lsp_path ++ "')", .why = "客户端取值键须与清单属性尾段同名，分道即二进制路径设置永不生效" },
@@ -57,6 +66,7 @@ pub const client_face = [_]FaceCheck{
     .{ .needle = ": '" ++ namespace ++ "';", .why = "留空回落的二进制名须等于程序名真值，分道即 PATH 上的 zzc 寻不到、语言服务器起不来" },
     .{ .needle = "['" ++ cli.sub_lsp ++ "']", .why = "spawn 参数首词须等于子命令真值 `cli.sub_lsp`，src 改名而 js 不随动即「未知子命令」——语言服务器整体失联" },
     .{ .needle = "push('" ++ cli.flag_lang ++ "'", .why = "拉起参数追加的方言旗标须等于 `cli.flag_lang` 真值，分道即非默认方言静默永不生效（js 传旧名、服务端按新名解析）" },
+    .{ .needle = launch_hint, .why = "启动失败提示教用户装的二进制名（namespace 派生）与要改的设置键全名（pkg_key_lsp_path 派生）须逐字节等于 hub 真值——改名而提示不随动即误导用户设不存在的键、装错名二进制而构建链恒绿（第 250 轮 D117·t2 漂提示 fresh 642/642 全绿坐实）" },
 };
 
 /// `text`（运行时对面全文）是否缺 `needle`（命中即已同步；缺失即分道）。守卫据此循环报错、不自立判据。
@@ -100,7 +110,26 @@ test "第 216 轮 T0 LSP 客户端接线族派生与对面 needle 形钉：命�
     try testing.expect(missing("? p.trim() : 'zzq';", client_face[3].needle));
     try testing.expect(missing("\"zzc.lspPathX\": {", pkg_face[1].needle));
     try testing.expect(!missing("\"zzc.lang\": {", pkg_face[2].needle));
-    // A6 面清单覆盖钉：三／六 枚——新增配置键或接线点须在此随动（防只加常量不加对账面）。
+    // A6 面清单覆盖钉：三／七 枚——新增配置键或接线点须在此随动（防只加常量不加对账面）。
     try testing.expectEqual(@as(usize, 3), pkg_face.len);
-    try testing.expectEqual(@as(usize, 6), client_face.len);
+    try testing.expectEqual(@as(usize, 7), client_face.len);
+}
+
+// ———————————————————————————— 测试（250 T0）————————————————————————————
+
+test "第 250 轮 T0 客户端启动失败提示面单源钉：launch_hint 派生值／入面 needle 形钉／漂键反证（D117）" {
+    // A1 派生值钉：提示句由 namespace 与 pkg_key_lsp_path 两枚真值 comptime 拼出（独立手抄期望与之对拍·改名即随动）。
+    try testing.expectEqualStrings(
+        "请把 zzc 装入 PATH，或将 zzc.lspPath 设置为其可执行文件路径",
+        launch_hint,
+    );
+    // A2 入面钉：client_face 第 7 枚（index 6）即本提示 needle，守卫据此对账 extension.js。
+    try testing.expectEqual(@as(usize, 7), client_face.len);
+    try testing.expectEqualStrings(launch_hint, client_face[6].needle);
+    // A3 同源反证：提示须内嵌 hub 派生的设置键全名子串；漂键名（zzc.lspPatX）即 missing 真（旧针落空→守卫红）。
+    try testing.expect(std.mem.indexOf(u8, launch_hint, pkg_key_lsp_path) != null);
+    try testing.expect(missing("请把 zzc 装入 PATH，或将 zzc.lspPatX 设置为其可执行文件路径", launch_hint));
+    // A4 程序名派生钉：提示首枚程序名由 namespace（=prog_name）派生，与回落二进制名同字一源。
+    try testing.expectEqualStrings(paths.prog_name, namespace);
+    try testing.expect(missing("请把 zzq 装入 PATH，或将 zzc.lspPath 设置为其可执行文件路径", launch_hint));
 }
