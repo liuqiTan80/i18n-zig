@@ -817,24 +817,7 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const entry_stem = std.fs.path.stem(mu.native_rel);
     const app_name: []const u8 = if (std.mem.eql(u8, entry_stem, "main")) "app" else entry_stem;
     const entry_rel = cli.stripGenDir(mu.gen_rel); // 与上方 units 循环同一函数（同一真值、同一变换）
-    const build_zig = try std.fmt.allocPrint(gpa_,
-        \\const std = @import("std");
-        \\
-        \\pub fn build(b: *std.Build) void {{
-        \\    const target = b.standardTargetOptions(.{{}});
-        \\    const optimize = b.standardOptimizeOption(.{{}});
-        \\    const exe = b.addExecutable(.{{
-        \\        .name = "{s}",
-        \\        .root_module = b.createModule(.{{
-        \\            .root_source_file = b.path("{s}"),
-        \\            .target = target,
-        \\            .optimize = optimize,
-        \\        }}),
-        \\    }});
-        \\    b.installArtifact(exe);
-        \\}}
-        \\
-    , .{ app_name, entry_rel });
+    const build_zig = try ejectBuildZigText(app_name, entry_rel);
     try writeWhole(try zzc.ejectPathFor(gpa_, dest, zzc.out_build_zig), build_zig);
 
     // Zig 0.17 的 `zig build` 要求 build.zig.zon 含顶层 fingerprint（u64）。
@@ -862,6 +845,33 @@ fn cmdEject(lang: Pack, table: *Mangle, args: []const []const u8) !void {
         },
         .no_zig => printOut(eject_no_zig_msg, .{dest}),
     }
+}
+
+/// 生成 eject 的标准 Zig `build.zig` 文本（纯字符串、无 I/O，进测试图可钉——第 244 轮 D112）。
+/// `@import` 系 Zig 规范内建名，委派 D111 单源 `Pack.zig_import`——旧形制在本模板内联手抄
+/// `@import("std")`、绕过反查面单源；cmdEject 系真跑（落盘 + spawn `zig build`）、不入测试图，
+/// t2 探针实锤漂模板 `@import`→`@impxrt` 使 `zig build test` 恒绿 632/632、而真跑 eject 落
+/// `const std = @impxrt("std");` 使毕业工程 `zig build` 验证失败——即 D111 的毕业写侧漏员。
+/// 抽成本纯函数后其产物进测图，由 244 T0 逐字节钉并以 `Pack.zig_import` 拼期望随单源而动。
+fn ejectBuildZigText(app_name: []const u8, entry_rel: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(gpa_,
+        \\const std = {s}("std");
+        \\
+        \\pub fn build(b: *std.Build) void {{
+        \\    const target = b.standardTargetOptions(.{{}});
+        \\    const optimize = b.standardOptimizeOption(.{{}});
+        \\    const exe = b.addExecutable(.{{
+        \\        .name = "{s}",
+        \\        .root_module = b.createModule(.{{
+        \\            .root_source_file = b.path("{s}"),
+        \\            .target = target,
+        \\            .optimize = optimize,
+        \\        }}),
+        \\    }});
+        \\    b.installArtifact(exe);
+        \\}}
+        \\
+    , .{ Pack.zig_import, app_name, entry_rel });
 }
 
 /// 生成 eject 的 build.zig.zon 文本；fp 为工具链建议的 `0x....` 十六进制串（可为 null）。
@@ -1754,6 +1764,34 @@ test "第 232 轮 T0 eject zon schema 字段名 token 单源 + 真 writer→pars
     // A5 写侧 emit 与 hub token 同源钉：真产物须含两枚 token 原形（若写侧回退内联手抄而 hub 漂，本钉翻红）。
     try std.testing.expect(std.mem.indexOf(u8, zon, zzc.zon_name_marker) != null);
     try std.testing.expect(std.mem.indexOf(u8, zon, zzc.zon_fingerprint_prefix) != null);
+}
+
+test "第 244 轮 T0 eject build.zig 模板导入行取 D111 单源：真 ejectBuildZigText 产物逐字节含 `@import(\"std\")`（防毕业写侧内联手抄漂→碎码而 test 恒绿）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    gpa_ = arena.allocator(); // 文件级 arena 接线（189 T2/232 T0 同族形制）
+    // 逐字节全钉：期望串首行由 Pack.zig_import 拼出（随单源而动），余下模板体字面照写。
+    //   主靶缺口——旧模板内联 `@import` 绕过 D111 单源、且 cmdEject 不入测图恒绿；抽纯函数后其
+    //   产物进图，若导入行的 {s} 实参被换成非 Pack.zig_import 值、或模板体被改形，本钉即红。
+    const want =
+        "const std = " ++ Pack.zig_import ++ "(\"std\");\n" ++
+        "\n" ++
+        "pub fn build(b: *std.Build) void {\n" ++
+        "    const target = b.standardTargetOptions(.{});\n" ++
+        "    const optimize = b.standardOptimizeOption(.{});\n" ++
+        "    const exe = b.addExecutable(.{\n" ++
+        "        .name = \"app\",\n" ++
+        "        .root_module = b.createModule(.{\n" ++
+        "            .root_source_file = b.path(\"src/main.zig\"),\n" ++
+        "            .target = target,\n" ++
+        "            .optimize = optimize,\n" ++
+        "        }),\n" ++
+        "    });\n" ++
+        "    b.installArtifact(exe);\n" ++
+        "}\n";
+    const text = try ejectBuildZigText("app", "src/main.zig");
+    defer gpa_.free(text);
+    try std.testing.expectEqualStrings(want, text);
 }
 
 test "第 234 轮 T1 源扩展名对跨模块往返锚：真 translate 改写目标 ↔ 真 genPathFor 落盘名 ↔ hub std_ext 三者必同（防任一侧退回内联手抄）" {
