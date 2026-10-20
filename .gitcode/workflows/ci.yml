@@ -5,62 +5,42 @@ on:
     branches: [main]
   pull_request:
 
-# 同一 ref 上取消旧的在跑任务，节省 CI 配额
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+# GitCode 流水线只识别仓库根目录 `.gitcode/workflows/` 下的 .yml/.yaml（GitHub Actions
+# 专用目录 `.github/workflows/` 在唯一远端 gitcode.com 上从不被执行——即台账 D17 根因；
+# 第 133 轮整体迁入本目录）。GitCode 虽沿用类 GitHub Actions 的 YAML 形制，但运行器语义
+# 不同：默认只提供欧拉（Euler）Linux 运行器、无 ubuntu-latest/windows-latest 标签、不提供
+# Windows runner；代码检出落在 `repo_workspace` 子目录，故每条 run 须先 `cd repo_workspace`；
+# 各 step 是相互独立的 shell、环境变量不跨步保留，且 GitCode 不处理 `$GITHUB_PATH`——于是
+# 把「装 Zig + 跑全部校验」关进同一个 run 步骤，PATH 才不会丢。Zig 无官方 setup 插件，直接
+# 从 ziglang.org 官方发行位手动拉钉死的 0.17.0（不臆造第三方插件是否在场）。
 jobs:
-  build-test-eject:
-    name: 构建 / 测试 / 毕业链路（${{ matrix.os }}）
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-
+  build-test:
+    name: 构建 / 测试 / 守卫（Euler Linux）
+    runs-on: euleros-2.10.1
     steps:
-      # D17（第 56 轮在册）：原 .github/workflows/ci.yml 在唯一远端 gitcode.com
-      # 上从不被执行——GitCode 流水线只识别 .gitcode/workflows/ 目录、插件写官方
-      # 目录名（非 GitHub marketplace 三段式）。第 133 轮经用户拍板整体迁移至此。
       - name: 检出源码
         uses: checkout-action@0.0.1
 
-      # fmt 门禁依赖工作区为 LF：Git 默认 autocrlf 在 Windows runner 会把 LF 提交
-      # 区检出成 CRLF 工作区，zig fmt --check 视其为漂移（第 133 轮本地实捕形）。
-      - name: 统一行尾为 LF（防检出侧 autocrlf 污染 fmt 门禁）
-        if: runner.os == 'Windows'
-        shell: pwsh
+      - name: 装 Zig 0.17 并跑四绿门禁（fmt / build / test / CI 守卫族）
         run: |
-          git config core.autocrlf false
-          git rm --cached -r -q .
-          git reset --hard
-
-      # 不依赖第三方 setup 插件（GitCode 插件目录是否有 zig 未证实、不臆造），
-      # 直接从 ziglang.org 官方发行位手动安装钉死的 0.17.0。
-      - name: 安装 Zig 0.17（Linux）
-        if: runner.os == 'Linux'
-        run: |
-          curl -sLO https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz
-          tar -xf zig-x86_64-linux-0.17.0.tar.xz
-          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
-
-      - name: 安装 Zig 0.17（Windows）
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $v = '0.17.0'
-          Invoke-WebRequest "https://ziglang.org/download/$v/zig-x86_64-windows-$v.zip" -OutFile zig.zip
-          $dst = Join-Path $env:RUNNER_TEMP "zig"
-          Expand-Archive zig.zip -DestinationPath $dst
-          Add-Content -Path $env:GITHUB_PATH -Value (Join-Path $dst "zig-x86_64-windows-$v")
-
-      - name: 构建 zzc
-        run: zig build
-
-      - name: 单元与快照测试
-        run: zig build test --summary all
-
-      - name: 端到端基线校验（fmt 门禁 + zzc run ↔ eject 后纯 zig build 逐字节一致 + e2e 守卫族）
-        shell: pwsh
-        run: ./tools/check-demos.ps1
+          set -e
+          cd repo_workspace
+          # 版本号以字面量出现在 download/0.17.0/ —— 与 check-toolchain-baseline 守卫
+          # 跨侧对账同源（D73 工具链版本族：CI 装的 zig 必须与族真值同代，否则回译标定
+          # 早警在 CI 上失真）。切勿改成 shell 变量插值，守卫按字面 download/<ver>/ 匹配。
+          curl -sLO "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+          tar -xf "zig-x86_64-linux-0.17.0.tar.xz"
+          export PATH="$PWD/zig-x86_64-linux-0.17.0:$PATH"
+          zig version
+          # 1) 格式门禁（工作区须 LF：Linux runner 不触发 autocrlf 污染）
+          zig fmt --check src/
+          # 2) 构建
+          zig build
+          # 3) 单元与快照测试（双测试图）
+          zig build test --summary all
+          # 4) 跨侧一致性守卫族（纯 zig 命令、不依赖 PowerShell，故 Linux 可直跑）
+          zig build check-editor-syntax
+          zig build check-editor-snippets
+          zig build check-machine-matcher
+          zig build check-ignore-coverage
+          zig build check-toolchain-baseline
