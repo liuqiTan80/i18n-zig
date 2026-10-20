@@ -31,6 +31,17 @@ pub const file_type_stem: []const u8 = blk: {
 /// TextMate 语法作用域名：清单 `grammars[].scopeName` 必须与生成的 tmLanguage 内 `scopeName` 逐字节一致。
 pub const scope_name: []const u8 = "source." ++ file_type_stem;
 
+/// 类别 scope 名：TextMate 各高亮条目的 `"<基名>.<词元名段>"` 形（承第 246 轮 D114）。
+///   `tmlang.zig` 八枚类别 scope（string.quoted.double／constant.character.escape／constant.numeric／
+///   support.function.builtin／support.type.primitive／constant.language／keyword.other／entity.name.namespace）
+///   此前皆把 `.zz` 后缀手抄，绕过 `file_type_stem` 真值——第 215 轮 D83 收编 root `scope_name`／fileTypes、
+///   第 229 轮 D97 收编注释 scope 时皆漏此八枚（漏员）。t2 探针 P3 实锤：把三处（生成侧模板＋committed＋测内自照）
+///   的 `.zz` 同漂为 `.zq` 而 root／fileTypes 不动，**635/635 全绿静默**（同步守卫只核「生成字节==磁盘字节」，从不核派生）。
+///   改由本助手单源派生，扩名/改方言扩展名即全体随动；测内手抄字面量随之改读派生形，杜绝自照假锚。
+pub fn cat_scope(comptime base: []const u8) []const u8 {
+    return base ++ "." ++ file_type_stem;
+}
+
 /// problemMatcher 定义名：由程序名真值派生（承 210 轮 D78），`tasks.json` 以 `$`＋本名引用。
 pub const matcher_name: []const u8 = paths.prog_name ++ "-machine";
 
@@ -246,4 +257,26 @@ test "第 231 轮 T0 语言常量词集与 classify_kind 判序单源钉：四�
     try testing.expectEqual(Kind.other, classify_kind(""));
     // A5 交集形状钉（陷阱源实锤）：四枚常量皆同时在 isPrimitive 集内——这正是必须常量先判的根因（若某枚不在交集则本判序修复对该枚多余）。
     for (language_constants) |k| try testing.expect(std.zig.isPrimitive(k));
+}
+
+test "第 246 轮 T0 类别 scope 派生助手 cat_scope：单源形钉（基名 + 「.」 + file_type_stem）与八枚类别基名逐字节（防 hub 自身失真）" {
+    // 派生形钉：cat_scope 一律以「.」连接基名与词元名段（若 hub 自漂为别的分隔符则全体高亮 scope 失联）。
+    try testing.expectEqualStrings("string.quoted.double." ++ file_type_stem, cat_scope("string.quoted.double"));
+    // 八枚类别基名（与 tmlang 生成侧一一对应）逐字节以派生形出现——任一枚基名拼错即本钉红（真值面自守）。
+    const bases = [_][]const u8{
+        "string.quoted.double",
+        "constant.character.escape",
+        "constant.numeric",
+        "support.function.builtin",
+        "support.type.primitive",
+        "constant.language",
+        "keyword.other",
+        "entity.name.namespace",
+    };
+    inline for (bases) |b| {
+        const s = cat_scope(b);
+        try testing.expectEqualStrings(b, s[0..b.len]);
+        try testing.expectEqualStrings(".", s[b.len .. b.len + 1]);
+        try testing.expectEqualStrings(file_type_stem, s[b.len + 1 ..]);
+    }
 }

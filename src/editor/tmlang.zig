@@ -182,39 +182,52 @@ pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
         \\    },
         \\    "strings": {
         \\      "patterns": [
-        \\        { "name": "string.quoted.double.zz", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.zz", "match": "\\\\." }] }
+    ) catch @panic("OOM");
+    // 第 246 轮 D114：字符串/转义/数字三枚类别 scope 名由 lang_id.cat_scope 单源派生
+    //   （此前 .zz 后缀手抄于 raw 模板，绕过 file_type_stem——D83/D97 收编时漏员）。
+    //   拆为 normal-string 拼接，逐字节与旧 raw 同形（committed md5 经 `gen-tmlang emit` 核全同）。
+    out.appendSlice(gpa, "\n        { \"name\": \"") catch @panic("OOM");
+    out.appendSlice(gpa, lang_id.cat_scope("string.quoted.double")) catch @panic("OOM");
+    out.appendSlice(gpa, "\", \"begin\": \"\\\"\", \"end\": \"\\\"\", \"patterns\": [{ \"name\": \"") catch @panic("OOM");
+    out.appendSlice(gpa, lang_id.cat_scope("constant.character.escape")) catch @panic("OOM");
+    out.appendSlice(gpa, "\", \"match\": \"\\\\\\\\.\" }] }\n") catch @panic("OOM");
+    out.appendSlice(gpa,
         \\      ]
         \\    },
         \\    "numbers": {
         \\      "patterns": [
-        \\        { "name": "constant.numeric.zz", "match": "\\b0[xX][0-9a-fA-F]+\\b|\\b\\d+\\.?\\d*\\b" }
+    ) catch @panic("OOM");
+    out.appendSlice(gpa, "\n        { \"name\": \"") catch @panic("OOM");
+    out.appendSlice(gpa, lang_id.cat_scope("constant.numeric")) catch @panic("OOM");
+    out.appendSlice(gpa, "\", \"match\": \"\\\\b0[xX][0-9a-fA-F]+\\\\b|\\\\b\\\\d+\\\\.?\\\\d*\\\\b\" }\n") catch @panic("OOM");
+    out.appendSlice(gpa,
         \\      ]
         \\    },
     ) catch @panic("OOM");
 
-    // 内建函数 scope。
+    // 内建函数 scope（第 246 轮 D114：类别 scope 的 `.zz` 后缀由 lang_id.cat_scope 单源派生，不再手抄）。
     out.append(gpa, '\n') catch @panic("OOM");
-    try emitPatternEntry(&out, gpa, "builtins", "support.function.builtin.zz", kw_builtin.items);
+    try emitPatternEntry(&out, gpa, "builtins", lang_id.cat_scope("support.function.builtin"), kw_builtin.items);
     out.appendSlice(gpa, ",\n") catch @panic("OOM");
 
     // 类型 scope。
-    try emitPatternEntry(&out, gpa, "types", "support.type.primitive.zz", kw_type.items);
+    try emitPatternEntry(&out, gpa, "types", lang_id.cat_scope("support.type.primitive"), kw_type.items);
     out.appendSlice(gpa, ",\n") catch @panic("OOM");
 
     // 字面常量 scope。
-    try emitPatternEntry(&out, gpa, "literals", "constant.language.zz", kw_literal.items);
+    try emitPatternEntry(&out, gpa, "literals", lang_id.cat_scope("constant.language"), kw_literal.items);
     out.appendSlice(gpa, ",\n") catch @panic("OOM");
 
-    // 关键字 scope（控制流 + 声明 + 其他合并为一组 keyword.other.zz）。
+    // 关键字 scope（控制流 + 声明 + 其他合并为一组 keyword.other.<stem>）。
     var all_keywords: std.ArrayList(Word) = .empty;
     defer all_keywords.deinit(gpa);
     try all_keywords.appendSlice(gpa, kw_control.items);
     try all_keywords.appendSlice(gpa, kw_other.items);
-    try emitPatternEntry(&out, gpa, "keywords", "keyword.other.zz", all_keywords.items);
+    try emitPatternEntry(&out, gpa, "keywords", lang_id.cat_scope("keyword.other"), all_keywords.items);
     out.appendSlice(gpa, ",\n") catch @panic("OOM");
 
     // 别名 scope（标准库路径等）。
-    try emitPatternEntry(&out, gpa, "aliases", "entity.name.namespace.zz", alias_words.items);
+    try emitPatternEntry(&out, gpa, "aliases", lang_id.cat_scope("entity.name.namespace"), alias_words.items);
 
     out.appendSlice(gpa, "\n  }\n}\n") catch @panic("OOM");
 
@@ -264,14 +277,14 @@ test "tmlang.generate：合法 JSON、包含方言词、分类正确（第 154 �
     try testing.expect(std.mem.indexOf(u8, json_bytes, "常数") != null);
     try testing.expect(std.mem.indexOf(u8, json_bytes, "变量") != null);
     try testing.expect(std.mem.indexOf(u8, json_bytes, "导入") != null);
-    // 内建函数 scope。
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "support.function.builtin.zz") != null);
+    // 内建函数 scope（第 246 轮 D114：测内不再手抄 `.zz`，改读 lang_id.cat_scope 派生形——与生成侧同源，杜绝自照假锚）。
+    try testing.expect(std.mem.indexOf(u8, json_bytes, lang_id.cat_scope("support.function.builtin")) != null);
     // 类型 scope。
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "support.type.primitive.zz") != null);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, lang_id.cat_scope("support.type.primitive")) != null);
     // 别名 scope。
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "entity.name.namespace.zz") != null);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, lang_id.cat_scope("entity.name.namespace")) != null);
     // 字面常量。
-    try testing.expect(std.mem.indexOf(u8, json_bytes, "constant.language.zz") != null);
+    try testing.expect(std.mem.indexOf(u8, json_bytes, lang_id.cat_scope("constant.language")) != null);
     // 标准库别名在 aliases 组中。
     try testing.expect(std.mem.indexOf(u8, json_bytes, "标准库") != null);
     // 贪心最长匹配：`无符号整数` 应排在 `整数` 之前（字节长度更长）。
@@ -328,6 +341,34 @@ test "第 231 轮 T0 tmlang.generate 语言常量路由落 literals 组（承 hu
         }
     }
     try testing.expect(pinned >= 4); // 中文包至少 真/假/空值/未定义 四枚方言词命中 hub 常量集
+}
+
+test "第 246 轮 T0 tmlang.generate 八枚类别 scope 全以 lang_id.cat_scope 派生形出现（承 hub file_type_stem 单源·补 D114 此前零锚的类别 scope 手抄缺口）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    const json_bytes = try generate(gpa, lang);
+    defer gpa.free(json_bytes);
+
+    // 八枚类别基名（与生成侧 emitPatternEntry / raw 拆分一一对应）：每枚皆须以 cat_scope 派生形
+    //   `"<基名>.<file_type_stem>"` 出现在生成字节中。若生成侧回归为手抄 `.zz`（或 cat_scope 漂移），
+    //   一旦 dialect_ext/file_type_stem 更值即与本钉派生形分道 → 本测红（跨模块真派生锚，非自照）。
+    const bases = [_][]const u8{
+        "string.quoted.double",
+        "constant.character.escape",
+        "constant.numeric",
+        "support.function.builtin",
+        "support.type.primitive",
+        "constant.language",
+        "keyword.other",
+        "entity.name.namespace",
+    };
+    inline for (bases) |b| {
+        try testing.expect(std.mem.indexOf(u8, json_bytes, lang_id.cat_scope(b)) != null);
+    }
 }
 
 test "tmlang.generate：空 Pack 不崩溃、输出有效 JSON 骨架（第 154 轮）" {
