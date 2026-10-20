@@ -116,7 +116,13 @@ fn snippetBodyStr(out: *std.ArrayList(u8), gpa: std.mem.Allocator, s: []const u8
 /// 从 Pack 生成 VS Code snippet JSON 字节（调用方 free）。
 pub fn generate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
     var list: std.ArrayList(Entry) = .empty;
-    defer list.deinit(gpa);
+    defer {
+        // 第 256 轮 D123：list.deinit 只释 ArrayList 底衬、不逐元素回收；各 Entry.name 系
+        // L126/L140 allocPrint 独立堆串，须先逐项 free 再 deinit 底衬（承 D60/D121/D122 守则·
+        // defer 覆盖 append/allocPrint 失败的全返回路径·旧形每条目泄一块 name、生产 arena+历轮测 arena 包裹双侧掩盖）。
+        for (list.items) |en| gpa.free(en.name);
+        list.deinit(gpa);
+    }
 
     // keywords：方言词 → 标准值，按值归类。
     var it = lang.keywords.iterator();
@@ -543,4 +549,22 @@ test "snippets.entryLess：直调钉——对象键字节升序比较器契约 +
     try testing.expect(p_al < p_yi and p_yi < p_jia); // al- 先、CJK 字节序乙先甲后
     asserts += 1;
     std.debug.print("T1 asserts={d}\n", .{asserts});
+}
+
+// 探针（第 256 轮 t2·承 D60/D121/D122 泄漏族守则）：generate L126/L140 各
+// `const name = try std.fmt.allocPrint(gpa, "kw-{s}"/"al-{s}", ...)` 存入 list 各 Entry.name
+// （独立堆串），而 L119 `defer list.deinit(gpa)` 只释 ArrayList 底衬、从不逐项 free .name——
+// 每 keyword/alias 泄一块。生产 gen_snippets_main.gpa 系 arena、本模块 4 枚 generate 测与
+// server:2180 皆 arena-over-testing 包裹，双侧同蔽（同 D121/D122 盲区形）。
+// 破法：generate 的 gpa 直喂裸 std.testing.allocator（leak-checking），作用域退出自动报 leaked。
+test "第 256 轮 T0 snippets.generate 条目键临时串逐项释放：直喂裸 std.testing.allocator（非 arena）坐实 Entry.name 无泄（D123·D60/D121/D122 同族）" {
+    var lang_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer lang_arena.deinit();
+    // lang 与其键/值走 arena（借用视图·与 generate 的 gpa 解耦），令泄漏归因唯指 generate 内 name。
+    var lang = try Pack.parse(lang_arena.allocator(), @embedFile(zzc_paths.builtin_pack_embed_child));
+    defer lang.deinit();
+
+    const raw = testing.allocator; // 裸 leak-checking 分配器（非 arena）
+    const json_bytes = try generate(raw, lang);
+    defer raw.free(json_bytes); // 只还返回体；旧形内泄的 Entry.name 于此作用域退出即被报 leaked
 }
