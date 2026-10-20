@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 470" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="940" height="470" fill="#fbfaf6"/>
+  <text x="470" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">内存的两种地皮：栈（快、自动）与堆（大、要还）</text>
+
+  <!-- stack side -->
+  <rect x="60" y="70" width="340" height="330" rx="12" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="230" y="98" text-anchor="middle" font-size="18" fill="#1a3d7c" font-weight="bold">栈：一摞可整撤的餐盘</text>
+  <rect x="100" y="115" width="260" height="52" rx="6" fill="#fff" stroke="#4285f4"/>
+  <text x="230" y="136" text-anchor="middle" font-size="14" fill="#1a3d7c">main 的帧：数量=11</text>
+  <text x="230" y="156" text-anchor="middle" font-size="12" fill="#666">局部变量住这里</text>
+  <rect x="120" y="180" width="220" height="52" rx="6" fill="#fff" stroke="#4285f4"/>
+  <text x="230" y="201" text-anchor="middle" font-size="14" fill="#1a3d7c">加两数 的帧：甲=3 乙=4</text>
+  <text x="230" y="221" text-anchor="middle" font-size="12" fill="#666">每调用一层函数＝压一盘</text>
+  <path d="M230,250 L230,290 M222,282 L230,292 L238,282" stroke="#1a3d7c" stroke-width="2" fill="none"/>
+  <text x="230" y="315" text-anchor="middle" font-size="14" fill="#1a3d7c">函数返回＝最上面那盘整撤</text>
+  <text x="230" y="340" text-anchor="middle" font-size="13" fill="#a15100">⚠ 盘撤了，指向盘里东西的指针就成了</text>
+  <text x="230" y="360" text-anchor="middle" font-size="13" fill="#a15100">“悬垂指针”——返回局部变量的指针是bug</text>
+  <text x="230" y="388" text-anchor="middle" font-size="13" fill="#1a3d7c">优点：极快、全自动；缺点：容量小、寿命死板</text>
+
+  <!-- heap side -->
+  <rect x="540" y="70" width="340" height="330" rx="12" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="710" y="98" text-anchor="middle" font-size="18" fill="#1e6b34" font-weight="bold">堆：自助仓储，租仓要登记、退租要办</text>
+  <g stroke="#1e6b34" fill="#fff">
+    <rect x="575" y="120" width="100" height="46" rx="6"/>
+    <rect x="690" y="120" width="150" height="46" rx="6"/>
+    <rect x="575" y="185" width="150" height="46" rx="6"/>
+    <rect x="740" y="185" width="80" height="46" rx="6" stroke-dasharray="5,4"/>
+  </g>
+  <text x="625" y="148" text-anchor="middle" font-size="13" fill="#1e6b34">列表缓冲区</text>
+  <text x="765" y="148" text-anchor="middle" font-size="13" fill="#1e6b34">读入的文件内容</text>
+  <text x="650" y="213" text-anchor="middle" font-size="13" fill="#1e6b34">还没归还的内存 ← 泄漏就出在这</text>
+  <text x="780" y="213" text-anchor="middle" font-size="12" fill="#999">已归还</text>
+  <text x="710" y="270" text-anchor="middle" font-size="14" fill="#1e6b34">分配器（管家）负责租与退：</text>
+  <text x="710" y="295" text-anchor="middle" font-size="14" fill="#1e6b34">alloc 租用 ／ free 退租</text>
+  <text x="710" y="330" text-anchor="middle" font-size="13" fill="#a15100">Zig 的立场：堆内存必须经过你点名的管家</text>
+  <text x="710" y="352" text-anchor="middle" font-size="13" fill="#a15100">（allocator 显式传参），绝不偷偷帮你租</text>
+  <text x="710" y="388" text-anchor="middle" font-size="13" fill="#1e6b34">优点：量大、寿命自己定；缺点：要手动归还</text>
+
+  <text x="470" y="440" text-anchor="middle" font-size="14" fill="#666">切片 = 一张“仓库区位条”：{ 指针→起点，长度 }，本身在栈上，指向的数据可能在堆</text>
+</svg>

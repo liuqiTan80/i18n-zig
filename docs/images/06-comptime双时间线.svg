@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 400" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="940" height="400" fill="#fbfaf6"/>
+  <text x="470" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">comptime：把“算”拆成两笔——编译时算一笔，运行时算一笔</text>
+
+  <!-- timeline -->
+  <line x1="60" y1="120" x2="880" y2="120" stroke="#888" stroke-width="3"/>
+  <polygon points="880,120,866,113,866,127" fill="#888"/>
+  <text x="220" y="105" text-anchor="middle" font-size="16" fill="#1a3d7c" font-weight="bold">编译时（zzc→zig 编译器的世界）</text>
+  <text x="670" y="105" text-anchor="middle" font-size="16" fill="#1e6b34" font-weight="bold">运行时（程序真正跑起来的世界）</text>
+  <line x1="440" y1="70" x2="440" y2="140" stroke="#333" stroke-width="2" stroke-dasharray="6,4"/>
+
+  <!-- comptime side -->
+  <g stroke="#4285f4" fill="#e8f0fe">
+    <rect x="80" y="140" width="330" height="60" rx="8"/>
+  </g>
+  <text x="245" y="165" text-anchor="middle" font-size="14" fill="#1a3d7c">计数期(计期)代码在这里执行：循环展开、</text>
+  <text x="245" y="186" text-anchor="middle" font-size="14" fill="#1a3d7c">类型计算、表生成——结果直接“焊”进二进制</text>
+  <g stroke="#4285f4" fill="#e8f0fe">
+    <rect x="80" y="215" width="330" height="55" rx="8"/>
+  </g>
+  <text x="245" y="238" text-anchor="middle" font-size="14" fill="#1a3d7c">任意类型函数：每种参数组合各生成</text>
+  <text x="245" y="258" text-anchor="middle" font-size="14" fill="#1a3d7c">一份专用机器码（单态化，零抽象税）</text>
+  <g stroke="#4285f4" fill="#e8f0fe">
+    <rect x="80" y="285" width="330" height="55" rx="8"/>
+  </g>
+  <text x="245" y="308" text-anchor="middle" font-size="14" fill="#1a3d7c">算错/类型不对 → 编译期就报错，</text>
+  <text x="245" y="328" text-anchor="middle" font-size="14" fill="#1a3d7c">错误带着中文行号来找你（不用等崩溃）</text>
+
+  <!-- runtime side -->
+  <g stroke="#34a853" fill="#e6f4ea">
+    <rect x="470" y="140" width="390" height="80" rx="8"/>
+  </g>
+  <text x="665" y="168" text-anchor="middle" font-size="14" fill="#1e6b34">运行时只剩：读用户输入、真正的加减乘除、</text>
+  <text x="665" y="190" text-anchor="middle" font-size="14" fill="#1e6b34">收发网络包……编译时能定的绝不留到这里</text>
+  <text x="665" y="210" text-anchor="middle" font-size="13" fill="#1e6b34">＝“为 0 成本的抽象”留下的都是非花不可的钱</text>
+  <g stroke="#34a853" fill="#e6f4ea">
+    <rect x="470" y="240" width="390" height="100" rx="8"/>
+  </g>
+  <text x="665" y="268" text-anchor="middle" font-size="14" fill="#1e6b34">对照其它语言的同一件事：</text>
+  <text x="665" y="292" text-anchor="middle" font-size="13" fill="#1e6b34">C 宏＝文本替换不安全 ｜ 模板＝事后报错难读</text>
+  <text x="665" y="316" text-anchor="middle" font-size="13" fill="#1e6b34">反射元编程＝抱着一堆运行时类型信息跑</text>
+
+  <text x="470" y="375" text-anchor="middle" font-size="14" fill="#666">一句话：comptime = 用 Zig 自己写“生成 Zig 代码的程序”，跑在编译那一刻。</text>
+</svg>

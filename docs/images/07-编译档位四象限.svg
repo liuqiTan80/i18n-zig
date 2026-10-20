@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 470" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="940" height="470" fill="#fbfaf6"/>
+  <text x="470" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">四种编译档位：安全开关 × 优化目标（0.17 起名为 debug/safe/fast/small）</text>
+
+  <!-- axes -->
+  <line x1="120" y1="410" x2="880" y2="410" stroke="#888" stroke-width="2"/>
+  <text x="500" y="440" text-anchor="middle" font-size="14" fill="#555">优化程度 →（越右越快／越小，越右安全检查越可能关闭）</text>
+  <line x1="120" y1="410" x2="120" y2="70" stroke="#888" stroke-width="2"/>
+  <text x="60" y="240" font-size="14" fill="#555" transform="rotate(-90 60 240)" text-anchor="middle">运行时安全检查 ↑</text>
+
+  <!-- debug -->
+  <rect x="150" y="90" width="330" height="120" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="315" y="118" text-anchor="middle" font-size="16" fill="#1a3d7c" font-weight="bold">debug（开发默认）</text>
+  <text x="315" y="145" text-anchor="middle" font-size="13" fill="#1a3d7c">安全检查全开＋最完整的调试信息</text>
+  <text x="315" y="168" text-anchor="middle" font-size="13" fill="#1a3d7c">越界/溢出/误用未定义 → 立刻 panic 报行号</text>
+  <text x="315" y="192" text-anchor="middle" font-size="13" fill="#a15100">跑得慢是正常的：它是“带探针的假人车”</text>
+
+  <!-- safe -->
+  <rect x="500" y="90" width="330" height="120" rx="10" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="665" y="118" text-anchor="middle" font-size="16" fill="#1e6b34" font-weight="bold">safe（发布·稳）</text>
+  <text x="665" y="145" text-anchor="middle" font-size="13" fill="#1e6b34">全速优化，但安全检查保留</text>
+  <text x="665" y="168" text-anchor="middle" font-size="13" fill="#1e6b34">多数正式程序的首选档位</text>
+  <text x="665" y="192" text-anchor="middle" font-size="13" fill="#1e6b34">“出了问题宁可停下，不要带病裸奔”</text>
+
+  <!-- fast -->
+  <rect x="500" y="240" width="330" height="120" rx="10" fill="#fef3e0" stroke="#f9a825" stroke-width="2"/>
+  <text x="665" y="268" text-anchor="middle" font-size="16" fill="#8a5a00" font-weight="bold">fast（发布·极速）</text>
+  <text x="665" y="295" text-anchor="middle" font-size="13" fill="#8a5a00">优化全开＋安全检查关闭</text>
+  <text x="665" y="318" text-anchor="middle" font-size="13" fill="#8a5a00">越界/溢出变成未定义行为（UB）</text>
+  <text x="665" y="342" text-anchor="middle" font-size="13" fill="#a15100">先测透再用；性能收益通常只有几个百分点</text>
+
+  <!-- small -->
+  <rect x="150" y="240" width="330" height="120" rx="10" fill="#f3e8fd" stroke="#9c27b0" stroke-width="2"/>
+  <text x="315" y="268" text-anchor="middle" font-size="16" fill="#5a1a6b" font-weight="bold">small（嵌入式·瘦身）</text>
+  <text x="315" y="295" text-anchor="middle" font-size="13" fill="#5a1a6b">优先压缩机器码体积，安全检查关闭</text>
+  <text x="315" y="318" text-anchor="middle" font-size="13" fill="#5a1a6b">给 flash 吃紧的 MCU / 引导程序用</text>
+  <text x="315" y="342" text-anchor="middle" font-size="13" fill="#5a1a6b">桌面程序一般用不着它</text>
+
+  <text x="470" y="70" text-anchor="middle" font-size="13" fill="#666">旧名 ReleaseSafe/ReleaseFast/ReleaseSmall 仍在（已弃用，0.18 后移除）</text>
+</svg>

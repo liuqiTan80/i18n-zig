@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 430" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="940" height="430" fill="#fbfaf6"/>
+  <text x="470" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">“可能没有”和“可能出错”是怎么装进一个盒子的</text>
+
+  <!-- optional -->
+  <rect x="40" y="70" width="410" height="150" rx="12" fill="#fef3e0" stroke="#f9a825" stroke-width="2"/>
+  <text x="245" y="96" text-anchor="middle" font-size="17" fill="#8a5a00" font-weight="bold">可选值 ?整数 —— 偷贴一张“空箱封条”</text>
+  <g stroke="#8a5a00" fill="#fff">
+    <rect x="70" y="115" width="150" height="44" rx="6"/>
+    <rect x="250" y="115" width="170" height="44" rx="6"/>
+  </g>
+  <text x="145" y="132" text-anchor="middle" font-size="13" fill="#8a5a00">有值：照常放数</text>
+  <text x="145" y="150" text-anchor="middle" font-size="12" fill="#666">比如 -1 就按 -1 存</text>
+  <text x="335" y="132" text-anchor="middle" font-size="13" fill="#8a5a00">空值：用一个特殊码点代表“没有”</text>
+  <text x="335" y="150" text-anchor="middle" font-size="12" fill="#666">指针型直接用 0 地址当封条，不加宽</text>
+  <text x="245" y="192" text-anchor="middle" font-size="13" fill="#8a5a00">多数类型不加一个字节；取用前要 或不然 / 如果 拆开确认</text>
+
+  <!-- error union -->
+  <rect x="490" y="70" width="410" height="150" rx="12" fill="#fdeaea" stroke="#ea8600" stroke-width="2"/>
+  <text x="695" y="96" text-anchor="middle" font-size="17" fill="#a15100" font-weight="bold">错误联合 !整数 —— 一个盒子两种发票</text>
+  <g stroke="#a15100" fill="#fff">
+    <rect x="515" y="115" width="175" height="44" rx="6"/>
+    <rect x="710" y="115" width="165" height="44" rx="6"/>
+  </g>
+  <text x="602" y="132" text-anchor="middle" font-size="13" fill="#a15100">成功面：装 整数</text>
+  <text x="792" y="132" text-anchor="middle" font-size="13" fill="#a15100">错误面：装错误码</text>
+  <text x="602" y="150" text-anchor="middle" font-size="12" fill="#666">返回 7</text>
+  <text x="792" y="150" text-anchor="middle" font-size="12" fill="#666">返回 error.没找到</text>
+  <text x="695" y="192" text-anchor="middle" font-size="13" fill="#a15100">错误集合员本质是紧凑的整数码，所以 !T 通常只占一个机器字</text>
+
+  <!-- bottom: no result type -->
+  <rect x="40" y="250" width="860" height="130" rx="12" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="470" y="280" text-anchor="middle" font-size="17" fill="#1a3d7c" font-weight="bold">对比别的语言的“异常”：钱花在明处</text>
+  <text x="470" y="312" text-anchor="middle" font-size="14" fill="#1a3d7c">异常语言：错误可能从任何一行“飞”出去，调用处看签名看不出来，路径藏在水下。</text>
+  <text x="470" y="338" text-anchor="middle" font-size="14" fill="#1a3d7c">Zig：能不能出错写在类型里（!T），哪里可能断流写在代码里（尝试/捕获），</text>
+  <text x="470" y="364" text-anchor="middle" font-size="14" fill="#1a3d7c">编译器强制你每个分叉当面处理——“隐藏控制流”在这里不存在。</text>
+</svg>
