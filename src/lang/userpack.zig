@@ -60,6 +60,7 @@ pub const InstallError = error{
 pub fn install(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []const u8, bytes: []const u8) !void {
     if (!keyIsSafe(key)) return error.BadKey;
     const rel = try fileRel(gpa, dir, key);
+    defer gpa.free(rel); // 第 255 轮 D122：fileRel/allocPrint 临时串逐枚释放（承 D23/D121 守则·函数返 void 不移交所有权；旧形从不 free、生产 arena+历轮测 arena 包裹双侧掩盖）
     if (file_io.pathExists(io, rel)) return error.AlreadyInstalled;
     try file_io.writeWhole(io, rel, bytes);
 }
@@ -207,4 +208,23 @@ test "第 237 轮 T2 cmdLangAdd 两文案委派 hub pack_ext（@embedFile 反锚
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "++ zzc.pack_ext ++"));
     // A2 反锚：旧内联手抄形 `{s}/{s}.txt`（裸 `.txt` 接在 `{s}/{s}` 后）必 0 处——任一文案退回硬编即本锚红。
     try std.testing.expectEqual(@as(usize, 0), std.mem.count(u8, src, "{s}/{s}.txt"));
+}
+
+// 探针（第 255 轮 t2·承 D23/D37/D121 泄漏族守则）：install L62 `const rel = try fileRel(gpa, ...)`
+// 系 allocPrint 堆串、纯局部、函数返 void 不移交所有权、从不 free——每次调用泄一块。生产 main.zig:565
+// 传 arena `gpa_`、本模块历轮测 gpa 皆 arena-over-testing 包裹，双侧同蔽（同 D27/D121 盲区形）。
+// 破法：gpa 直喂裸 std.testing.allocator（leak-checking），作用域退出自动报 leaked。
+test "第 255 轮 T0 userpack.install 落盘路径临时串逐枚释放：直喂裸 std.testing.allocator（非 arena）坐实 rel 无泄（D122）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const priv = tpriv.Priv.init(io); // D62：安装目录进程私有
+    var db: [96]u8 = undefined;
+    const dir = priv.path(&db, ".zig-cache/tmp/zzc_userpack_", "");
+    std.Io.Dir.cwd().deleteTree(io, dir) catch {}; // 前置确定性：清历史残留
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    const body = "$name = 泄漏探针\n$code = kL\n[keywords]\n常数 = const\n";
+    try install(io, std.testing.allocator, dir, "kL", body);
 }
