@@ -2,10 +2,13 @@
 //!
 //! 文件格式：
 //!   - `#` 或 `//` 开头为注释行；空行跳过
-//!   - `[段名]` 切换当前段：keywords / aliases / diagnostics / whitelist
+//!   - `[段名]` 切换当前段：keywords / aliases / diagnostics / whitelist / docs
 //!   - `键 = 值`：键值均去除首尾空白；值保留内部空白；**空值一律拒绝**（D30：空值会被转译端
 //!     把词元抹成空串／绕过 `$code` 校验／使空 pattern 吞掉全部诊断；唯 diagnostics 第三段 tip 可空）
 //!   - diagnostics 段的值以 `|` 分隔三段：`匹配前缀|译文模板|教学提示`
+//!   - docs 段：`方言链键 = 大白话用法`，供 LSP 悬停「怎么用」教学（键须同现于 aliases/keywords，
+//!     否则悬停永不命中=死词条）；值是人读自由文本（可含 `.`/空格/反引号，首个 `=` 后整段为值），不受
+//!     aliases 段的「纯非 ASCII 键 / 段数镜像」契约约束（该契约只管转译可达性，docs 只供人读）
 //!   - whitelist 段每行即一条白名单规则（整行精确匹配、无需 `=`），供纯母语过滤器豁免（台账 F2）
 //!   - `$format = 1` 包格式版本头（R9g，第 103 轮）：外部分发包声明其所依的包格式版本；
 //!     高于当前工具支持值即拒载并提示升级 zzc（而非误译/崩溃），未声明缺省为 1（旧包向后兼容）
@@ -62,6 +65,9 @@ name: []const u8 = unset_name,
 code: []const u8 = unset_code,
 keywords: std.StringHashMap([]const u8),
 aliases: std.StringHashMap([]const u8),
+/// `[docs]` 段：方言链键 → 大白话用法说明，供 LSP 悬停展示「怎么用」。键值均借 `bytes`（内嵌资源
+/// 视图）、非本包拥有，故 deinit 只释表底衬。与 aliases/keywords 分集、不参与转译，仅供人读。
+docs: std.StringHashMap([]const u8),
 diagnostics: std.ArrayList(Entry),
 /// `[whitelist]` 段：允许保留的英文 token（整行精确匹配）。归属语言包而非工具硬编码（F2）。
 whitelist: std.ArrayList([]const u8),
@@ -135,6 +141,7 @@ pub fn init(gpa: std.mem.Allocator) Pack {
     return .{
         .keywords = std.StringHashMap([]const u8).init(gpa),
         .aliases = std.StringHashMap([]const u8).init(gpa),
+        .docs = std.StringHashMap([]const u8).init(gpa),
         .diagnostics = .empty,
         .whitelist = .empty,
     };
@@ -144,12 +151,13 @@ pub fn deinit(self: *Pack) void {
     const gpa = self.keywords.allocator;
     self.keywords.deinit();
     self.aliases.deinit();
+    self.docs.deinit();
     self.diagnostics.deinit(gpa);
     for (self.whitelist.items) |rule| gpa.free(rule);
     self.whitelist.deinit(gpa);
 }
 
-const Section = enum { keywords, aliases, diagnostics, whitelist };
+const Section = enum { keywords, aliases, diagnostics, whitelist, docs };
 
 /// diagnostics 按 pattern 后写覆盖：命中同 pattern 就地替换（保持既有位置，不破坏
 /// 「全等先于子串」的匹配序，见台账 D6/R1），否则追加。Entry 各字段为输入字节的视图、
@@ -184,6 +192,8 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
     defer seen_al.deinit(gpa);
     var seen_diag: std.ArrayList(Entry) = .empty;
     defer seen_diag.deinit(gpa);
+    var seen_docs: std.ArrayList(Seen) = .empty;
+    defer seen_docs.deinit(gpa);
     var seen_name: ?[]const u8 = null;
     var seen_code: ?[]const u8 = null;
     var seen_format: ?[]const u8 = null;
@@ -269,6 +279,21 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 }
                 try seen.append(gpa, .{ .key = key, .val = value });
                 try map.put(key, value);
+            },
+            .docs => {
+                // 方言链键 = 大白话用法（供 hover 展示「怎么用」）。键非空、值非空（空值无教学信息、
+                // D30 同族拒）；值取首个 `=` 后整段（仅去首尾空白、保留内部空格与后续 `=`），比 aliases 宽松——
+                // docs 只供人读、不参与转译，不受别名「纯非 ASCII 键 / 段数镜像」契约约束。
+                const eq = std.mem.indexOfScalar(u8, line, '=') orelse return error.InvalidLangPack;
+                const key = std.mem.trim(u8, line[0..eq], " \t");
+                const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
+                if (key.len == 0 or value.len == 0) return error.InvalidLangPack;
+                // 同层同键异值 → 拒（手编矛盾两行静默其一失效属数据陷阱，与 keywords/aliases 对称）；同值幂等放行。
+                for (seen_docs.items) |s| {
+                    if (std.mem.eql(u8, s.key, key) and !std.mem.eql(u8, s.val, value)) return error.InvalidLangPack;
+                }
+                try seen_docs.append(gpa, .{ .key = key, .val = value });
+                try self.docs.put(key, value);
             },
             .diagnostics => {
                 // 值格式：`匹配前缀|母语译文|教学提示`（键仅作人类可读标识，不参与匹配）
@@ -511,6 +536,78 @@ test "别名键段数不变量（第 143 轮逐段镜像）：每条 alias 中�
         const v = std.mem.count(u8, e.value_ptr.*, ".") + 1;
         try std.testing.expectEqual(k, v);
     }
+}
+
+test "docs 段解析（悬停「怎么用」）：键入表、值为首个 `=` 后整段、空键/空值/同层异值拒" {
+    const gpa = std.testing.allocator;
+    // 正常：docs 键值入表；值可含 `.`/空格/反引号/后续 `=`（首个 `=` 为分隔）。
+    var ok = try parse(gpa,
+        \\ [keywords]
+        \\ 常数 = const
+        \\ [aliases]
+        \\ 标准库.调试.打印 = std.debug.print
+        \\ [docs]
+        \\ 标准库.调试.打印 = 往屏幕打印。示例：`标准库.调试.打印("{d}={d}", .{1, 1});`
+    );
+    defer ok.deinit();
+    try std.testing.expectEqualStrings(
+        "往屏幕打印。示例：`标准库.调试.打印(\"{d}={d}\", .{1, 1});`",
+        ok.docs.get("标准库.调试.打印").?,
+    );
+
+    // 空值拒（D30 同族）。
+    try std.testing.expectError(
+        error.InvalidLangPack,
+        parse(gpa,
+            \\ [aliases]
+            \\ 标准库.调试 = std.debug
+            \\ [docs]
+            \\ 标准库.调试 =
+        ),
+    );
+    // 同层同键异值拒；同值幂等放行。
+    try std.testing.expectError(
+        error.InvalidLangPack,
+        parse(gpa,
+            \\ [aliases]
+            \\ 标准库.调试 = std.debug
+            \\ [docs]
+            \\ 标准库.调试 = 甲
+            \\ 标准库.调试 = 乙
+        ),
+    );
+    var idem = try parse(gpa,
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+        \\ [docs]
+        \\ 标准库.调试 = 同一句
+        \\ 标准库.调试 = 同一句
+    );
+    defer idem.deinit();
+    try std.testing.expectEqualStrings("同一句", idem.docs.get("标准库.调试").?);
+}
+
+test "内置中文包 docs 可达性不变量：每条 docs 键必同现于 aliases∪keywords（防悬停死词条）+ 覆盖下限" {
+    // hoverAt 取词口径：整链先查 aliases、再退 keywords；docs 只按同一链取回。若某 docs 键两处
+    // 皆无，则那段大白话永远不会被悬停命中（写了也白写）——本测把该死词条钓死，任何人
+    // 写了链不在译名表里的 docs 即红（同时间接验证文档链与别名链一一对应）。
+    const gpa = std.testing.allocator;
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
+    var p = try parse(gpa, zh);
+    defer p.deinit();
+
+    var it = p.docs.iterator();
+    var n: usize = 0;
+    while (it.next()) |e| {
+        n += 1;
+        const key = e.key_ptr.*;
+        if (p.aliases.get(key) == null and p.keywords.get(key) == null) {
+            std.debug.print("dead docs key (no alias/keyword): {s}\n", .{key});
+            return error.DocsKeyUnreachable;
+        }
+    }
+    // 覆盖下限：std 全量教学批量，docs 至少 120 条。
+    try std.testing.expect(n >= 120);
 }
 
 test "内置中文包 keywords 内建存在性不变量（第 151 轮·D53 防回归）：每个 @-前缀映射值必为 Zig 真实内建" {

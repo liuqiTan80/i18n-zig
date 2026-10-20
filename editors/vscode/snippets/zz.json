@@ -14,6 +14,26 @@
     "body": "标准库.交换文本",
     "description": "标准库 → std.json"
   },
+  "al-标准库.交换文本.值": {
+    "prefix": "标准库.交换文本.值",
+    "body": "标准库.交换文本.值",
+    "description": "标准库 → std.json.Value"
+  },
+  "al-标准库.交换文本.切片解析": {
+    "prefix": "标准库.交换文本.切片解析",
+    "body": "标准库.交换文本.切片解析",
+    "description": "标准库 → std.json.parseFromSlice"
+  },
+  "al-标准库.交换文本.扫描器": {
+    "prefix": "标准库.交换文本.扫描器",
+    "body": "标准库.交换文本.扫描器",
+    "description": "标准库 → std.json.Scanner"
+  },
+  "al-标准库.交换文本.数组值": {
+    "prefix": "标准库.交换文本.数组值",
+    "body": "标准库.交换文本.数组值",
+    "description": "标准库 → std.json.Array"
+  },
   "al-标准库.优先双端": {
     "prefix": "标准库.优先双端",
     "body": "标准库.优先双端",
@@ -44,15 +64,40 @@
     "body": "标准库.六十四",
     "description": "标准库 → std.base64"
   },
+  "al-标准库.六十四.标准表": {
+    "prefix": "标准库.六十四.标准表",
+    "body": "标准库.六十四.标准表",
+    "description": "标准库 → std.base64.standard"
+  },
+  "al-标准库.六十四.网址安全表": {
+    "prefix": "标准库.六十四.网址安全表",
+    "body": "标准库.六十四.网址安全表",
+    "description": "标准库 → std.base64.url_safe"
+  },
   "al-标准库.内存": {
     "prefix": "标准库.内存",
     "body": "标准库.内存",
     "description": "标准库 → std.mem"
   },
+  "al-标准库.内存.交换两元素": {
+    "prefix": "标准库.内存.交换两元素",
+    "body": "标准库.内存.交换两元素",
+    "description": "标准库 → std.mem.swap"
+  },
+  "al-标准库.内存.任一字位置": {
+    "prefix": "标准库.内存.任一字位置",
+    "body": "标准库.内存.任一字位置",
+    "description": "标准库 → std.mem.indexOfAny"
+  },
   "al-标准库.内存.倒拷": {
     "prefix": "标准库.内存.倒拷",
     "body": "标准库.内存.倒拷",
     "description": "标准库 → std.mem.copyBackwards"
+  },
+  "al-标准库.内存.倒着遍历": {
+    "prefix": "标准库.内存.倒着遍历",
+    "body": "标准库.内存.倒着遍历",
+    "description": "标准库 → std.mem.reverseIterator"
   },
   "al-标准库.内存.分配器": {
     "prefix": "标准库.内存.分配器",
@@ -64,6 +109,16 @@
     "body": "标准库.内存.切片比较",
     "description": "标准库 → std.mem.eql"
   },
+  "al-标准库.内存.去两端空白": {
+    "prefix": "标准库.内存.去两端空白",
+    "body": "标准库.内存.去两端空白",
+    "description": "标准库 → std.mem.trim"
+  },
+  "al-标准库.内存.子串查找": {
+    "prefix": "标准库.内存.子串查找",
+    "body": "标准库.内存.子串查找",
+    "description": "标准库 → std.mem.indexOf"
+  },
   "al-标准库.内存.拷贝": {
     "prefix": "标准库.内存.拷贝",
     "body": "标准库.内存.拷贝",
@@ -74,10 +129,40 @@
     "body": "标准库.内存.拼接",
     "description": "标准库 → std.mem.concat"
   },
+  "al-标准库.内存.指针转切片": {
+    "prefix": "标准库.内存.指针转切片",
+    "body": "标准库.内存.指针转切片",
+    "description": "标准库 → std.mem.span"
+  },
+  "al-标准库.内存.整片替换": {
+    "prefix": "标准库.内存.整片替换",
+    "body": "标准库.内存.整片替换",
+    "description": "标准库 → std.mem.replace"
+  },
+  "al-标准库.内存.末单值位置": {
+    "prefix": "标准库.内存.末单值位置",
+    "body": "标准库.内存.末单值位置",
+    "description": "标准库 → std.mem.lastIndexOfScalar"
+  },
+  "al-标准库.内存.末子串位置": {
+    "prefix": "标准库.内存.末子串位置",
+    "body": "标准库.内存.末子串位置",
+    "description": "标准库 → std.mem.lastIndexOf"
+  },
   "al-标准库.内存.查找": {
     "prefix": "标准库.内存.查找",
     "body": "标准库.内存.查找",
     "description": "标准库 → std.mem.indexOfScalar"
+  },
+  "al-标准库.内存.比大小": {
+    "prefix": "标准库.内存.比大小",
+    "body": "标准库.内存.比大小",
+    "description": "标准库 → std.mem.lessThan"
+  },
+  "al-标准库.内存.用分隔连接": {
+    "prefix": "标准库.内存.用分隔连接",
+    "body": "标准库.内存.用分隔连接",
+    "description": "标准库 → std.mem.join"
   },
   "al-标准库.内存.结尾匹配": {
     "prefix": "标准库.内存.结尾匹配",
@@ -99,6 +184,16 @@
     "body": "标准库.内存.起始匹配",
     "description": "标准库 → std.mem.startsWith"
   },
+  "al-标准库.内存.转成字节": {
+    "prefix": "标准库.内存.转成字节",
+    "body": "标准库.内存.转成字节",
+    "description": "标准库 → std.mem.asBytes"
+  },
+  "al-标准库.内存.顺序比较": {
+    "prefix": "标准库.内存.顺序比较",
+    "body": "标准库.内存.顺序比较",
+    "description": "标准库 → std.mem.order"
+  },
   "al-标准库.内置信息": {
     "prefix": "标准库.内置信息",
     "body": "标准库.内置信息",
@@ -114,10 +209,25 @@
     "body": "标准库.分配策略.固定缓冲分配器",
     "description": "标准库 → std.heap.FixedBufferAllocator"
   },
+  "al-标准库.分配策略.安全分配器": {
+    "prefix": "标准库.分配策略.安全分配器",
+    "body": "标准库.分配策略.安全分配器",
+    "description": "标准库 → std.heap.SafeAllocator"
+  },
   "al-标准库.分配策略.暂存分配器": {
     "prefix": "标准库.分配策略.暂存分配器",
     "body": "标准库.分配策略.暂存分配器",
     "description": "标准库 → std.heap.ArenaAllocator"
+  },
+  "al-标准库.分配策略.西分配器": {
+    "prefix": "标准库.分配策略.西分配器",
+    "body": "标准库.分配策略.西分配器",
+    "description": "标准库 → std.heap.c_allocator"
+  },
+  "al-标准库.分配策略.调试分配器": {
+    "prefix": "标准库.分配策略.调试分配器",
+    "body": "标准库.分配策略.调试分配器",
+    "description": "标准库 → std.heap.DebugAllocator"
   },
   "al-标准库.分配策略.页分配": {
     "prefix": "标准库.分配策略.页分配",
@@ -284,10 +394,60 @@
     "body": "标准库.数学.下取整",
     "description": "标准库 → std.math.floor"
   },
+  "al-标准库.数学.二为底指数": {
+    "prefix": "标准库.数学.二为底指数",
+    "body": "标准库.数学.二为底指数",
+    "description": "标准库 → std.math.exp2"
+  },
+  "al-标准库.数学.以二为底对数": {
+    "prefix": "标准库.数学.以二为底对数",
+    "body": "标准库.数学.以二为底对数",
+    "description": "标准库 → std.math.log2"
+  },
+  "al-标准库.数学.以十为底对数": {
+    "prefix": "标准库.数学.以十为底对数",
+    "body": "标准库.数学.以十为底对数",
+    "description": "标准库 → std.math.log10"
+  },
+  "al-标准库.数学.余弦": {
+    "prefix": "标准库.数学.余弦",
+    "body": "标准库.数学.余弦",
+    "description": "标准库 → std.math.cos"
+  },
+  "al-标准库.数学.反余弦": {
+    "prefix": "标准库.数学.反余弦",
+    "body": "标准库.数学.反余弦",
+    "description": "标准库 → std.math.acos"
+  },
+  "al-标准库.数学.反正切": {
+    "prefix": "标准库.数学.反正切",
+    "body": "标准库.数学.反正切",
+    "description": "标准库 → std.math.atan2"
+  },
+  "al-标准库.数学.反正弦": {
+    "prefix": "标准库.数学.反正弦",
+    "body": "标准库.数学.反正弦",
+    "description": "标准库 → std.math.asin"
+  },
+  "al-标准库.数学.取符号": {
+    "prefix": "标准库.数学.取符号",
+    "body": "标准库.数学.取符号",
+    "description": "标准库 → std.math.sign"
+  },
+  "al-标准库.数学.向零取整": {
+    "prefix": "标准库.数学.向零取整",
+    "body": "标准库.数学.向零取整",
+    "description": "标准库 → std.math.trunc"
+  },
   "al-标准库.数学.四舍五入": {
     "prefix": "标准库.数学.四舍五入",
     "body": "标准库.数学.四舍五入",
     "description": "标准库 → std.math.round"
+  },
+  "al-标准库.数学.圆周率": {
+    "prefix": "标准库.数学.圆周率",
+    "body": "标准库.数学.圆周率",
+    "description": "标准库 → std.math.pi"
   },
   "al-标准库.数学.幂": {
     "prefix": "标准库.数学.幂",
@@ -298,6 +458,76 @@
     "prefix": "标准库.数学.平方根",
     "body": "标准库.数学.平方根",
     "description": "标准库 → std.math.sqrt"
+  },
+  "al-标准库.数学.拆分整数小数": {
+    "prefix": "标准库.数学.拆分整数小数",
+    "body": "标准库.数学.拆分整数小数",
+    "description": "标准库 → std.math.modf"
+  },
+  "al-标准库.数学.无穷大": {
+    "prefix": "标准库.数学.无穷大",
+    "body": "标准库.数学.无穷大",
+    "description": "标准库 → std.math.inf"
+  },
+  "al-标准库.数学.是无穷大": {
+    "prefix": "标准库.数学.是无穷大",
+    "body": "标准库.数学.是无穷大",
+    "description": "标准库 → std.math.isInf"
+  },
+  "al-标准库.数学.是有限数": {
+    "prefix": "标准库.数学.是有限数",
+    "body": "标准库.数学.是有限数",
+    "description": "标准库 → std.math.isFinite"
+  },
+  "al-标准库.数学.正切": {
+    "prefix": "标准库.数学.正切",
+    "body": "标准库.数学.正切",
+    "description": "标准库 → std.math.tan"
+  },
+  "al-标准库.数学.正弦": {
+    "prefix": "标准库.数学.正弦",
+    "body": "标准库.数学.正弦",
+    "description": "标准库 → std.math.sin"
+  },
+  "al-标准库.数学.浮点取余": {
+    "prefix": "标准库.数学.浮点取余",
+    "body": "标准库.数学.浮点取余",
+    "description": "标准库 → std.math.mod"
+  },
+  "al-标准库.数学.立方根": {
+    "prefix": "标准库.数学.立方根",
+    "body": "标准库.数学.立方根",
+    "description": "标准库 → std.math.cbrt"
+  },
+  "al-标准库.数学.自然对数": {
+    "prefix": "标准库.数学.自然对数",
+    "body": "标准库.数学.自然对数",
+    "description": "标准库 → std.math.log"
+  },
+  "al-标准库.数学.自然底数": {
+    "prefix": "标准库.数学.自然底数",
+    "body": "标准库.数学.自然底数",
+    "description": "标准库 → std.math.e"
+  },
+  "al-标准库.数学.自然指数": {
+    "prefix": "标准库.数学.自然指数",
+    "body": "标准库.数学.自然指数",
+    "description": "标准库 → std.math.exp"
+  },
+  "al-标准库.数学.重新解释类型": {
+    "prefix": "标准库.数学.重新解释类型",
+    "body": "标准库.数学.重新解释类型",
+    "description": "标准库 → std.math.cast"
+  },
+  "al-标准库.数学.限制区间": {
+    "prefix": "标准库.数学.限制区间",
+    "body": "标准库.数学.限制区间",
+    "description": "标准库 → std.math.clamp"
+  },
+  "al-标准库.数学.非数": {
+    "prefix": "标准库.数学.非数",
+    "body": "标准库.数学.非数",
+    "description": "标准库 → std.math.nan"
   },
   "al-标准库.数组列表": {
     "prefix": "标准库.数组列表",
@@ -324,6 +554,26 @@
     "body": "标准库.文件系统.路径",
     "description": "标准库 → std.fs.path"
   },
+  "al-标准库.文件系统.路径.取基名": {
+    "prefix": "标准库.文件系统.路径.取基名",
+    "body": "标准库.文件系统.路径.取基名",
+    "description": "标准库 → std.fs.path.basename"
+  },
+  "al-标准库.文件系统.路径.取扩展名": {
+    "prefix": "标准库.文件系统.路径.取扩展名",
+    "body": "标准库.文件系统.路径.取扩展名",
+    "description": "标准库 → std.fs.path.extension"
+  },
+  "al-标准库.文件系统.路径.取目录": {
+    "prefix": "标准库.文件系统.路径.取目录",
+    "body": "标准库.文件系统.路径.取目录",
+    "description": "标准库 → std.fs.path.dirname"
+  },
+  "al-标准库.文件系统.路径.是否绝对": {
+    "prefix": "标准库.文件系统.路径.是否绝对",
+    "body": "标准库.文件系统.路径.是否绝对",
+    "description": "标准库 → std.fs.path.isAbsolute"
+  },
   "al-标准库.日志": {
     "prefix": "标准库.日志",
     "body": "标准库.日志",
@@ -339,10 +589,55 @@
     "body": "标准库.时间",
     "description": "标准库 → std.time"
   },
+  "al-标准库.时间.历元起点": {
+    "prefix": "标准库.时间.历元起点",
+    "body": "标准库.时间.历元起点",
+    "description": "标准库 → std.time.epoch"
+  },
+  "al-标准库.时间.每分钟秒": {
+    "prefix": "标准库.时间.每分钟秒",
+    "body": "标准库.时间.每分钟秒",
+    "description": "标准库 → std.time.s_per_min"
+  },
+  "al-标准库.时间.每分钟纳秒": {
+    "prefix": "标准库.时间.每分钟纳秒",
+    "body": "标准库.时间.每分钟纳秒",
+    "description": "标准库 → std.time.ns_per_min"
+  },
+  "al-标准库.时间.每微秒纳秒": {
+    "prefix": "标准库.时间.每微秒纳秒",
+    "body": "标准库.时间.每微秒纳秒",
+    "description": "标准库 → std.time.ns_per_us"
+  },
+  "al-标准库.时间.每毫秒纳秒": {
+    "prefix": "标准库.时间.每毫秒纳秒",
+    "body": "标准库.时间.每毫秒纳秒",
+    "description": "标准库 → std.time.ns_per_ms"
+  },
+  "al-标准库.时间.每秒毫秒": {
+    "prefix": "标准库.时间.每秒毫秒",
+    "body": "标准库.时间.每秒毫秒",
+    "description": "标准库 → std.time.ms_per_s"
+  },
+  "al-标准库.时间.每秒纳秒": {
+    "prefix": "标准库.时间.每秒纳秒",
+    "body": "标准库.时间.每秒纳秒",
+    "description": "标准库 → std.time.ns_per_s"
+  },
   "al-标准库.朴码": {
     "prefix": "标准库.朴码",
     "body": "标准库.朴码",
     "description": "标准库 → std.ascii"
+  },
+  "al-标准库.朴码.忽略大小写相等": {
+    "prefix": "标准库.朴码.忽略大小写相等",
+    "body": "标准库.朴码.忽略大小写相等",
+    "description": "标准库 → std.ascii.eqlIgnoreCase"
+  },
+  "al-标准库.朴码.是数字": {
+    "prefix": "标准库.朴码.是数字",
+    "body": "标准库.朴码.是数字",
+    "description": "标准库 → std.ascii.isDigit"
   },
   "al-标准库.构建描述": {
     "prefix": "标准库.构建描述",
@@ -363,6 +658,11 @@
     "prefix": "标准库.枚举装配",
     "body": "标准库.枚举装配",
     "description": "标准库 → std.enums"
+  },
+  "al-标准库.枚举装配.成员清单": {
+    "prefix": "标准库.枚举装配.成员清单",
+    "body": "标准库.枚举装配.成员清单",
+    "description": "标准库 → std.enums.values"
   },
   "al-标准库.枚举集合": {
     "prefix": "标准库.枚举集合",
@@ -389,6 +689,16 @@
     "body": "标准库.格式化.缓冲打印",
     "description": "标准库 → std.fmt.bufPrint"
   },
+  "al-标准库.格式化.解析小数": {
+    "prefix": "标准库.格式化.解析小数",
+    "body": "标准库.格式化.解析小数",
+    "description": "标准库 → std.fmt.parseFloat"
+  },
+  "al-标准库.格式化.解析整数": {
+    "prefix": "标准库.格式化.解析整数",
+    "body": "标准库.格式化.解析整数",
+    "description": "标准库 → std.fmt.parseInt"
+  },
   "al-标准库.格式化.计数": {
     "prefix": "标准库.格式化.计数",
     "body": "标准库.格式化.计数",
@@ -414,6 +724,16 @@
     "body": "标准库.测试.期望错误",
     "description": "标准库 → std.testing.expectError"
   },
+  "al-标准库.测试.模糊测试": {
+    "prefix": "标准库.测试.模糊测试",
+    "body": "标准库.测试.模糊测试",
+    "description": "标准库 → std.testing.fuzz"
+  },
+  "al-标准库.测试.深度相等": {
+    "prefix": "标准库.测试.深度相等",
+    "body": "标准库.测试.深度相等",
+    "description": "标准库 → std.testing.expectEqualDeep"
+  },
   "al-标准库.测试.相等": {
     "prefix": "标准库.测试.相等",
     "body": "标准库.测试.相等",
@@ -423,6 +743,16 @@
     "prefix": "标准库.测试.相等字符串",
     "body": "标准库.测试.相等字符串",
     "description": "标准库 → std.testing.expectEqualStrings"
+  },
+  "al-标准库.测试.起始串相等": {
+    "prefix": "标准库.测试.起始串相等",
+    "body": "标准库.测试.起始串相等",
+    "description": "标准库 → std.testing.expectStringStartsWith"
+  },
+  "al-标准库.测试.近似相等": {
+    "prefix": "标准库.测试.近似相等",
+    "body": "标准库.测试.近似相等",
+    "description": "标准库 → std.testing.expectApproxEqAbs"
   },
   "al-标准库.独立位": {
     "prefix": "标准库.独立位",
@@ -454,6 +784,11 @@
     "body": "标准库.线程",
     "description": "标准库 → std.Thread"
   },
+  "al-标准库.线程.开线程": {
+    "prefix": "标准库.线程.开线程",
+    "body": "标准库.线程.开线程",
+    "description": "标准库 → std.Thread.spawn"
+  },
   "al-标准库.组记文本": {
     "prefix": "标准库.组记文本",
     "body": "标准库.组记文本",
@@ -463,6 +798,11 @@
     "prefix": "标准库.统一资源",
     "body": "标准库.统一资源",
     "description": "标准库 → std.Uri"
+  },
+  "al-标准库.统一资源.解析网址": {
+    "prefix": "标准库.统一资源.解析网址",
+    "body": "标准库.统一资源.解析网址",
+    "description": "标准库 → std.Uri.parse"
   },
   "al-标准库.缓冲映射": {
     "prefix": "标准库.缓冲映射",
@@ -478,6 +818,21 @@
     "prefix": "标准库.编码",
     "body": "标准库.编码",
     "description": "标准库 → std.unicode"
+  },
+  "al-标准库.编码.码点编成字节": {
+    "prefix": "标准库.编码.码点编成字节",
+    "body": "标准库.编码.码点编成字节",
+    "description": "标准库 → std.unicode.utf8Encode"
+  },
+  "al-标准库.编码.码点转字节长": {
+    "prefix": "标准库.编码.码点转字节长",
+    "body": "标准库.编码.码点转字节长",
+    "description": "标准库 → std.unicode.utf8CodepointSequenceLength"
+  },
+  "al-标准库.编码.解出码点": {
+    "prefix": "标准库.编码.解出码点",
+    "body": "标准库.编码.解出码点",
+    "description": "标准库 → std.unicode.utf8Decode"
   },
   "al-标准库.编译工具": {
     "prefix": "标准库.编译工具",
@@ -569,6 +924,11 @@
     "body": "标准库.输入输出",
     "description": "标准库 → std.Io"
   },
+  "al-标准库.输入输出.写入器": {
+    "prefix": "标准库.输入输出.写入器",
+    "body": "标准库.输入输出.写入器",
+    "description": "标准库 → std.Io.Writer"
+  },
   "al-标准库.输入输出.文件": {
     "prefix": "标准库.输入输出.文件",
     "body": "标准库.输入输出.文件",
@@ -579,6 +939,11 @@
     "body": "标准库.输入输出.目录",
     "description": "标准库 → std.Io.Dir"
   },
+  "al-标准库.输入输出.读取器": {
+    "prefix": "标准库.输入输出.读取器",
+    "body": "标准库.输入输出.读取器",
+    "description": "标准库 → std.Io.Reader"
+  },
   "al-标准库.过程": {
     "prefix": "标准库.过程",
     "body": "标准库.过程",
@@ -588,6 +953,11 @@
     "prefix": "标准库.过程.参数",
     "body": "标准库.过程.参数",
     "description": "标准库 → std.process.Args"
+  },
+  "al-标准库.过程.子进程": {
+    "prefix": "标准库.过程.子进程",
+    "body": "标准库.过程.子进程",
+    "description": "标准库 → std.process.Child"
   },
   "al-标准库.进度": {
     "prefix": "标准库.进度",
@@ -613,6 +983,21 @@
     "prefix": "标准库.随机",
     "body": "标准库.随机",
     "description": "标准库 → std.Random"
+  },
+  "al-标准库.随机.取小于上界整数": {
+    "prefix": "标准库.随机.取小于上界整数",
+    "body": "标准库.随机.取小于上界整数",
+    "description": "标准库 → std.Random.uintLessThan"
+  },
+  "al-标准库.随机.取小数": {
+    "prefix": "标准库.随机.取小数",
+    "body": "标准库.随机.取小数",
+    "description": "标准库 → std.Random.float"
+  },
+  "al-标准库.随机.取整数": {
+    "prefix": "标准库.随机.取整数",
+    "body": "标准库.随机.取整数",
+    "description": "标准库 → std.Random.int"
   },
   "al-标准库.静位集": {
     "prefix": "标准库.静位集",

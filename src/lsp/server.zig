@@ -809,7 +809,12 @@ pub const Server = struct {
         const word_val = alias_val orelse self.lang.keywords.get(chain) orelse return null;
         const group = if (alias_val != null) snippets.g_alias else snippets.classify(word_val); // 第 219 轮 D87：与补全产物 .group 同源（原手抄第 2 份）
 
-        const md = std.fmt.allocPrint(gpa, "**{s}** `{s}`\n\n- 标准 Zig 形：`{s}`", .{ group, chain, word_val }) catch return null;
+        // 悬停正文：首行 `**{分组}** \`{链}\`` 为 219 T0 A4 双出口同词锚（不可删）；其后附标准 Zig 形。
+        // 若 [docs] 段命中该链，再追加一行大白话「怎么用」（教学面：翻译不止改名、还告诉新手怎么用）。
+        const md = if (self.lang.docs.get(chain)) |usage|
+            std.fmt.allocPrint(gpa, "**{s}** `{s}`\n\n- 标准 Zig 形：`{s}`\n- 怎么用：{s}", .{ group, chain, word_val, usage }) catch return null
+        else
+            std.fmt.allocPrint(gpa, "**{s}** `{s}`\n\n- 标准 Zig 形：`{s}`", .{ group, chain, word_val }) catch return null;
         defer gpa.free(md);
         const md_js = jsonrpc.jsonString(gpa, md) catch return null;
         defer gpa.free(md_js);
