@@ -59,6 +59,15 @@ pub const grammar_asset_path: []const u8 = "syntaxes/" ++ file_type_stem ++ ".tm
 /// 同上，补全片段资产。
 pub const snippets_asset_path: []const u8 = "snippets/" ++ file_type_stem ++ ".json";
 
+/// 客户端入口资产相对路径（清单 `main` 去 `./` 后之形）：`extension.js` 系手编资产（非生成物），
+/// 与 grammar/snippets 两枚生成资产同类——皆由 `editors/vscode/` 下的一枚文件承接，守卫逐内容对账
+/// （对面四/十一～十五读它核图例/标识/方法/参数/结果/严重度/错误码诸面），却从无针核清单 `main` 是否
+/// 指向它（第 249 轮 D116·D83 收 grammar/snippets `path` 针时的漏员）。
+pub const client_entry_asset_path: []const u8 = "extension.js";
+/// 语言配置资产相对路径（清单 `languages[0].configuration` 去 `./` 后之形）：`language-configuration.json`
+/// 由对面十九（`langconf_face`）逐字节核其注释标记内容，却从无针核清单是否指向它（同 D116 漏员）。
+pub const langconf_asset_path: []const u8 = "language-configuration.json";
+
 /// 仓根相对的写出路径（生成工具 `emit` 缺省落点·与清单所指同一文件）。
 pub const grammar_emit_path: []const u8 = "editors/vscode/" ++ grammar_asset_path;
 /// 同上，补全片段。
@@ -144,7 +153,8 @@ pub const FaceCheck = struct {
     occ: usize = 1,
 };
 
-/// 对面·清单 `package.json`：语言 id／扩展名／scopeName／owner／matcher 定义名／两枚资产路径。
+/// 对面·清单 `package.json`：语言 id／扩展名／scopeName／owner／matcher 定义名／四枚资产指针
+/// （grammar/snippets 两枚生成物 `path`＋249 D116 补的 main 入口与 languages[].configuration 两枚）。
 pub const pkg_face = [_]FaceCheck{
     .{ .needle = "\"id\": \"" ++ language_id ++ "\"", .why = "contributes.languages[0].id 须等于语言 id 真值" },
     .{ .needle = "\"onLanguage:" ++ language_id ++ "\"", .why = "activationEvents 须按同一语言 id 激活" },
@@ -153,6 +163,8 @@ pub const pkg_face = [_]FaceCheck{
     .{ .needle = "\"scopeName\": \"" ++ scope_name ++ "\"", .why = "grammars[].scopeName 须与生成侧 tmLanguage 同源，分道即编辑器寻不到 grammar（高亮全废）" },
     .{ .needle = "\"path\": \"./" ++ grammar_asset_path ++ "\"", .why = "grammars[].path 须指向生成器实际写出的 tmLanguage 资产" },
     .{ .needle = "\"path\": \"./" ++ snippets_asset_path ++ "\"", .why = "snippets[].path 须指向生成器实际写出的片段资产" },
+    .{ .needle = "\"main\": \"./" ++ client_entry_asset_path ++ "\"", .why = "清单 main 须指向守卫对面四/十一～十五逐内容对账的那枚客户端入口资产，指针漂即 VSCode 加载另一/缺失文件、LSP 整体死而守卫仍绿（D116）" },
+    .{ .needle = "\"configuration\": \"./" ++ langconf_asset_path ++ "\"", .why = "清单 languages[0].configuration 须指向守卫对面十九（langconf_face）核其注释标记内容的那枚语言配置资产，指针漂即 VSCode 不加载真 langconf、注释切换/折叠静默失效而守卫读旧路仍绿（D116）" },
     .{ .needle = "\"name\": \"" ++ matcher_name ++ "\"", .why = "problemMatchers[].name 须等于 matcher 名真值（由程序名派生）" },
     .{ .needle = "\"owner\": \"" ++ language_id ++ "\"", .why = "problemMatchers[].owner 须等于语言 id 真值" },
 };
@@ -217,8 +229,8 @@ test "第 215 轮 T0 语言标识族派生与对面 needle 形钉：值钉／剥
     try testing.expect(missing("", client_face[0].needle));
     try testing.expect(!missing("problemMatcher: [\"$zzc-machine\"]", tasks_face[0].needle));
     try testing.expect(missing("problemMatcher: [\"$zzc-machine2\"]", tasks_face[0].needle));
-    // A7 面清单覆盖钉：九/一/一 枚——新增对面字段须在此随动（防只加常量不加对账面）。
-    try testing.expectEqual(@as(usize, 9), pkg_face.len);
+    // A7 面清单覆盖钉：十一/一/一 枚——新增对面字段须在此随动（防只加常量不加对账面·249 D116 补 main/configuration 两枚资产指针）。
+    try testing.expectEqual(@as(usize, 11), pkg_face.len);
     try testing.expectEqual(@as(usize, 1), client_face.len);
     try testing.expectEqual(@as(usize, 1), tasks_face.len);
 }
@@ -333,3 +345,26 @@ test "第 248 轮 T0 snippets language 逐枚对账：countOccurrences 计数下
     try testing.expectEqual(@as(usize, 2), countOccurrences("abab", "ab"));
     try testing.expectEqual(@as(usize, 0), countOccurrences("a b", "ab"));
 }
+
+test "第 249 轮 T0 清单资产指针两枚 needle 形钉：main→extension.js／configuration→language-configuration.json（D116·D83 grammar/snippets path 针漏员）" {
+    // A1 真值钉：两枚资产路径 hub 单源字面形（清单指针去 `./` 后之形与守卫所读外部文件名共此一源）。
+    try testing.expectEqualStrings("extension.js", client_entry_asset_path);
+    try testing.expectEqualStrings("language-configuration.json", langconf_asset_path);
+    // A2 needle 形钉：逐字节拼出清单书写形（含键名与 `./` 前缀·形改即守卫与对面两头猜）。
+    try testing.expectEqualStrings("\"main\": \"./extension.js\"", pkg_face[7].needle);
+    try testing.expectEqualStrings("\"configuration\": \"./language-configuration.json\"", pkg_face[8].needle);
+    // A3 判据小样：命中为不缺、近名漂移为缺（防子串假命中·坐实 t2 P1 漂 ext.js/language-config.json 的静默面）。
+    try testing.expect(!missing(pkg_full_sample, pkg_face[7].needle));
+    try testing.expect(!missing(pkg_full_sample, pkg_face[8].needle));
+    try testing.expect(missing("\"main\": \"./ext.js\",", pkg_face[7].needle));
+    try testing.expect(missing("\"configuration\": \"./language-config.json\"", pkg_face[8].needle));
+    // A4 面清单覆盖钉：两枚新针位于 snippets path 针后、name/owner 针前（防序位漂移误他针）。
+    try testing.expectEqualStrings("\"path\": \"./snippets/zz.json\"", pkg_face[6].needle);
+    try testing.expectEqualStrings("\"name\": \"zzc-machine\"", pkg_face[9].needle);
+    try testing.expectEqual(@as(usize, 11), pkg_face.len);
+}
+
+const pkg_full_sample: []const u8 =
+    \\{ "main": "./extension.js",
+    \\  "contributes": { "languages": [ { "configuration": "./language-configuration.json" } ] } }
+;
