@@ -876,9 +876,15 @@ fn ejectBuildZigText(app_name: []const u8, entry_rel: []const u8) ![]const u8 {
 fn ejectZoneText(app_name: []const u8, fp: ?[]const u8) ![]const u8 {
     var z: std.ArrayList(u8) = .empty;
     try z.appendSlice(gpa_, "// 由 " ++ zzc.prog_name ++ " " ++ cli.sub_eject ++ " 生成；可独立 `zig build` 构建。\n.{\n");
-    try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    " ++ zzc.zon_name_marker ++ "{s},\n", .{app_name})); // 第 232 轮 D100：字段名 token 取 hub 单一真值（与读侧 parseFingerprintFromZone 同源）
+    const name_row = try std.fmt.allocPrint(gpa_, "    " ++ zzc.zon_name_marker ++ "{s},\n", .{app_name}); // 第 232 轮 D100：字段名 token 取 hub 单一真值（与读侧 parseFingerprintFromZone 同源）
+    defer gpa_.free(name_row); // 第 254 轮 D121：临时串逐枚释放（承 D23 守则·与下 .paths 行同形；旧 inline 直喂 appendSlice 泄此块·生产 arena 掩盖）
+    try z.appendSlice(gpa_, name_row);
     try z.appendSlice(gpa_, "    .version = \"" ++ zzc.zzc_version ++ "\",\n"); // 第 211 轮 D79：毕业工程继承的版本行委派族真值（与 L867 minimum_zig_version 委派 zig_version 同族同形）
-    if (fp) |t| try z.appendSlice(gpa_, try std.fmt.allocPrint(gpa_, "    " ++ zzc.zon_fingerprint_prefix ++ "{s},\n", .{t})); // 第 232 轮 D100：fingerprint 字段前缀取 hub 真值
+    if (fp) |t| {
+        const fp_row = try std.fmt.allocPrint(gpa_, "    " ++ zzc.zon_fingerprint_prefix ++ "{s},\n", .{t}); // 第 232 轮 D100：fingerprint 字段前缀取 hub 真值
+        defer gpa_.free(fp_row); // 第 254 轮 D121：同上·临时串逐枚释放
+        try z.appendSlice(gpa_, fp_row);
+    }
     try z.appendSlice(gpa_, "    .minimum_zig_version = \"" ++ zzc.zig_version ++ "\",\n");
     try z.appendSlice(gpa_, "    .dependencies = .{},\n");
     // `.paths` 条目由族集合派生（第 204 轮 D72）：与写侧落盘名同源，杜绝「文件写成 A、清单列的是 B」。
@@ -1738,6 +1744,19 @@ test "第 189 轮 T2 ejectZoneText：build.zig.zon 模板两形字节钉（fp �
         "    .version = \"0.1.0\",\n" ++
         tail;
     try std.testing.expectEqualStrings(want_c, try ejectZoneText("", null));
+}
+
+test "第 254 轮 T0 ejectZoneText 临时串逐枚释放：直喂 std.testing.allocator（非 arena）坐实 name/fingerprint 两行无泄（D121·D23/D27 同族）" {
+    // 生产路 gpa_ 为 arena（进程末批量回收、泄漏不体现），历轮 ejectZoneText 测（189 T2／232 T0）皆 arena 包裹——
+    // 临时串泄漏被掩盖（同 D27 renderDiag 象）。本测直喂 std.testing.allocator（checking allocator、scope 退出即报 leaked），
+    // 逐枚校验 name 行与 fingerprint 行两处 allocPrint 临时串已随 appendSlice 后 free。
+    gpa_ = std.testing.allocator;
+    // 形 A：fp 非空——name 行＋fingerprint 行两枚 allocPrint 临时串（任一未 free 即报 leaked）。
+    const zon = try ejectZoneText("pj", "0xdeadbeef");
+    gpa_.free(zon);
+    // 形 B：fp 缺位——仅 name 行一枚 allocPrint 临时串。
+    const zon0 = try ejectZoneText("pj", null);
+    gpa_.free(zon0);
 }
 
 test "第 232 轮 T0 eject zon schema 字段名 token 单源 + 真 writer→parser 往返锚" {
