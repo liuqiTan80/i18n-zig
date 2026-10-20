@@ -308,6 +308,15 @@ pub fn main(init: std.process.Init) !void {
     //   ps1 Contains 断言同源，一侧漂形即分道转锚。serverInfo ps1 零消费不入针（如实登册）。
     checkFace(ps1_path, &lsp_srv.cap_face, ps1_txt);
 
+    // —— 对面二十二：`tools/check-demos.ps1` 内嵌 LSP 帧协议词族（第 245 轮 D113）。脚本以
+    //   JSON 帧字面量向 zzc lsp 发起八方法、并携 `"jsonrpc":"2.0"` 与 `"languageId":"zig-dialect"`——
+    //   此系协议词汇的第三处手抄（server.zig m_*/jsonrpc.version_value/lang_identity.language_id 写侧单源
+    //   + extension.js 已收对面十一/十二/二十）。D94 ps1_face 只核命令词/路径/旗标、D98 cap_face 只核
+    //   capability 断言形串——皆从不核帧内 method 词/版本值/语言 id；ps1 非测图 source dep＋本机 NO_PWSH
+    //   ＋GitCode 不跑 Actions 双盲。t2 探针独漂 ps1 帧方法词 fresh 633/633 全绿静默、活体喂漂形帧 init2
+    //   予真 lsp → -32601 零应答坐实握手失联。本步以 hub 派生十枚 needle 复用对面十八已读 ps1 实文逐字节对账。
+    checkFace(ps1_path, &lsp_srv.ps1_frame_face, ps1_txt);
+
     // —— 对面二十一：`build.zig` 的内置默认包 `addFileArg` 路径（第 238 轮 D106）。`build.zig` 系构建脚本
     //   独立编译单元、无法 `@import` hub，两枚 `addFileArg(b.path("src/lang/packs/中文.txt"))` 是内置默认包
     //   文件名的一份跨文件手抄；t2 探针 P3 实锤 `gen-*-main` emit 缺省包路径漂移而 CI 不可见绿。本面 needle
@@ -315,7 +324,7 @@ pub fn main(init: std.process.Init) !void {
     checkFace(build_path, &paths.build_pack_face, build);
 
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族三 枚 needle 在 e2e 基线脚本 {s} 面命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源\n",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族九/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/六 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族十一 枚 needle 在客户端面命中、消息本体键族九 枚 needle 在客户端面命中、结果字段族八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族三 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源\n",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path, ps1_path },
     );
 }

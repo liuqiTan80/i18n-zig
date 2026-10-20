@@ -266,6 +266,29 @@ const f_hover_result = "{{" ++ ek_contents ++ ":{{" ++ ek_kind ++ ":" ++ em_mark
 pub const f_didOpen_params = "{{" ++ ek_textDocument ++ ":{{" ++ ek_uri ++ ":{s}," ++ ek_text ++ ":{s}}}}}";
 pub const f_hover_params = "{{" ++ ek_textDocument ++ ":{{" ++ ek_uri ++ ":{s}}}," ++ ek_position ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}}}";
 
+/// —— D113 e2e 基线脚本内嵌 LSP 帧协议词族（第 245 轮）：`tools/check-demos.ps1` 以内嵌 JSON
+/// 帧字面量向 `zzc lsp` 发起 initialize／initialized／didOpen／didSave／hover／semanticTokens-full／
+/// shutdown／exit 八方法、并携 `"jsonrpc":"2.0"` 与 `"languageId":"zig-dialect"`——此系协议词汇的
+/// 第三处手抄（前两处：server.zig dispatch 单源 `m_*`／`jsonrpc.version_value`／`lang_identity.language_id`
+/// 的写侧，及 `extension.js` 客户端面已收对面十一/十二/二十）。ps1 非测图 source dep、D94 `ps1_face` 只核
+/// 命令词/路径/旗标、D98 `cap_face` 只核 capability Contains 断言形串——皆从不核帧内 method 词/版本值/语言 id；
+/// 且本机 NO_PWSH＋GitCode 不跑 Actions 双盲。t2 探针独漂 ps1 帧方法词 fresh 633/633 全绿静默、活体喂漂形帧
+/// `init2` 予真 lsp → 服务端回 `-32601`「不支持的方法」零 initialize 应答坐实握手失联。本 face 的 needle 值段
+/// 全由 `m_*`／`version_value`／`language_id` 三单源 comptime 派生（键段复用既有 `ek_jsonrpc`/`ek_method`/`ek_v20`），
+/// 一侧漂形即分道转锚（守卫对面二十二·复用对面十八已读 ps1 实文，零新增 I/O）。
+pub const ps1_frame_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = ek_jsonrpc ++ ":" ++ ek_v20, .why = "ps1 每帧携的协议版本值须逐字节等于 jsonrpc.version_value——漂即服务端按版本判据拒帧（D108 版本族 ps1 漏员·t2 P1 静默形）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_initialize ++ "\"", .why = "ps1 握手发起方法词须等于服务端 dispatch 真值 m_initialize——漂即收到 -32601 零应答、LSP 全废（活体 init2 坐实）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_initialized ++ "\"", .why = "ps1 初始化完毕通知词须等于 m_initialized——通知形无应答，漂即服务端静默丢弃、无人感知" },
+    .{ .needle = ek_method ++ ":\"" ++ m_didOpen ++ "\"", .why = "ps1 打开同步发起词须等于 m_didOpen——漂即文档不入表，诊断/悬停/语义 token 全空" },
+    .{ .needle = ek_method ++ ":\"" ++ m_didSave ++ "\"", .why = "ps1 on-save 语义触发词须等于 m_didSave——漂即语义编译失联（第二帧块 L1035 面）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_hover ++ "\"", .why = "ps1 悬停请求词须等于 m_hover——漂即悬停永空（t2 探针 hovr 形）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_semanticTokensFull ++ "\"", .why = "ps1 语义 token 请求词须等于 m_semanticTokensFull——漂即母语高亮退白底" },
+    .{ .needle = ek_method ++ ":\"" ++ m_shutdown ++ "\"", .why = "ps1 关闭请求词须等于 m_shutdown——漂即收到 -32601 而非 null 应答、退出序列退化为强杀" },
+    .{ .needle = ek_method ++ ":\"" ++ m_exit ++ "\"", .why = "ps1 退出通知词须等于 m_exit——漂即服务端不置停旗标，只能等管道 EOF 兜底" },
+    .{ .needle = "\"languageId\":\"" ++ lang_id.language_id ++ "\"", .why = "ps1 didOpen 语言标识须等于 lang_identity.language_id——漂即服务端按 id 分派文档不入表（D83 语言标识族 ps1 漏员）" },
+};
+
 /// 对面·`extension.js` 消息本体键族 needle 清单（守卫对面十二——同 218 `methods_face` 形制，
 /// 判据入 hub、守卫视只读 I/O）。js 非 source dependency（203/214 轮判例：改 js 不触发测图重跑），
 /// 而 t2 探针 P1–P3 实锤漂键对构建链零信号、真跑 P4 坐实功能级断裂——逐字节钉住客户端书写形。
@@ -962,6 +985,28 @@ test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 �
     const ps1_drift = "Contains('\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}}')";
     try testing.expect(std.mem.indexOf(u8, ps1_good, cap_face[0].needle) != null);
     try testing.expect(std.mem.indexOf(u8, ps1_drift, cap_face[0].needle) == null);
+}
+
+test "第 245 轮 T0 e2e 基线脚本内嵌 LSP 帧协议词族单源派生与对面二十二 needle 形钉：八方法＋版本值＋语言 id 逐字节对拍／基数钉／正反小样（防 ps1 帧词独漂静默失联而测恒绿）" {
+    // A1 派生形钉：十枚 needle 与 ps1 内嵌帧的期望字面逐字节对拍——本 want 表系独立手抄（ps1
+    //   非测图 source dep、@embedFile 越不出 src 包路径·202 轮硬约束），与守卫对面二十二双向互备：
+    //   hub 单源漂（m_*/version_value/language_id 被改而未同步手抄期望面）即此测红；ps1 字面漂即守卫红。
+    const want = [_][]const u8{ "\"jsonrpc\":\"2.0\"", "\"method\":\"initialize\"", "\"method\":\"initialized\"", "\"method\":\"textDocument/didOpen\"", "\"method\":\"textDocument/didSave\"", "\"method\":\"textDocument/hover\"", "\"method\":\"textDocument/semanticTokens/full\"", "\"method\":\"shutdown\"", "\"method\":\"exit\"", "\"languageId\":\"zig-dialect\"" };
+    // A2 基数钉：十枚（八方法 + 版本值 + 语言 id）——增删帧成员须同步 face 与本表，防漏收成员。
+    try testing.expectEqual(@as(usize, 10), ps1_frame_face.len);
+    try testing.expectEqual(want.len, ps1_frame_face.len);
+    for (ps1_frame_face, &want) |f, w| {
+        try testing.expectEqualStrings(w, f.needle);
+    }
+    // A3 正反小样（真帧形命中、方法词漂形即缺——防子串假命中、坐实守卫判据方向）：
+    //   initialize→init2 漂形帧不得命中 m_initialize 派生 needle（t2 P1 静默面转锚·活体 init2 形）。
+    const frame_good = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+    const frame_drift = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"init2\",\"params\":{}}";
+    try testing.expect(std.mem.indexOf(u8, frame_good, ps1_frame_face[1].needle) != null);
+    try testing.expect(std.mem.indexOf(u8, frame_drift, ps1_frame_face[1].needle) == null);
+    // A4 版本/语言 id 单源同步钉：needle 值段随 jsonrpc.version_value / lang_identity.language_id 动。
+    try testing.expectEqualStrings("\"jsonrpc\":\"" ++ jsonrpc.version_value ++ "\"", ps1_frame_face[0].needle);
+    try testing.expectEqualStrings("\"languageId\":\"" ++ lang_id.language_id ++ "\"", ps1_frame_face[9].needle);
 }
 
 test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 UTF-16（第 156 轮）" {
