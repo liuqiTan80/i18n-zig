@@ -87,7 +87,6 @@ pub const tasks_command: []const u8 = comptimeCat(.{ zzc.prog_name, " ", sub_che
 /// VSCode pattern 五字段名与其应对的占位符型（组号 = 列序 + 1，与 `line_fmt` 占位符同序）。
 /// `ty` 即 `line_fmt` 对应段占位符字符：'s' 字符串段、'd' 数字段——语义对应 file→路径、
 /// location→行、column→列、code→种类、message→消息（与 `field_names` 同序，人约字面并列钉于 225 T0）。
-pub const PatternPair = struct { key: []const u8, ty: u8 };
 pub const pattern_pairs = .{
     .{ .key = "file", .ty = 's' },
     .{ .key = "location", .ty = 'd' },

@@ -42,8 +42,6 @@ const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
 const version_str = zzc.zzc_version; // 第 211 轮 D79：`zzc version` 出口委派产品版本族真值（旧手抄与 zon/usage/模板四处互不引用）
 const zh_pack = @embedFile(zzc.builtin_pack_embed_src); // 第 238 轮 D106：内置默认包文件名由 hub 单源派生（src 层 embed）
 
-const Exit = error{ Usage, Failed };
-
 var gpa_: std.mem.Allocator = undefined; // arena，进程级
 var io_: Io = undefined;
 var out_w: *Io.Writer = undefined;
