@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 240" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="960" height="240" fill="#fbfaf6"/>
+  <text x="480" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">你写的中文代码，是怎么变成能跑的程序的？</text>
+
+  <!-- box 1: .zz -->
+  <rect x="30" y="80" width="180" height="90" rx="14" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="120" y="118" text-anchor="middle" font-size="18" fill="#1a3d7c" font-weight="bold">你的方言源码</text>
+  <text x="120" y="146" text-anchor="middle" font-size="16" fill="#1a3d7c">main.zz（中文）</text>
+
+  <!-- arrow to zzc -->
+  <line x1="210" y1="125" x2="270" y2="125" stroke="#888" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- box 2: zzc translate -->
+  <rect x="275" y="80" width="180" height="90" rx="14" fill="#fef3e0" stroke="#f9a825" stroke-width="2"/>
+  <text x="365" y="118" text-anchor="middle" font-size="18" fill="#8a5a00" font-weight="bold">zzc 翻译官</text>
+  <text x="365" y="146" text-anchor="middle" font-size="16" fill="#8a5a00">把中文词换成 Zig 词</text>
+
+  <line x1="455" y1="125" x2="515" y2="125" stroke="#888" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- box 3: .zig -->
+  <rect x="520" y="80" width="180" height="90" rx="14" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="610" y="118" text-anchor="middle" font-size="18" fill="#1e6b34" font-weight="bold">标准 Zig 源码</text>
+  <text x="610" y="146" text-anchor="middle" font-size="16" fill="#1e6b34">main.zig（英文）</text>
+
+  <line x1="700" y1="125" x2="760" y2="125" stroke="#888" stroke-width="2" marker-end="url(#a)"/>
+
+  <!-- box 4: zig compile -> exe -->
+  <rect x="765" y="80" width="170" height="90" rx="14" fill="#f3e8fd" stroke="#9c27b0" stroke-width="2"/>
+  <text x="850" y="118" text-anchor="middle" font-size="18" fill="#5a1a6b" font-weight="bold">zig 编译</text>
+  <text x="850" y="146" text-anchor="middle" font-size="16" fill="#5a1a6b">→ 能跑的程序 🚀</text>
+
+  <text x="480" y="210" text-anchor="middle" font-size="14" fill="#666">关键：你只管用中文写，zzc 负责逐词翻译成真正的 Zig，语法骨架（括号、分号）不变。</text>
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#888"/>
+    </marker>
+  </defs>
+</svg>

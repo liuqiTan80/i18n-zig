@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 360" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="940" height="360" fill="#fbfaf6"/>
+  <text x="470" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">四只"指路牌"：让程序学会拐弯和重复</text>
+
+  <!-- if fork -->
+  <rect x="30" y="70" width="200" height="120" rx="10" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="130" y="95" text-anchor="middle" font-size="17" fill="#1e6b34" font-weight="bold">如果 / 否则</text>
+  <circle cx="130" cy="120" r="5" fill="#1e6b34"/>
+  <path d="M130,120 L100,155 M130,120 L160,155" stroke="#1e6b34" stroke-width="2" fill="none"/>
+  <text x="130" y="175" text-anchor="middle" font-size="13" fill="#1e6b34">像岔路口：走哪条看条件真假</text>
+
+  <!-- while loop -->
+  <rect x="255" y="70" width="200" height="120" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="355" y="95" text-anchor="middle" font-size="17" fill="#1a3d7c" font-weight="bold">当（while）</text>
+  <path d="M330,140 a25,20 0 1,1 50,0 a25,20 0 1,1 -50,0" stroke="#1a3d7c" stroke-width="2" fill="none"/>
+  <text x="355" y="175" text-anchor="middle" font-size="13" fill="#1a3d7c">绕圈圈：条件真就一直转</text>
+
+  <!-- for -->
+  <rect x="480" y="70" width="200" height="120" rx="10" fill="#fef3e0" stroke="#f9a825" stroke-width="2"/>
+  <text x="580" y="95" text-anchor="middle" font-size="17" fill="#8a5a00" font-weight="bold">对于（for）</text>
+  <g fill="#8a5a00">
+    <rect x="545" y="120" width="18" height="18" rx="3"/>
+    <rect x="571" y="120" width="18" height="18" rx="3"/>
+    <rect x="597" y="120" width="18" height="18" rx="3"/>
+  </g>
+  <text x="580" y="175" text-anchor="middle" font-size="13" fill="#8a5a00">逐个点名：把一排东西挨个处理</text>
+
+  <!-- switch -->
+  <rect x="705" y="70" width="205" height="120" rx="10" fill="#f3e8fd" stroke="#9c27b0" stroke-width="2"/>
+  <text x="807" y="95" text-anchor="middle" font-size="17" fill="#5a1a6b" font-weight="bold">匹配（switch）</text>
+  <circle cx="740" cy="135" r="4" fill="#9c27b0"/>
+  <path d="M740,135 L800,110 M740,135 L800,135 M740,135 L800,160" stroke="#9c27b0" stroke-width="2"/>
+  <text x="850" y="113" font-size="12" fill="#5a1a6b">A 情况</text>
+  <text x="850" y="138" font-size="12" fill="#5a1a6b">B 情况</text>
+  <text x="850" y="163" font-size="12" fill="#5a1a6b">其它</text>
+  <text x="807" y="175" text-anchor="middle" font-size="13" fill="#5a1a6b">多岔口：按值挑一条走</text>
+
+  <!-- break/continue -->
+  <rect x="200" y="230" width="540" height="70" rx="10" fill="#fdeaea" stroke="#ea8600" stroke-width="2"/>
+  <text x="470" y="258" text-anchor="middle" font-size="16" fill="#a15100" font-weight="bold">断开 break = 立刻跳出圈 / 继续 continue = 跳过本格、进下一格</text>
+  <text x="470" y="285" text-anchor="middle" font-size="13" fill="#a15100">它俩是"当/对于"这些圈圈里的两个紧急按钮</text>
+</svg>

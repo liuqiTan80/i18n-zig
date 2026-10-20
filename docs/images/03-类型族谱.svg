@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="900" height="420" fill="#fbfaf6"/>
+  <text x="450" y="34" text-anchor="middle" font-size="22" fill="#333" font-weight="bold">数据类型：给每个"盒子"规定型号</text>
+
+  <rect x="370" y="60" width="160" height="46" rx="10" fill="#333" />
+  <text x="450" y="89" text-anchor="middle" font-size="18" fill="#fff" font-weight="bold">类型（盒子的型号）</text>
+
+  <!-- branches -->
+  <line x1="450" y1="106" x2="180" y2="150" stroke="#888" stroke-width="2"/>
+  <line x1="450" y1="106" x2="400" y2="150" stroke="#888" stroke-width="2"/>
+  <line x1="450" y1="106" x2="600" y2="150" stroke="#888" stroke-width="2"/>
+  <line x1="450" y1="106" x2="780" y2="150" stroke="#888" stroke-width="2"/>
+
+  <!-- integer family -->
+  <rect x="70" y="150" width="220" height="200" rx="12" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="180" y="176" text-anchor="middle" font-size="17" fill="#1a3d7c" font-weight="bold">整数族（没有小数点）</text>
+  <text x="180" y="205" text-anchor="middle" font-size="14" fill="#1a3d7c">整数 → i64</text>
+  <text x="180" y="228" text-anchor="middle" font-size="14" fill="#1a3d7c">中整数 → i32 ／ 短整数 → i16</text>
+  <text x="180" y="251" text-anchor="middle" font-size="14" fill="#1a3d7c">字节 → u8 ／ 长整数 → i128</text>
+  <text x="180" y="278" text-anchor="middle" font-size="13" fill="#1a3d7c">u 开头＝只能非负</text>
+  <text x="180" y="300" text-anchor="middle" font-size="13" fill="#1a3d7c">i 开头＝可正可负</text>
+  <text x="180" y="328" text-anchor="middle" font-size="13" fill="#1a3d7c">型号越大，装得越多</text>
+
+  <!-- float family -->
+  <rect x="305" y="150" width="180" height="200" rx="12" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="395" y="176" text-anchor="middle" font-size="17" fill="#1e6b34" font-weight="bold">实数族（带小数点）</text>
+  <text x="395" y="205" text-anchor="middle" font-size="14" fill="#1e6b34">实数 → f64</text>
+  <text x="395" y="228" text-anchor="middle" font-size="14" fill="#1e6b34">单精度 → f32</text>
+  <text x="395" y="251" text-anchor="middle" font-size="14" fill="#1e6b34">半精度 → f16</text>
+  <text x="395" y="285" text-anchor="middle" font-size="13" fill="#1e6b34">像 3.14、0.5</text>
+
+  <!-- bool -->
+  <rect x="498" y="150" width="180" height="95" rx="12" fill="#fef3e0" stroke="#f9a825" stroke-width="2"/>
+  <text x="588" y="176" text-anchor="middle" font-size="17" fill="#8a5a00" font-weight="bold">布尔（开关）</text>
+  <text x="588" y="205" text-anchor="middle" font-size="14" fill="#8a5a00">布尔 → bool</text>
+  <text x="588" y="228" text-anchor="middle" font-size="14" fill="#8a5a00">只有 真 / 假</text>
+
+  <!-- text -->
+  <rect x="498" y="255" width="180" height="95" rx="12" fill="#f3e8fd" stroke="#9c27b0" stroke-width="2"/>
+  <text x="588" y="281" text-anchor="middle" font-size="17" fill="#5a1a6b" font-weight="bold">文本（一串字）</text>
+  <text x="588" y="308" text-anchor="middle" font-size="14" fill="#5a1a6b">文本 → []const u8</text>
+  <text x="588" y="331" text-anchor="middle" font-size="14" fill="#5a1a6b">像 "你好"</text>
+
+  <!-- void -->
+  <rect x="690" y="150" width="180" height="200" rx="12" fill="#fdeaea" stroke="#ea8600" stroke-width="2"/>
+  <text x="780" y="176" text-anchor="middle" font-size="17" fill="#a15100" font-weight="bold">空 / 其它</text>
+  <text x="780" y="205" text-anchor="middle" font-size="14" fill="#a15100">空 → void（啥也不返回）</text>
+  <text x="780" y="230" text-anchor="middle" font-size="14" fill="#a15100">任意类型 → anytype</text>
+  <text x="780" y="255" text-anchor="middle" font-size="14" fill="#a15100">字 → usize（数个数用）</text>
+  <text x="780" y="290" text-anchor="middle" font-size="13" fill="#a15100">型号选错，zzc 会</text>
+  <text x="780" y="312" text-anchor="middle" font-size="13" fill="#a15100">用中文告诉你哪里不对</text>
+
+  <text x="450" y="400" text-anchor="middle" font-size="14" fill="#666">比喻：类型就是"这个盒子专门装什么、能装多大"。整数盒子装不了小数，开关盒子只能拨真/假。</text>
+</svg>
