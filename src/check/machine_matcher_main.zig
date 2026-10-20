@@ -20,16 +20,18 @@ const jrpc = @import("zzc_core").lsp_jsonrpc; // 第 217 轮 D85：LSP 基座协
 const lsp_srv = @import("zzc_core").lsp_server; // 第 218 轮 D86：LSP 方法名族真值与 extension.js 对面 needle 清单
 const cli_hub = @import("zzc_core").cli; // 第 224 轮 D92：工具链 spawn argv 词族真值与 main.zig 委派形对面清单
 
-/// 一面（needle 清单）逐字节对账：缺任一枚即分道退出。判据（needle 与后果描述）全在 hub，
-/// 本函数只做「在已读入的对面文本里找」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
+/// 一面（needle 清单）逐字节对账：命中不足即分道退出。判据（needle／后果／应现枚数 `occ`）全在 hub，
+/// 本函数只做「在已读入的对面文本里按枚计数」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
 /// `face` 取 anytype：215/216 两 hub 各自声明同形制 FaceCheck（Zig struct 名义类型互不兼容），
-/// 而搜索判据 `lid.missing` 与 `lcfg.missing` 语义逐字节相同（皆 indexOf == null），不另立第三套。
+/// 而搜索判据 `lid.countOccurrences` 与旧 `lcfg.missing` 语义在 `occ == 1` 时逐字节等价（计数 0 ⟺ indexOf 落空），
+/// 不另立第三套；对无 `occ` 字段的 hub FaceCheck 以 `@hasField` 回落 `occ = 1`（presence 语义不变）。
 fn checkFace(face_name: []const u8, comptime face: anytype, text: []const u8) void {
     inline for (face) |c| {
-        if (lid.missing(text, c.needle)) {
+        const occ: usize = if (@hasField(@TypeOf(c), "occ")) c.occ else 1;
+        if (lid.countOccurrences(text, c.needle) < occ) {
             fail(
-                "FAIL: {s} 缺逐字节声明「{s}」——{s}\n",
-                .{ face_name, c.needle, c.why },
+                "FAIL: {s} 逐字节声明「{s}」命中不足 {d} 枚——{s}\n",
+                .{ face_name, c.needle, occ, c.why },
             );
         }
     }

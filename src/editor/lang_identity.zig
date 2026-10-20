@@ -21,6 +21,12 @@ const paths = @import("../zzc_paths.zig");
 /// `problemMatchers[].owner` 与客户端 `LANGUAGE_ID` 共用的一名（改此名而清单/客户端不随动即 LSP 静默失效）。
 pub const language_id: []const u8 = "zig-dialect";
 
+/// 清单中以字面形 `"language": "<id>"` 携语言 id 的贡献块数（第 248 轮 · D115）：`grammars[]`＋`snippets[]`
+/// 各一枚。此二块同形字面量互不引用，若对面只用 presence（`indexOf != null`）判据即坍缩到首现（grammars）、
+/// 漏核次现（snippets）——248 t2 探针实锤漂 snippets[0].language 为近名异值 **638/638 全绿静默**（snippets
+/// 从此不再关联 .zz 文件、补全片段静默熄灭）。故 language 那枚 needle 以本数作 `occ` 计数下界，两处皆须命中。
+pub const language_block_count: usize = 2;
+
 /// 词元名段（`fileTypes`／资产文件名／scopeName 尾段共用）：由方言扩展名真值剥前导点派生。
 pub const file_type_stem: []const u8 = blk: {
     const ext = paths.dialect_ext;
@@ -129,10 +135,13 @@ pub const tm_face = [_]FaceCheck{
     .{ .needle = "\"begin\": \"" ++ tm_block_begin_regex ++ "\", \"end\": \"" ++ tm_block_end_regex ++ "\"", .why = "tmLanguage 块注释高亮须由块标记真值派生，与 langconf 声明互洽" },
 };
 
-/// 一次对面核对项：逐字节 needle 与「分道即何为」的说明（守卫据此报错，判据不另立）。
+/// 一次对面核对项：逐字节 needle、「分道即何为」的说明与「该 needle 在对面至少应现的枚数」`occ`
+/// （守卫据此报错，判据不另立）。`occ` 缺省 1＝presence 语义（承旧 `!missing`）；>1 用于同形多枚 token
+/// 的逐枚对账（如清单 grammars/snippets 两处 language），把 presence 首现坍缩面转为计数下界。
 pub const FaceCheck = struct {
     needle: []const u8,
     why: []const u8,
+    occ: usize = 1,
 };
 
 /// 对面·清单 `package.json`：语言 id／扩展名／scopeName／owner／matcher 定义名／两枚资产路径。
@@ -140,7 +149,7 @@ pub const pkg_face = [_]FaceCheck{
     .{ .needle = "\"id\": \"" ++ language_id ++ "\"", .why = "contributes.languages[0].id 须等于语言 id 真值" },
     .{ .needle = "\"onLanguage:" ++ language_id ++ "\"", .why = "activationEvents 须按同一语言 id 激活" },
     .{ .needle = "\"" ++ paths.dialect_ext ++ "\"", .why = "contributes.languages[0].extensions 须等于方言扩展名真值" },
-    .{ .needle = "\"language\": \"" ++ language_id ++ "\"", .why = "grammars/snippets 的 language 须等于语言 id 真值" },
+    .{ .needle = "\"language\": \"" ++ language_id ++ "\"", .why = "grammars/snippets 两处 language 皆须等于语言 id 真值（逐枚计数≥" ++ std.fmt.comptimePrint("{d}", .{language_block_count}) ++ "·漂任一枚即少一枚→红）", .occ = language_block_count },
     .{ .needle = "\"scopeName\": \"" ++ scope_name ++ "\"", .why = "grammars[].scopeName 须与生成侧 tmLanguage 同源，分道即编辑器寻不到 grammar（高亮全废）" },
     .{ .needle = "\"path\": \"./" ++ grammar_asset_path ++ "\"", .why = "grammars[].path 须指向生成器实际写出的 tmLanguage 资产" },
     .{ .needle = "\"path\": \"./" ++ snippets_asset_path ++ "\"", .why = "snippets[].path 须指向生成器实际写出的片段资产" },
@@ -161,6 +170,19 @@ pub const tasks_face = [_]FaceCheck{
 /// `text`（运行时对面全文）是否缺 `needle`（命中即已同步；缺失即分道）。守卫据此循环报错、不自立判据。
 pub fn missing(text: []const u8, comptime needle: []const u8) bool {
     return std.mem.indexOf(u8, text, needle) == null;
+}
+
+/// `needle` 在 `text` 中非重叠出现次数（0 即缺）。多枚同形 token 的逐枚对账判据：presence（`!missing`）
+/// 只核首现、漏核次现，本函数按枚计数——守卫以 `countOccurrences(text, needle) >= occ` 取代 `!missing`，
+/// `occ == 1` 时二者语义全等（计数 0 ⟺ indexOf 落空），仅多枚面（occ > 1）收紧为计数下界。
+pub fn countOccurrences(text: []const u8, comptime needle: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (std.mem.indexOf(u8, text[i..], needle)) |k| {
+        n += 1;
+        i += k + needle.len;
+    }
+    return n;
 }
 
 // ———————————————————————————— 测试（215 T0）————————————————————————————
@@ -279,4 +301,35 @@ test "第 246 轮 T0 类别 scope 派生助手 cat_scope：单源形钉（基名
         try testing.expectEqualStrings(".", s[b.len .. b.len + 1]);
         try testing.expectEqualStrings(file_type_stem, s[b.len + 1 ..]);
     }
+}
+
+test "第 248 轮 T0 snippets language 逐枚对账：countOccurrences 计数下界防 presence 首现坠缩（grammars/snippets 两处皆须命中）" {
+    // A1 needle 形钉：清单 language 那枚的逐字节形（防 hub 自身失真）。
+    const needle = pkg_face[3].needle;
+    try testing.expectEqualStrings("\"language\": \"zig-dialect\"", needle);
+    // A2 计数判据小样：真形两处齐全→计数=2；漂 snippets 那枚为近名异值→计数降为 1。
+    const both =
+        \\{ "grammars": [ { "language": "zig-dialect", "scopeName": "source.zz" } ],
+        \\  "snippets": [ { "language": "zig-dialect", "path": "./snippets/zz.json" } ] }
+    ;
+    const drift =
+        \\{ "grammars": [ { "language": "zig-dialect", "scopeName": "source.zz" } ],
+        \\  "snippets": [ { "language": "zig", "path": "./snippets/zz.json" } ] }
+    ;
+    try testing.expectEqual(@as(usize, 2), countOccurrences(both, needle));
+    try testing.expectEqual(@as(usize, 1), countOccurrences(drift, needle));
+    // A3 反锈（本轮假锚形制）：对漂移样 presence 老判据 `missing` 判「不缺」（首现仍在）而计数判据拦下。
+    try testing.expect(!missing(drift, needle));
+    try testing.expect(countOccurrences(drift, needle) < pkg_face[3].occ);
+    // A4 occ 形钉：language 那枚 occ = grammars+snippets 两块（漏块即少一枚→假锚回潮）。
+    try testing.expectEqual(@as(usize, 2), pkg_face[3].occ);
+    try testing.expectEqual(language_block_count, pkg_face[3].occ);
+    // A5 其余八枚 needle 默认 occ=1（presence 语义不变，防误扩计数面）。
+    inline for (pkg_face, 0..) |c, i| {
+        if (i == 3) continue;
+        try testing.expectEqual(@as(usize, 1), c.occ);
+    }
+    // A6 非重叠计数边界：针首尾相接仍逐枚计（防重叠窗错位漏计）。
+    try testing.expectEqual(@as(usize, 2), countOccurrences("abab", "ab"));
+    try testing.expectEqual(@as(usize, 0), countOccurrences("a b", "ab"));
 }
