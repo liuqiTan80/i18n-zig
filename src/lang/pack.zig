@@ -45,6 +45,19 @@ pub const meta_code = "$code"; // 语言代码键
 pub const unset_code = "??"; // 代码未设哨兵：validate 首关即查此值
 pub const unset_name = "未知语言"; // 展示名未设缺省
 
+/// Zig 规范名反查键单源（第 243 轮 D111）：同一批 ASCII 规范名此前在四处各自内联字面量——
+/// `contract_values` 清单、`buildInitTemplate` 模板组词键与 `orelse` 兜底、main staging 的
+/// const/@import 词形、transpiler 的导入判定。任一处漂移即静默产碎码（t2 探针坐实 `@import`→
+/// `@impxrt` 全库 629/629 绿而 `zzc check` 拒自家 init 产物）。收编为命名常量后四处结构上不可分道。
+/// 只收编**跨模块**手抄的六枚；`pub`/`std`/`void`/`i64`/`std.debug`/`std.debug.print` 仅 buildInitTemplate
+/// 单模块内联、非跨模块手抄，不在本族（D111 面界）。
+pub const zig_const = "const"; // 声明半：撞词避让 / const 单跳数据流（D3）
+pub const zig_var = "var";
+pub const zig_fn = "fn"; // `主函数`→main 入口链与声明位识别
+pub const zig_import = "@import"; // 导入词形预扫描（D2/D4）+ init 模板 + 入口链
+pub const zig_embed_file = "@embedFile"; // 嵌入词形预扫描与资产 staging（D2/D3）
+pub const zig_main = "main"; // 语义编译根判据（含 main 的文件）
+
 name: []const u8 = unset_name,
 code: []const u8 = unset_code,
 keywords: std.StringHashMap([]const u8),
@@ -58,9 +71,9 @@ whitelist: std.ArrayList([]const u8),
 /// 任何方言包若缺这些映射会在流程深处静默失能；在 parse 后立即校验、母语报错。
 /// 清单只含 ASCII 值、不硬编码任何方言词（语言无关原则）。
 pub const contract_values = [_][]const u8{
-    "const", // 声明半：撞词避让 / const 单跳数据流（D3）
-    "var",
-    "fn", // `主函数`→main 入口链与声明位识别
+    zig_const, // 声明半：撞词避让 / const 单跳数据流（D3）
+    zig_var,
+    zig_fn, // `主函数`→main 入口链与声明位识别
     "if",
     "else",
     "return",
@@ -68,9 +81,9 @@ pub const contract_values = [_][]const u8{
     "enum",
     "union",
     "switch",
-    "@import", // 导入词形预扫描（D2/D4）
-    "@embedFile", // 嵌入词形预扫描与资产 staging（D2/D3）
-    "main", // 语义编译根判据（含 main 的文件）
+    zig_import, // 导入词形预扫描（D2/D4）
+    zig_embed_file, // 嵌入词形预扫描与资产 staging（D2/D3）
+    zig_main, // 语义编译根判据（含 main 的文件）
 };
 
 pub const ValidationError = error{
@@ -343,7 +356,7 @@ pub fn firstKeywordFor(lang: Pack, want: []const u8) ?[]const u8 {
 
 /// `@embedFile` 的全部词形（ASCII 直通形 + 方言词，如 `嵌入文件`）。供原文预扫描（D2）。
 pub fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
-    return keywordFormsFor(gpa, lang, "@embedFile");
+    return keywordFormsFor(gpa, lang, zig_embed_file);
 }
 
 test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优先、aliases 兼容多段链键、未命中 null" {
@@ -361,6 +374,32 @@ test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优
     try std.testing.expectEqualStrings("标准库.调试.打印", lang.firstKeywordFor("std.debug.print").?);
     // 未命中：包无任何映射值等于它——调用方自行降级，不得 panic。
     try std.testing.expectEqual(@as(?[]const u8, null), lang.firstKeywordFor("nonexistent.value"));
+}
+
+test "第 243 轮 T0 Zig 规范名反查键单源锈（D111）：值钉 + contract_values 一致性 + 真包反查对齐" {
+    const gpa = std.testing.allocator;
+    // A1 值钉：六枚命名常量逐字节 == 原内联字面量（收编不得改值，行为等价的前提）。
+    try std.testing.expectEqualStrings("const", zig_const);
+    try std.testing.expectEqualStrings("var", zig_var);
+    try std.testing.expectEqualStrings("fn", zig_fn);
+    try std.testing.expectEqualStrings("@import", zig_import);
+    try std.testing.expectEqualStrings("@embedFile", zig_embed_file);
+    try std.testing.expectEqualStrings("main", zig_main);
+    // A2 一致性钉：contract_values 必含这六枚（单源后清单与常量不可分道：任一处漂即本钉红）。
+    for ([_][]const u8{ zig_const, zig_var, zig_fn, zig_import, zig_embed_file, zig_main }) |k| {
+        var found = false;
+        for (contract_values) |want| {
+            if (std.mem.eql(u8, want, k)) found = true;
+        }
+        try std.testing.expect(found); // 若清单退回手抄字面量而常量另漂，此钉翻红
+    }
+    // A3 真包对齐钉：中文包确有词映射到 zig_import 的规范名（常量值与包数据逐字节同，
+    //   否则 buildInitTemplate 以本常量作反查键会落 null → 降级碎码）。
+    var lang = try parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_lang));
+    defer lang.deinit();
+    try std.testing.expectEqualStrings("导入", lang.firstKeywordFor(zig_import).?);
+    // A4 反证防恒真：若把反查键换为碎名（如 @impxrt）真包必无映射 → null（坐实 A3 非绿于任意键）。
+    try std.testing.expectEqual(@as(?[]const u8, null), lang.firstKeywordFor("@impxrt"));
 }
 
 test "keywordFormsFor/embedWordForms（第 61 轮下沉真测）：ASCII 直通形居首 + 真实 zh 包方言词形被枚举" {

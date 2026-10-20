@@ -54,7 +54,7 @@ fn isImportOperand(lang: Pack, src: []const u8, toks: []const lexer.Token, i: us
     if (head.kind == .nonascii_word) {
         const hw = head.text(src);
         const mapped = lang.keywords.get(hw) orelse lang.aliases.get(hw) orelse return false;
-        return std.mem.eql(u8, mapped, "@import");
+        return std.mem.eql(u8, mapped, Pack.zig_import);
     }
     // 直通写法：`@` `import` `(`（@ 与 import 分属两词元，且均为原始 ASCII）。
     if (head.kind == .ascii_word and std.mem.eql(u8, head.text(src), "import")) {

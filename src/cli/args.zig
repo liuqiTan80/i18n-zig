@@ -392,12 +392,12 @@ fn appendTemplateSegs(gpa: std.mem.Allocator, buf: *std.ArrayList(u8), segs: []c
 /// 降级到 ASCII 属可用性优先：碎码不是合法兜底项（探针 T2 坐实旧行为即碎码）。
 pub fn buildInitTemplate(gpa: std.mem.Allocator, lang: Pack) ![]const u8 {
     // 非 ASCII 词元可直通 intern 成名（跨文件一致）——名字槽位用方言词兜 ASCII 皆合法。
-    const w_const = Pack.firstKeywordFor(lang, "const") orelse "const";
-    const w_var = Pack.firstKeywordFor(lang, "var") orelse w_const; // 无 var 词形则退常宣声明（literal 推导合法）
-    const w_fn = Pack.firstKeywordFor(lang, "fn") orelse "fn";
-    const w_import = Pack.firstKeywordFor(lang, "@import") orelse "@import";
+    const w_const = Pack.firstKeywordFor(lang, Pack.zig_const) orelse Pack.zig_const;
+    const w_var = Pack.firstKeywordFor(lang, Pack.zig_var) orelse w_const; // 无 var 词形则退常宣声明（literal 推导合法）
+    const w_fn = Pack.firstKeywordFor(lang, Pack.zig_fn) orelse Pack.zig_fn;
+    const w_import = Pack.firstKeywordFor(lang, Pack.zig_import) orelse Pack.zig_import;
     const w_pub = Pack.firstKeywordFor(lang, "pub") orelse "pub"; // 入口必 pub（zig 硬要求），缺则 ASCII 直通
-    const w_main = Pack.firstKeywordFor(lang, "main") orelse "main";
+    const w_main = Pack.firstKeywordFor(lang, Pack.zig_main) orelse Pack.zig_main;
     const w_std = Pack.firstKeywordFor(lang, "std") orelse "std";
     const w_void = Pack.firstKeywordFor(lang, "void") orelse "void";
     // 类型注必存在：`var 名 = 10` 无显式定宽类型→zig 视其为 comptime_int、再赋值拒

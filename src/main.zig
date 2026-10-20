@@ -327,7 +327,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
     // 单跳变量实参解析的 const 词形（`常数`/`const`；映射值恰为 const 的方言词都算）：
     // `嵌入文件(名字)` 的变量引用同样要命中豁免，否则资产 .zz 仍被误当编译单元（D2×D3 组合面）。
     // 注：`变量`(var) 不列入——zig 的 @embedFile 要求 comptime 实参，var 绑定本就非法。
-    const cs_leads = try keywordFormsFor(gpa_, lang, "const");
+    const cs_leads = try keywordFormsFor(gpa_, lang, Pack.zig_const);
     var exempt = std.StringHashMap(void).init(gpa_);
     // 扫描+解析同形循环下沉 cli.findReferencedRels（D9/D10；纯函数入测试图，D7）；
     // gpa_ 为 arena：解析结果入表后释放列表本体即可，字符串随 arena 存活供 contains 回看。
@@ -344,7 +344,7 @@ fn collectAndTranslate(entry: []const u8, lang: Pack, table: *Mangle) !Project {
     // 则取消豁免——它是编译单元（需生成 .zig），其 embed 引用由 stageEmbedAssets 原样镜像 .zz，
     // 同名 .zz 与 .zig 不同后缀可共存。单趟扫描：仅从当前非豁免文件中识别导入（级联场景下
     // 被取消豁免的文件若有自己的 import 指向其他 exempt 文件，需再次构建收敛——P3 可接受）。
-    const imp_leads = try keywordFormsFor(gpa_, lang, "@import");
+    const imp_leads = try keywordFormsFor(gpa_, lang, Pack.zig_import);
     const no_const: []const []const u8 = &.{};
     for (files.items) |rel| {
         if (exempt.contains(rel)) continue; // 数据资产正文中的"导入"字串不视为真实 import
@@ -1816,6 +1816,29 @@ test "第 235 轮 T1 入口检测形跨模块往返锚：真 buildInitTemplate�
     defer lib_table.deinit();
     const lib_res = try translate.translate(gpa, "函数 助手() 空 { }\n", lang, &lib_table);
     try std.testing.expect(!cli.zigHasMainFn(lib_res.zig_str));
+}
+
+test "第 243 轮 T1 init 模板导入段 well-formedness 反锚（D111）：真 buildInitTemplate→translate 产物必含 @import(\"std\") 且不含碎码" {
+    // D111 核心缺口补位：t2 探针 P2 实锤——把 buildInitTemplate 的 `@import` 反查键漂成 `@impxrt`，
+    // `firstKeywordFor` 落 null → `orelse "@impxrt"` 兑 ASCII → 模板产 `常数 标准库 = @impxrt("std")`，
+    // 全库 fresh 629/629 静默绿（buildInitTemplate 产物零 well-formedness 测锚），而真跑 `zzc init`→`zzc check`
+    // EXIT=1「引用了不存在的内建函数（@ 开头）」——工具拒自家产物。既有 212 T0（仅核头注释程序名/子命令）
+    // 与 235 T1（仅核入口形）皆不触 import 段。本锚驱 **真** buildInitTemplate → **真** translate：
+    //   单源后任一处（常量值/清单/生成键）漂移皆使产物缺 `@import("std")` 或现碎码 → 本锚红。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+
+    const tmpl = try cli.buildInitTemplate(gpa, lang);
+    const res = try translate.translate(gpa, tmpl, lang, &table);
+    // A1 正锚：产物必含规范 `@import("std")`（由 Pack.zig_import 单源派生，与真包词形 `导入` 经翻译同归）。
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, Pack.zig_import ++ "(\"std\")") != null);
+    // A2 反锚：产物不得现任何 `@` 开头碎码——至少不含有 @impxrt（探针坐实的降级碎形）。
+    try std.testing.expect(std.mem.indexOf(u8, res.zig_str, "@impxrt") == null);
 }
 
 // 第 190 轮审计注：承 189 对账，main.zig 再锁定测面零直调两域——
