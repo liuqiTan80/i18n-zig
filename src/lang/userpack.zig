@@ -71,7 +71,10 @@ pub fn install(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []const u8,
 pub fn installedFile(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []const u8) ?[]const u8 {
     if (!keyIsSafe(key)) return null;
     const rel = fileRel(gpa, dir, key) catch return null;
-    if (!file_io.pathExists(io, rel)) return null;
+    if (!file_io.pathExists(io, rel)) {
+        gpa.free(rel); // 第 259 轮 D125：fileRel/allocPrint 临时串在未命中路径逐枚释放（承 D23/D122 守则·旧形仅命中时把 rel 移交调用方、未命中即 return null 而从不 free；生产 gpa_ 进程 arena+旧测 arena-over-testing 双侧同蔽）
+        return null;
+    }
     return rel;
 }
 
@@ -227,4 +230,25 @@ test "第 255 轮 T0 userpack.install 落盘路径临时串逐枚释放：直喂
 
     const body = "$name = 泄漏探针\n$code = kL\n[keywords]\n常数 = const\n";
     try install(io, std.testing.allocator, dir, "kL", body);
+}
+
+// 第 259 轮 D125 同族永久 T0 测钉：installedFile 未命中路径——fileRel 分配 rel 后
+// pathExists 为 false，旧形从不释放即返回 null（每次调用泄一块 path 串）。
+// 生产 gpa_ 进程 arena 掩盖、旧测 L162 arena-over-testing 掩盖——双侧同蔽（D122 同形）。
+// 修法：pathExists-false 分支加 gpa.free(rel)。
+// 验法：gpa 直喂裸 std.testing.allocator，作用域退出自动报 leaked。
+test "第 259 轮 T0 installedFile 未命中路径 rel 逐枚释放（D125·裸 testing.allocator 泄检）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const priv = tpriv.Priv.init(io);
+    var db: [96]u8 = undefined;
+    const dir = priv.path(&db, ".zig-cache/tmp/zzc_userpack_probe259_", "");
+    std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    // keyIsSafe 通过、但文件不存在 → pathExists false → 返回 null → rel 泄漏。
+    const result = installedFile(io, std.testing.allocator, dir, "nonexistent_key");
+    try std.testing.expect(result == null);
 }
