@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 560" font-family="'PingFang SC','Microsoft YaHei',sans-serif">
+  <rect width="940" height="560" fill="#fbfaf6"/>
+  <text x="470" y="32" text-anchor="middle" font-size="21" fill="#333" font-weight="bold">交叉编译：同一份中文方言源，两条路线出货到别的架构</text>
+
+  <defs>
+    <marker id="arw" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L8,3 L0,6 z" fill="#777"/>
+    </marker>
+  </defs>
+
+  <!-- shared source box (spans both lanes) -->
+  <rect x="28" y="215" width="176" height="130" rx="10" fill="#f1f3f4" stroke="#5f6368" stroke-width="2"/>
+  <text x="116" y="256" text-anchor="middle" font-size="15" fill="#333" font-weight="bold">你的方言源</text>
+  <text x="116" y="284" text-anchor="middle" font-size="14" fill="#555">src/main.zz</text>
+  <text x="116" y="312" text-anchor="middle" font-size="12.5" fill="#a15100">中文·一字不改</text>
+
+  <!-- lane 1 (blue): zzc build -->
+  <rect x="250" y="105" width="192" height="92" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="346" y="132" text-anchor="middle" font-size="15" fill="#1a3d7c" font-weight="bold">路线一 · zzc build</text>
+  <text x="346" y="156" text-anchor="middle" font-size="12.5" fill="#1a3d7c">-target 三元组  -O 档位</text>
+  <text x="346" y="176" text-anchor="middle" font-size="12" fill="#1a3d7c">（其余参数原样透传）</text>
+
+  <rect x="470" y="105" width="150" height="92" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="545" y="147" text-anchor="middle" font-size="14" fill="#1a3d7c" font-weight="bold">zig</text>
+  <text x="545" y="171" text-anchor="middle" font-size="14" fill="#1a3d7c">build-exe</text>
+
+  <rect x="648" y="105" width="256" height="92" rx="10" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="776" y="132" text-anchor="middle" font-size="15" fill="#1e6b34" font-weight="bold">✔ 目标架构产物</text>
+  <text x="776" y="156" text-anchor="middle" font-size="12.5" fill="#1e6b34">自带 musl·免装交叉工具链</text>
+  <text x="776" y="176" text-anchor="middle" font-size="12" fill="#1e6b34">适合单文件 / 快速试产</text>
+
+  <!-- lane 2 (green): eject + zig build -->
+  <rect x="250" y="353" width="192" height="92" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="346" y="380" text-anchor="middle" font-size="15" fill="#1a3d7c" font-weight="bold">路线二 · zzc eject</text>
+  <text x="346" y="404" text-anchor="middle" font-size="12.5" fill="#1a3d7c">毕业出标准</text>
+  <text x="346" y="424" text-anchor="middle" font-size="12.5" fill="#1a3d7c">build.zig 工程</text>
+
+  <rect x="470" y="353" width="150" height="92" rx="10" fill="#e8f0fe" stroke="#4285f4" stroke-width="2"/>
+  <text x="545" y="395" text-anchor="middle" font-size="14" fill="#1a3d7c" font-weight="bold">zig build</text>
+  <text x="545" y="419" text-anchor="middle" font-size="12.5" fill="#1a3d7c">-Dtarget= -Doptimize=</text>
+
+  <rect x="648" y="353" width="256" height="92" rx="10" fill="#e6f4ea" stroke="#34a853" stroke-width="2"/>
+  <text x="776" y="380" text-anchor="middle" font-size="15" fill="#1e6b34" font-weight="bold">✔ 目标架构产物</text>
+  <text x="776" y="404" text-anchor="middle" font-size="12.5" fill="#1e6b34">zig-out/bin/app</text>
+  <text x="776" y="424" text-anchor="middle" font-size="12" fill="#1e6b34">适合多文件 / 带依赖 / 进 CI</text>
+
+  <!-- arrows -->
+  <line x1="204" y1="255" x2="248" y2="152" stroke="#777" stroke-width="2" marker-end="url(#arw)"/>
+  <line x1="204" y1="305" x2="248" y2="400" stroke="#777" stroke-width="2" marker-end="url(#arw)"/>
+  <line x1="442" y1="151" x2="468" y2="151" stroke="#777" stroke-width="2" marker-end="url(#arw)"/>
+  <line x1="620" y1="151" x2="646" y2="151" stroke="#777" stroke-width="2" marker-end="url(#arw)"/>
+  <line x1="442" y1="399" x2="468" y2="399" stroke="#777" stroke-width="2" marker-end="url(#arw)"/>
+  <line x1="620" y1="399" x2="646" y2="399" stroke="#777" stroke-width="2" marker-end="url(#arw)"/>
+
+  <!-- footnotes -->
+  <text x="470" y="490" text-anchor="middle" font-size="13.5" fill="#555">一台 x86 电脑 → aarch64 / riscv64 / x86_64-windows / aarch64-macos … 锅不换，只是换张菜单</text>
+  <text x="470" y="520" text-anchor="middle" font-size="12.5" fill="#a15100">⚠ 产物扩展名跟着宿主：Linux 上交叉编 Windows，产物仍叫 main（不是 main.exe）；交叉产物不能在本机 zzc run</text>
+</svg>
