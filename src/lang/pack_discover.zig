@@ -55,6 +55,16 @@ pub fn generateRegistrySource(gpa: Allocator, files: []const PackFile) ![]const 
     }
     if (base_idx.items.len == 0) std.process.fatal("未发现任何基包（需含 `# @key` 且非 overlay 的 .txt）", .{});
     if (default_seen > 1) std.process.fatal("有多个基包同时标 `# @default`（至多一个）", .{});
+    // 撞号基包封口（承 D18 `default`>1 / D19 孤儿补充层 同族「该拒绝未拒绝·静默错选」）：
+    // 两基包同 `# @key` 时 `registry.lookup` 取发射序首枚、后者被无声遮蔽（选错语言包且无提示）；
+    // 发射前逐对比对拒之并指出相冲两文件（基包数为文件量级·枚举个位数，无需哈希）。与 D18/D19 同用
+    // `std.process.fatal` 面向包作者报母语提示（构建期配置错、非运行期可 catch 路径，故与同族守卫一致不入测图）。
+    for (base_idx.items, 0..) |bi, k| {
+        for (base_idx.items[k + 1 ..]) |bj| {
+            if (std.mem.eql(u8, dirs.items[bi].key, dirs.items[bj].key))
+                std.process.fatal("两个基包同 `# @key {s}`（{s} 与 {s}）：选包将静默取首枚、另一枚被遮蔽", .{ dirs.items[bi].key, dirs.items[bi].file, dirs.items[bj].file });
+        }
+    }
     for (dirs.items) |d| {
         if (d.overlay_of.len == 0) continue;
         var hit = false;
