@@ -5,6 +5,7 @@ pub const Mangle = @import("transpiler/mangle.zig");
 pub const ColumnMap = @import("transpiler/column_map.zig");
 pub const Pack = @import("lang/pack.zig");
 pub const registry = @import("lang/registry.zig");
+pub const pack_discover = @import("lang/pack_discover.zig"); // 第 260 轮 D126：语言包发现/注册表生成单源内核（build run 步与本测图共用）
 pub const userpack = @import("lang/userpack.zig");
 pub const fullwidth = @import("diag/fullwidth.zig");
 pub const diag = @import("diag/translate.zig");
@@ -42,6 +43,7 @@ test {
     _ = ColumnMap;
     _ = Pack;
     _ = registry;
+    _ = pack_discover;
     _ = userpack;
     _ = fullwidth;
     _ = diag;

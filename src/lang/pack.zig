@@ -185,15 +185,18 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
     var section: Section = .keywords;
     // 本次调用内已写键/值视图（key/value 均借 bytes，仅调用期内比较、不拥有）。
     // keywords 与 aliases 分集：同词跨段两表各有映射不属同表矛盾（翻译链第 1/2 步优先级确定）。
-    const Seen = struct { key: []const u8, val: []const u8 };
-    var seen_kw: std.ArrayList(Seen) = .empty;
-    defer seen_kw.deinit(gpa);
-    var seen_al: std.ArrayList(Seen) = .empty;
-    defer seen_al.deinit(gpa);
-    var seen_diag: std.ArrayList(Entry) = .empty;
-    defer seen_diag.deinit(gpa);
-    var seen_docs: std.ArrayList(Seen) = .empty;
-    defer seen_docs.deinit(gpa);
+    // 本次调用内「已写键→值」索引，供同层冲突检测：以 StringHashMap（与本 Pack 的
+    // keywords/aliases/docs 同族）取代早前 ArrayList 逐行线性扫，把查重由 O(N²) 降为 O(N)。
+    // 键/值皆借 `bytes` 视图、仅调用期内比对；map 尾 defer 释底衬，不涉所有权移交。
+    const DiagSeen = struct { message: []const u8, tip: []const u8 };
+    var seen_kw: std.StringHashMap([]const u8) = .init(gpa);
+    defer seen_kw.deinit();
+    var seen_al: std.StringHashMap([]const u8) = .init(gpa);
+    defer seen_al.deinit();
+    var seen_diag: std.StringHashMap(DiagSeen) = .init(gpa);
+    defer seen_diag.deinit();
+    var seen_docs: std.StringHashMap([]const u8) = .init(gpa);
+    defer seen_docs.deinit();
     var seen_name: ?[]const u8 = null;
     var seen_code: ?[]const u8 = null;
     var seen_format: ?[]const u8 = null;
@@ -272,12 +275,9 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 }
                 // 同层同键异值 → 拒；同值 → 幂等放行（不新增拒绝面）。
                 const seen = if (section == .keywords) &seen_kw else &seen_al;
-                for (seen.items) |s| {
-                    if (std.mem.eql(u8, s.key, key) and !std.mem.eql(u8, s.val, value)) {
-                        return error.InvalidLangPack;
-                    }
-                }
-                try seen.append(gpa, .{ .key = key, .val = value });
+                if (seen.get(key)) |old| {
+                    if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
+                } else try seen.put(key, value);
                 try map.put(key, value);
             },
             .docs => {
@@ -289,10 +289,9 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 const value = std.mem.trim(u8, line[eq + 1 ..], " \t");
                 if (key.len == 0 or value.len == 0) return error.InvalidLangPack;
                 // 同层同键异值 → 拒（手编矛盾两行静默其一失效属数据陷阱，与 keywords/aliases 对称）；同值幂等放行。
-                for (seen_docs.items) |s| {
-                    if (std.mem.eql(u8, s.key, key) and !std.mem.eql(u8, s.val, value)) return error.InvalidLangPack;
-                }
-                try seen_docs.append(gpa, .{ .key = key, .val = value });
+                if (seen_docs.get(key)) |old| {
+                    if (!std.mem.eql(u8, old, value)) return error.InvalidLangPack;
+                } else try seen_docs.put(key, value);
                 try self.docs.put(key, value);
             },
             .diagnostics => {
@@ -310,14 +309,10 @@ pub fn parseInto(self: *Pack, gpa: std.mem.Allocator, bytes: []const u8) !void {
                 if (pattern.len == 0 or message.len == 0) return error.InvalidLangPack;
                 const tip = std.mem.trim(u8, rest[p2 + 1 ..], " ");
                 // 同层同 pattern 不同内容 → 拒（键不参与匹配、冲突在 pattern 侧）；全等 → 幂等。
-                for (seen_diag.items) |s| {
-                    if (std.mem.eql(u8, s.pattern, pattern) and
-                        (!std.mem.eql(u8, s.message, message) or !std.mem.eql(u8, s.tip, tip)))
-                    {
+                if (seen_diag.getPtr(pattern)) |old| {
+                    if (!std.mem.eql(u8, old.message, message) or !std.mem.eql(u8, old.tip, tip))
                         return error.InvalidLangPack;
-                    }
-                }
-                try seen_diag.append(gpa, .{ .pattern = pattern, .message = message, .tip = tip });
+                } else try seen_diag.put(pattern, .{ .message = message, .tip = tip });
                 try self.upsertDiagnostic(gpa, .{
                     .pattern = pattern,
                     .message = message,

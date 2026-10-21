@@ -9,11 +9,11 @@ pub fn build(b: *std.Build) void {
 
     // R9续②（第 54 轮）：构建期自动发现语言包——扫 src/lang/packs/*.txt 的 `# @` 头指令，
     // 生成 pack 注册表模块（含内联包字节），作者丢文件即注册、无需手改 registry.zig。
-    // R9f 陷阱（第 100 轮 D45 坐实）：包字节以 u8 字面量内联进生成模块，而脚本用命令式
-    // readFileAlloc 读取、不向构建系统声明文件依赖——故**仅改 .txt 包内容不会触发脚本重跑**，
-    // exe 仍嵌旧词条（而测图 @embedFile 追踪变更显新行为，二者分歧会假绿）。改包后须让
-    // build.zig 自身发生内容变更（或删 .zig-cache 强制重建）方能刷新内联字节。
-    const pack_mod = generatePackRegistry(b);
+    // 第 260 轮 D126 根治（承 D45/R9f）：生成从「build.zig 求值期内联」迁到「独立 run 步」，
+    // run 步以 addFileArg 声明每个包 .txt 为输入依赖——**改包内容即 cache miss、重跑生成器刷新
+    // 内联字节**，消除旧形制「仅改 .txt 不触发重跑、内联字节陈旧而与测图 @embedFile 分歧假绿」。
+    // 生成规则单源在 src/lang/pack_discover.zig、驱动程序在 src/gen/pack_registry_main.zig。
+    const pack_mod = generatePackRegistry(b, optimize);
 
     const mod = b.addModule("zzc_core", .{
         .root_source_file = b.path("src/root.zig"),
@@ -208,33 +208,26 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&check_ver_run.step);
 }
 
-// ---------------------------------------------------------------- 语言包自动发现（R9续②）
-
-/// 一份包文件的注册头指令（`# @key`/`# @code`/`# @display`/`# @aliases`/`# @overlay-of`/`# @order`/`# @default`）。
-const Directive = struct {
-    file: []const u8 = "",
-    key: []const u8 = "",
-    code: []const u8 = "",
-    display: []const u8 = "",
-    aliases: []const []const u8 = &.{},
-    overlay_of: []const u8 = "",
-    order: i32 = 0,
-    has_key: bool = false,
-    is_default: bool = false,
-};
+// ---------------------------------------------------------------- 语言包自动发现（R9续②；第 260 轮 D126 迁 run 步）
 
 const packs_dir = "src/lang/packs";
 
-fn generatePackRegistry(b: *std.Build) *std.Build.Module {
+/// 构建期生成 pack_registry 模块——把生成从「build.zig 求值期内联」迁到「独立 run 步」。
+/// run 步以 `addFileArg` 声明每个包 .txt 为输入依赖：包内容一改即 cache miss、重跑生成器
+/// （驱动程序 `src/gen/pack_registry_main.zig`、内核 `src/lang/pack_discover.zig`），产出新鲜内联字节，
+/// 根治旧 D45/R9f 形制「仅改 .txt 不触发重跑、内联字节陈旧而与测图 @embedFile 分歧假绿」。
+/// 残留边界：新增/删除包**文件**（改目录清单）仍需 build.zig 自身变更或清缓存以刷新依赖列表——
+/// 此与内嵌档一贯限制一致（用户级新包请走 `zzc lang add` 运行期目录，见 src/lang/userpack.zig）。
+fn generatePackRegistry(b: *std.Build, optimize: std.builtin.OptimizeMode) *std.Build.Module {
     const gpa = b.allocator;
     var threaded = std.Io.Threaded.init(gpa, .{});
     const io = threaded.io();
 
+    // 求值期仅枚举"有哪些 .txt"以声明为 run 步依赖；内容读取与注册表生成全下沉到生成器程序。
     var dir = std.Io.Dir.cwd().openDir(io, packs_dir, .{ .iterate = true }) catch |e|
         std.process.fatal("无法打开语言包目录 {s}（{s}）", .{ packs_dir, @errorName(e) });
     defer dir.close(io);
 
-    // 1) 列出全部 .txt，按文件名字典序（生成确定性）。
     var names: std.ArrayList([]const u8) = .empty;
     var it = dir.iterate();
     while (it.next(io) catch |e| std.process.fatal("遍历语言包目录失败（{s}）", .{@errorName(e)})) |ent| {
@@ -249,192 +242,34 @@ fn generatePackRegistry(b: *std.Build) *std.Build.Module {
     }.lt);
     if (names.items.len == 0) std.process.fatal("语言包目录 {s} 下没有 .txt 包", .{packs_dir});
 
-    // 2) 解析每包头指令。
-    var dirs: std.ArrayList(Directive) = .empty;
+    // 构建期生成器 exe（native 跑，与 --target 解耦，故取 host target）。
+    // 生成内核 pack_discover 以**具名模块**导入（@import 不能跨模块路径，见 Zig module-path 限制）。
+    const discover_mod = b.createModule(.{
+        .root_source_file = b.path("src/lang/pack_discover.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
+    const gen_exe = b.addExecutable(.{
+        .name = "gen-pack-registry",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/gen/pack_registry_main.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "pack_discover", .module = discover_mod }},
+        }),
+    });
+
+    // run 步：输出路径先、逐包 .txt 声明为文件依赖。改任一包内容 → 本步 cache miss → 重跑生成器。
+    const gen_run = b.addRunArtifact(gen_exe);
+    const registry_src = gen_run.addOutputFileArg("pack_registry.zig");
     for (names.items) |n| {
-        const bytes = readPack(b, io, gpa, n);
-        dirs.append(gpa, parseDirectives(b, gpa, n, bytes)) catch @panic("OOM");
+        const rel = std.fs.path.join(gpa, &.{ packs_dir, n }) catch @panic("OOM");
+        gen_run.addFileArg(b.path(rel));
     }
 
-    // 3) 生成注册表源码：基包（有 key 且非 overlay）各成一项，其补充层（overlay-of==key、按 order+文件名）内联进 overlays。
-    var out: std.ArrayList(u8) = .empty;
-    push(b, gpa, &out,
-        \\//! 自动生成——请勿手改。由 build.zig 依据 src/lang/packs/ 的 `# @` 头指令生成（构建缓存内）。
-        \\//! 合并语义见 src/lang/pack.zig《叠加层》。本表仅提供数据，选包逻辑在 src/lang/registry.zig。
-        \\pub const Entry = struct {
-        \\    key: []const u8,
-        \\    aliases: []const []const u8,
-        \\    code: []const u8,
-        \\    display: []const u8,
-        \\    bytes: []const u8,
-        \\    overlays: []const []const u8,
-        \\};
-        \\
-        \\pub const entries = [_]Entry{
-        \\
-    );
+    // 具名步（可选独立触发；产品/测试依赖链已隐式拉起本 run 步）。
+    const gen_step = b.step("gen-pack-registry", "生成 pack_registry 模块（内联语言包字节·随包内容自动刷新）");
+    gen_step.dependOn(&gen_run.step);
 
-    // 收集基包下标（有 key 且非 overlay），校验 code，统计 `# @default` 个数。
-    var base_idx: std.ArrayList(usize) = .empty;
-    var default_seen: usize = 0;
-    for (dirs.items, 0..) |d, i| {
-        if (!d.has_key or d.overlay_of.len != 0) continue;
-        if (d.code.len == 0) std.process.fatal("基包 {s} 缺 `# @code` 头指令", .{d.file});
-        if (d.is_default) default_seen += 1;
-        base_idx.append(gpa, i) catch @panic("OOM");
-    }
-    if (base_idx.items.len == 0) std.process.fatal("未发现任何基包（需含 `# @key` 且非 overlay 的 .txt）", .{});
-    if (default_seen > 1) std.process.fatal("有多个基包同时标 `# @default`（至多一个）", .{});
-    // 校验每个补充层的 `# @overlay-of` 都指向一个真实存在的基包 key：否则下面按 key 匹配时会被静默丢弃、叠加无声失效。
-    for (dirs.items) |d| {
-        if (d.overlay_of.len == 0) continue;
-        var hit = false;
-        for (base_idx.items) |bi| {
-            if (std.mem.eql(u8, dirs.items[bi].key, d.overlay_of)) {
-                hit = true;
-                break;
-            }
-        }
-        if (!hit) std.process.fatal("补充层 {s} 的 `# @overlay-of {s}` 未指向任何基包（拼写错误将静默丢弃该层）", .{ d.file, d.overlay_of });
-    }
-    // 发射序：默认包恒置首（registry.defaultEntry() 取 entries[0]），其余维持文件名字典序
-    //（dirs 与已排序 names 同序，故下标序即字典序；比较子对非默认项按唯一下标给出全序，排序结果确定）。
-    std.mem.sort(usize, base_idx.items, dirs.items, struct {
-        fn lt(ds: []const Directive, a: usize, bb: usize) bool {
-            if (ds[a].is_default != ds[bb].is_default) return ds[a].is_default;
-            return a < bb;
-        }
-    }.lt);
-
-    for (base_idx.items) |bi| {
-        const base = dirs.items[bi];
-
-        // 收集该基包的补充层下标并按 (order, file) 升序。
-        var ovl: std.ArrayList(usize) = .empty;
-        for (dirs.items, 0..) |d, i| {
-            if (d.overlay_of.len != 0 and std.mem.eql(u8, d.overlay_of, base.key)) {
-                ovl.append(gpa, i) catch @panic("OOM");
-            }
-        }
-        std.mem.sort(usize, ovl.items, dirs.items, struct {
-            fn lt(ds: []const Directive, a: usize, bb: usize) bool {
-                if (ds[a].order != ds[bb].order) return ds[a].order < ds[bb].order;
-                return std.mem.lessThan(u8, ds[a].file, ds[bb].file);
-            }
-        }.lt);
-
-        push(b, gpa, &out, "    .{ .key = ");
-        emitStr(b, gpa, &out, base.key);
-        push(b, gpa, &out, ", .aliases = &.{");
-        for (base.aliases) |a| {
-            push(b, gpa, &out, " ");
-            emitStr(b, gpa, &out, a);
-            push(b, gpa, &out, ",");
-        }
-        push(b, gpa, &out, " }, .code = ");
-        emitStr(b, gpa, &out, base.code);
-        push(b, gpa, &out, ", .display = ");
-        emitStr(b, gpa, &out, base.display);
-        push(b, gpa, &out, ", .bytes = ");
-        emitBytes(b, gpa, &out, readPack(b, io, gpa, base.file));
-        push(b, gpa, &out, ", .overlays = &.{");
-        for (ovl.items) |oi| {
-            push(b, gpa, &out, " ");
-            emitBytes(b, gpa, &out, readPack(b, io, gpa, dirs.items[oi].file));
-            push(b, gpa, &out, ",");
-        }
-        push(b, gpa, &out, " }, },\n");
-    }
-    push(b, gpa, &out, "};\n");
-
-    const wf = b.addWriteFiles();
-    const src = wf.add("pack_registry.zig", out.items);
-    return b.createModule(.{ .root_source_file = src });
-}
-
-fn readPack(b: *std.Build, io: std.Io, gpa: std.mem.Allocator, name: []const u8) []const u8 {
-    _ = b;
-    const path = std.fs.path.join(gpa, &.{ packs_dir, name }) catch @panic("OOM");
-    return std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .unlimited) catch |e|
-        std.process.fatal("读取语言包 {s} 失败（{s}）", .{ name, @errorName(e) });
-}
-
-/// 解析包文件头部（首个非注释/非空行之前）出现的 `# @tag value` 指令。
-fn parseDirectives(b: *std.Build, gpa: std.mem.Allocator, file_name: []const u8, bytes: []const u8) Directive {
-    var d: Directive = .{ .file = file_name };
-    var lines = std.mem.splitScalar(u8, bytes, '\n');
-    while (lines.next()) |raw| {
-        const line = std.mem.trim(u8, raw, " \t\r");
-        if (line.len == 0) continue;
-        if (!std.mem.startsWith(u8, line, "#")) break; // 头注释区结束
-        if (!std.mem.startsWith(u8, line, "# @")) continue;
-        const rest = std.mem.trim(u8, line[3..], " ");
-        const sp = std.mem.indexOfScalar(u8, rest, ' ');
-        const tag = if (sp) |p| rest[0..p] else rest;
-        const val = if (sp) |p| std.mem.trim(u8, rest[p + 1 ..], " ") else "";
-        if (std.mem.eql(u8, tag, "key")) {
-            d.key = dupe(b, gpa, val);
-            d.has_key = true;
-        } else if (std.mem.eql(u8, tag, "code")) {
-            d.code = dupe(b, gpa, val);
-        } else if (std.mem.eql(u8, tag, "display")) {
-            d.display = dupe(b, gpa, val);
-        } else if (std.mem.eql(u8, tag, "overlay-of")) {
-            d.overlay_of = dupe(b, gpa, val);
-        } else if (std.mem.eql(u8, tag, "default")) {
-            d.is_default = true; // 基包发射时置首（entries[0]），registry.defaultEntry() 由此真实取到默认包，不再靠文件名字典序偶然命中
-        } else if (std.mem.eql(u8, tag, "order")) {
-            d.order = std.fmt.parseInt(i32, val, 10) catch std.process.fatal("包 {s} 的 `# @order` 非整数：{s}", .{ file_name, val });
-        } else if (std.mem.eql(u8, tag, "aliases")) {
-            var parts = std.mem.splitScalar(u8, val, ',');
-            var list: std.ArrayList([]const u8) = .empty;
-            while (parts.next()) |p| {
-                const t = std.mem.trim(u8, p, " \t");
-                if (t.len == 0) continue;
-                list.append(gpa, dupe(b, gpa, t)) catch @panic("OOM");
-            }
-            d.aliases = list.items;
-        } else {
-            std.process.fatal("包 {s} 有未知头指令 `# @{s}`", .{ file_name, tag });
-        }
-    }
-    return d;
-}
-
-fn dupe(b: *std.Build, gpa: std.mem.Allocator, s: []const u8) []const u8 {
-    _ = b;
-    return gpa.dupe(u8, s) catch @panic("OOM");
-}
-
-fn push(b: *std.Build, gpa: std.mem.Allocator, out: *std.ArrayList(u8), s: []const u8) void {
-    _ = b;
-    out.appendSlice(gpa, s) catch @panic("OOM");
-}
-
-/// 发出一个双引号字符串字面量：转义 `"`/`\`，控制字符直接失败（头指令值不该含它们；CJK 原样，源码 UTF-8）。
-fn emitStr(b: *std.Build, gpa: std.mem.Allocator, out: *std.ArrayList(u8), val: []const u8) void {
-    push(b, gpa, out, "\"");
-    for (val) |c| {
-        if (c == '"' or c == '\\') {
-            out.append(gpa, '\\') catch @panic("OOM");
-            out.append(gpa, c) catch @panic("OOM");
-        } else if (c < 0x20 or c == 0x7f) {
-            std.process.fatal("头指令值含控制字符", .{});
-        } else {
-            out.append(gpa, c) catch @panic("OOM");
-        }
-    }
-    push(b, gpa, out, "\"");
-}
-
-/// 把一段包字节以 u8 数组字面量发出（全 0xNN，规避任意 UTF-8/转义在生成源码里的歧义）。
-fn emitBytes(b: *std.Build, gpa: std.mem.Allocator, out: *std.ArrayList(u8), bytes: []const u8) void {
-    push(b, gpa, out, "&[_]u8{ ");
-    for (bytes, 0..) |byt, i| {
-        if (i > 0) out.append(gpa, ',') catch @panic("OOM");
-        var tmp: [8]u8 = undefined;
-        const h = std.fmt.bufPrint(&tmp, "0x{x:0>2}", .{byt}) catch unreachable;
-        out.appendSlice(gpa, h) catch @panic("OOM");
-    }
-    push(b, gpa, out, " }");
+    return b.createModule(.{ .root_source_file = registry_src });
 }
