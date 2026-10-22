@@ -67,7 +67,7 @@ zzc 做三件事：
 - **多语言包**：内置 `中文`、`繁体`；`# @` 头指令声明式注册，新增/改包由构建系统自动刷新。
 - **外部包免重编译**：`zzc lang add <文件>` 把第三方语言包装入当前工程，运行期选包。
 - **母语报错**：错误消息与提示本地化，`--machine` 输出供编辑器 / CI 逐行正则消费。
-- **编辑器集成**：VS Code 扩展提供语法高亮、补全、问题匹配、LSP 悬停 / 语义诊断 / 语义 token 着色 / 方言切换。
+- **编辑器集成**：VS Code 扩展提供语法高亮、补全、问题匹配、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 全角标点快速修复（含保存时批量）/ 文档大纲 / 代码折叠（含注释块） / 语义诊断 / 语义 token 着色 / 方言切换。
 - **导出毕业**：`zzc eject` 把方言工程导出为一份可独立 `zig build` 的标准 Zig 工程。
 - **工程化**：上万行 Zig、数百个测试、跨文件同步守卫、以「消缺工单 + 演进轮次」记账的持续治理（详见下文与 `docs/`）。
 
@@ -172,7 +172,7 @@ zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认
 | `zzc run [文件.zz]` | 编译并运行；`--` 之后传给程序 |
 | `zzc test [文件.zz]` | 翻译 → `zig test` |
 | `zzc eject [目录]` | 导出标准 Zig 工程（默认 `standard/`） |
-| `zzc lsp` | 启动 LSP 服务器（JSON-RPC over stdio：悬停 / 快路诊断 / 文档同步） |
+| `zzc lsp` | 启动 LSP 服务器（JSON-RPC over stdio：悬停 / 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 全角快速修复（含 source.fixAll 批量）/ 文档大纲 / 代码折叠（含注释块） / 快路诊断 / 文档同步）；配 `--lang-overlay` 时悬停可反查第三方库叠加包别名 |
 | `zzc lang` | 列出当前语言包与可注册包 |
 | `zzc lang add <文件>` | 装入外部语言包到本工程（可选 `--as <注册名>`；免重编译） |
 | `zzc version` | 版本与当前语言包 |
@@ -181,6 +181,7 @@ zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认
 | --- | --- |
 | `--lang <名>` | 选择语言包（如 `zh` / `中文`；缺省为中文；不透传 zig） |
 | `--lang-file <路径>` | 从外部文件加载语言包（第三方发行包、免重编译；与 `--lang` 互斥） |
+| `--lang-overlay <路径>` | 把第三方库叠加层（如 `contrib/packs/httpz-中文.txt`）累积并入所选基包；所有子命令均生效，不透传 zig |
 | `--machine` | 把母语报错压成单行机读形制 `路径:行:列: 种类: 消息（提示：…）`（编辑器/CI 消费；不透传 zig） |
 
 > 方言文件默认取 `src/main.zz`；错误标签与 std 错误名保持 ASCII 原样。
@@ -191,7 +192,7 @@ zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认
 
 扩展位于 [`editors/vscode/`](editors/vscode/)，包名 `zzc-dialect`（`v0.3.0`）。**零 npm 依赖**——扩展宿主（`extension.js` + `client_frames.js`）自行 spawn `zzc lsp` 并按 LSP 基座协议收发帧，无需 `npm install`。
 
-提供：`.zz` 语法高亮、方言关键词/别名补全、`zzc check --machine` 问题匹配器、LSP 悬停 / 快路诊断 / 保存触发的语义级编译诊断 / 语义 token 着色 / 多方言切换。
+提供：`.zz` 语法高亮、方言关键词/别名补全、`zzc check --machine` 问题匹配器、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 全角快速修复（含保存时 source.fixAll）/ 文档大纲 / 代码折叠（含注释块） / 快路诊断 / 保存触发的语义级编译诊断 /  语义 token 着色 / 多方言切换。
 
 ### 前置条件
 
@@ -225,6 +226,7 @@ code --install-extension zzc-dialect-0.3.0.vsix
 | --- | --- |
 | `zzc.lspPath` | 供 `zzc lsp` 使用的 `zzc` 可执行文件路径；留空表示用 PATH 上的 `zzc` |
 | `zzc.lang` | 方言包名（同 `zzc --lang`，如 `繁体`）；留空 = 内置默认包（中文）。修改后自动重启语言服务器 |
+| `zzc.langOverlay` | 第三方库叠加层文件路径（同 `zzc --lang-overlay`，如 `contrib/packs/httpz-中文.txt`；建议绝对路径）；留空 = 不叠加。修改后自动重启语言服务器 |
 
 ### 把 `zzc check` 接成构建任务（可选）
 

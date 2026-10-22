@@ -103,6 +103,34 @@ zzc run --lang-file=/path/我的包.txt      # 等号形；与 --lang 互斥（�
 - 非 UTF-8/错编码文件在读取边界封口（D31）；起始 BOM 会污染首词元，勿加；
 - 方言键建议纯母语词（R3；内置中文包另有纯 ASCII 键禁例的守卫测约束，外部分发包按各自语言正字法）。
 
+## 第三方库叠加包（`--lang-overlay`）与真依赖验证
+
+前两节的贡献方式要么**并入内置基包**（重编译、动 fingerprint），要么作为**独立基包** `--lang-file` 整体替换默认。翻译一个第三方库（如 `httpz`、`zap`）既不该污染默认发行、也不必重复中文关键字——正解是**外部叠加层**：一份只带库自身 `[aliases]/[docs]` 的 `.txt`，运行期经 `--lang-overlay` 累积并入所选基包之上。
+
+```
+zzc run src/main.zz --lang-overlay contrib/packs/httpz-中文.txt          # 两参形
+zzc build --lang-file 我的包.txt --lang-overlay=/path/httpz-中文.txt     # 等号形；与 --lang/--lang-file 组合（叠在所选基包上，非互斥）
+```
+
+与内置补充层（`# @overlay-of` 被 `build.zig` 内联进基包项）不同，外部叠加层**不经构建内联、不改基包 fingerprint**，靠 `--lang-overlay` 显式路径在运行期命中：`main.zig` 载入基包后调 `applyOverlayPack`，用 `Pack.parseInto` 把叠加层字节累积并入，**再统一 `validate()`**。由此：
+
+- 叠加层**无须自含 B6 的 13 条契约映射**（契约由基包撑）——这是它与独立基包 `--lang-file` 的关键差异。
+- 叠加层**不写 `$name`/`$code`**，故基包 `$code` 不被改写（合并后 `lang.code` 仍是基包的值）；一旦误写会覆盖基包品牌。
+- 合并语义承上表：`[aliases]`/`[docs]` 同键后写覆盖、`whitelist` 并集；`# @overlay-of zh` 头行运行期被 `parseInto` 当注释跳过（供人读与 build 侧发现，不影响 `--lang-overlay` 显式加载）。
+
+### 翻译边界（沿用标准库既有保守约定）
+
+点分路径别名链按**贪心最长匹配**、未列段逐段回退、ASCII 成员原样透传。故一个第三方库能安全翻译的面是：**模块根别名**（`网络服务 = httpz`）、**类型限定路径**（`网络服务.请求 = httpz.Request`）、**静态函数**（`网络服务.写指标 = httpz.writeMetrics`）、**枚举类型**。挂在实例/局部变量上的**方法与字段**（`.init/.router/.get/.listen/.json/.query/.param/.writer` 等）按方言既有约定**保留 ASCII 原样透传**，绝不建裸词别名——否则会劫持同名用户变量。
+
+### 铁律：每条路径须经编译器存在性验证
+
+语言包里的每个 `键 = 库.路径` 都必须在真依赖在场时**编译得动**，编不过的路径一律不入库（承 D45/D53/D54 死路径教训）。验证工程模板见 `demo/httpz/`：
+
+1. **纯 Zig 存在性钉**（`check_api.zig`）：自带 `build.zig.zon` 依赖目标库（`zig fetch --save git+...#dev`）、`build.zig` `addImport`/`addModule` 暴露之，逐条引用每个待入库 API 路径 → `zig build` 编译坐实。
+2. **方言端到端**（`src/main.zz`）：用拟定母语别名写最小可跑样例 → `zzc eject --lang-overlay <包.txt>` 译出纯 Zig → 挂真依赖 `zig build` 绿，证明翻译产物语义正确。
+
+> 该验证工程**独立于编译器本体测试图**：zzc 自身零第三方依赖，`demo/httpz` 的 `zig build` 是存在性证据、不进 CI 测图（无网络/NO_NODE 类比公认态）；叠包与接缝的纯逻辑则由 `args`（旗标解析/剔除/前缀互不误匹）与 `registry`（内存合成叠加层并入/`validate` 通过/`$code` 不变）单测钉住。
+
 ## 校验命令
 
 ```

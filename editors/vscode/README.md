@@ -11,6 +11,51 @@
 - **LSP 服务器**（第 156 轮）：`zzc lsp` 走 JSON-RPC over stdio，提供悬停（方言词/点链别名反查标准形）、
   快路诊断（全角/词法 + 纯母语强制，推送 publishDiagnostics）与文档同步；服务器本体可直接供任何 LSP
   客户端（neovim/emacs/helix）使用
+- **文档大纲**（第 263 轮）：`textDocument/documentSymbol` 按当前语言包声明词扫描顶层函数/结构/枚举/
+  联合/常数/变量；扩展注册 `DocumentSymbolProvider`，落到 VS Code 大纲与面包屑。
+- **跳转定义**（第 264 轮）：`textDocument/definition` 将光标词（经 lexer 过滤注释/字符串）匹配到同文件
+  顶层声明，扩展注册 `DefinitionProvider`；当前限同文件、顶层声明、不做作用域消歧。
+- **查找引用**（第 266 轮）：`textDocument/references` 从光标词解析顶层声明，返回同文件全部同名代码词元；
+  `context.includeDeclaration` 控制声明项去留，扩展注册 `ReferenceProvider`；同名局部变量/字段暂不消歧。
+- **同名符号高亮**（第 273 轮）：`textDocument/documentHighlight` 对光标处顶层声明返回同文件全部同名
+  代码词元——声明位 `Write`、引用位 `Read`，字符串/注释不参与，未解析到声明时为空；扩展注册
+  `DocumentHighlightProvider` 并映射 `vscode.DocumentHighlight`。与查找引用同界：同名局部变量/字段暂不消歧。
+- **重命名**（第 272 轮）：`textDocument/rename` 对同文件顶层声明做全量改名，返回
+  `WorkspaceEdit.changes{uri:[{range,newText}]}`；字符串/注释中的同名不参与，非法新名
+  （空格/点/全角标点/数字开头）与非声明光标返回 `null`；扩展注册 `RenameProvider`。
+  与查找引用同界：同名局部变量/字段会一并改，不做作用域消歧。
+- **重命名预检**（第 274 轮）：`textDocument/prepareRename` 在光标词解析到同文件顶层声明时
+  返回词元范围与旧名占位符（`{range,placeholder}`），非声明词/字符串/注释/未打开文档返回
+  `null`——于是 F2 在不可改名处不弹输入框、可改处预填旧名；`renameProvider` 声明为
+  `{"prepareProvider":true}`，扩展 `RenameProvider` 增补 `prepareRename`。与重命名同界。
+- **工作区符号**（第 275 轮）：`workspace/symbol` 按 `query` 子串过滤服务端文档表内各文档的
+  顶层声明，返回 `SymbolInformation[]`（name/kind/location{uri,range}）——空 query 返回全部，
+  未打开文档不参与；扩展注册 `WorkspaceSymbolProvider`，点亮「转到工作区符号」。
+  与大纲同界：仅顶层声明、不做作用域消歧。
+- **参数提示**（第 276 轮）：`textDocument/signatureHelp` 在光标落入调用括号时，按被调名解析
+  同文件顶层函数声明，返回参数标签与按顶层逗号计的活动参数（字符串内逗号不计）；非调用处/
+  成员调用/未知被调返回 `null`，弹窗不硬开。扩展注册 `SignatureHelpProvider`（触发字符
+  `(`/`,`）并重建 `vscode.SignatureHelp`。与大纲同界：仅同文件、仅顶层函数、参数表须单行。
+- **智能扩选**（第 277 轮）：`textDocument/selectionRange` 按每个光标位置返回由内到外的扩选链
+  词元 → 整行 → 包围花括号块（由内到外）→ 整文档；每节只收严格包含前节者（同区去重），
+  越界/非法位置只回整文档。扩展注册 `SelectionRangeProvider` 并递归重建
+  `vscode.SelectionRange`。仅花括号块，不做语句/表达式级选区。
+- **全角标点快速修复**（第 268 轮）：`textDocument/codeAction` 复用快路诊断的全角危险表，对与选区/光标
+  相交且有半角建议值的违规返回 `quickfix`（`edit.changes{uri:[{range,newText}]}`）；扩展注册
+  `CodeActionProvider` 并落成 `WorkspaceEdit`，于是全角逗号/冒号等可直接一键改对。零宽空格等无建议值者
+  不出修复；当前只做单字符替换。
+- **全文批量修复与保存时修复**（第 269 轮）：同一 provider 把 VS Code 的 `context.only` 透传为 LSP
+  `context.only`；服务端在请求 `source.fixAll` 时返回单条批量动作，一次覆盖全文全部可替换违规。
+  因此标准设置 `"editor.codeActionsOnSave": {"source.fixAll": true}` 即可在保存时自动修齐全角标点；
+  未开启时仍只保留光标处灯泡，不会静默改文件。空/未知 kind 严格返回空数组。
+- **代码折叠**（第 270/271 轮）：`textDocument/foldingRange` 用 lexer 词元配对 `{`/`}`，字符串与注释内的
+  括号不参与、单行块与未闭合括号略过；第 271 轮叠加连续行首 `//` 注释块（空行/代码行/尾随注释断开，
+  单行不出块），带 `kind:"comment"` 并由扩展映射为 `FoldingRangeKind.Comment`。扩展注册
+  `FoldingRangeProvider`；`// #region` 标记仍由 `language-configuration.json` 折叠，两者叠加。
+- **第三方库叠加层悬停**（第 267 轮）：`zzc.langOverlay` 设置经 `lspSpawnArgs` 织入
+  `--lang-overlay <文件>`——服务端在 `cmdLsp` 前把叠加层并入所选基包（第 265 轮 CLI 接缝），
+  故 `网络服务.服务器` 等第三方库别名在悬停中直接反查标准形与用法（如 `httpz.Server`）；
+  修改设置自动重启服务器，文件缺失/格式错由服务端 stderr → 「zzc lsp」输出面板报母语错。
 - **LSP 客户端接线**（第 157 轮）：`extension.js` + `client_frames.js` 零 npm 依赖扩展宿主——自行
   spawn `zzc lsp` 并按基座协议（`Content-Length` 字节计长、头名大小写不敏感、10MB 上限与服务端同源）
   收发帧，把 publishDiagnostics 落到 Problems 面板、把悬停接到 hover provider，stderr 转「zzc lsp」输出面板。
@@ -42,6 +87,21 @@
 - `zzc.lang`（第 163 轮）：方言包名（同 `zzc --lang`，如 `繁体`；留空＝内置默认包中文）。修改后经
   `onDidChangeConfiguration` 自动重启语言服务器，悬停/诊断/语义 token 词汇随即按该方言供词。非法值由
   服务端既有报错处理（stderr 落「zzc lsp」输出面板），客户端不重复校验。
+- `zzc.langOverlay`（第 267 轮）：第三方库叠加层文件路径（同 `zzc --lang-overlay`，如
+  `contrib/packs/httpz-中文.txt`；留空＝不叠加）。**建议填绝对路径**——路径由 `zzc` 子进程解析，
+  其 cwd 不由扩展设定，相对路径可能落空。叠加层只带 `[aliases]/[docs]`，运行期并入所选基包，
+  于是第三方库母语别名获得与内置词同等的悬停体验；修改后自动重启语言服务器。
+
+### 保存时自动修全角（第 269 轮）
+
+在 VS Code 设置中开启标准保存动作：
+
+```json
+"editor.codeActionsOnSave": { "source.fixAll": true }
+```
+
+保存前扩展会收到 `context.only = ["source.fixAll"]`，服务端返回单条批量动作，把全文所有可替换的
+全角标点一次修成半角；未开启时不会自动改文件，仍可在灯泡菜单里单独选择。
 
 ## 安装（开发态）
 
@@ -74,3 +134,5 @@ zig build check-editor-snippets  # CI 守卫：校验 snippets 与包同步
   data 相对 5 元组直投 `vscode.SemanticTokens`、图例与服务端同序为共享真相源承重，`check-demos` 客户端节文本契约钉住）——编辑器内方言母语词汇真正上色
 - ~~多语言包支持（切换 scopeName 对应方言）~~ 客户端方言切换已于第 163 轮落地（`zzc.lang` 设置 → 向 `zzc lsp` 追加
   `--lang`、配置变更自动重启；经第 161/162 轮语义 token 承载方言词汇，无需独立 tmLanguage；scopeName/tmLanguage 保持默认方言基座为设计边界，`check-demos` 客户端节文本契约钉住）
+- ~~第三方库叠加层的编辑器悬停~~ 已于第 267 轮落地（`zzc.langOverlay` → `--lang-overlay`，服务端在 LSP 启动前并入基包；
+  `tools/lsp-live-smoke.sh` 以 `网络服务.服务器 → httpz.Server` 钉住整链）
