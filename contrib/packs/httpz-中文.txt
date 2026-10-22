@@ -1,0 +1,48 @@
+# zzc 中文 · httpz（karlseguin/http.zig）第三方库翻译叠加层
+#
+# 定位：这是「可选外部叠加包」，经 `--lang-overlay <本文件>` 在运行期累积并入所选基包（缺省即中文）
+# 之上——只带 httpz 自身的 [aliases]/[docs]，不重复中文关键字、不改 $name/$code，故无须自含 B6 契约
+# （契约由基包供、合并后统一 validate）。承 R11 叠加语义：后写覆盖、`#` 行视为注释（下面 @overlay-of
+# 供人读与 build 侧发现，运行期 parseInto 不解析）。
+#
+# 用法：zzc run src/main.zz --lang-overlay contrib/packs/httpz-中文.txt
+#   源里 `常数 网 = @import("httpz");` 会被译成 `const httpz = @import("httpz");`（模块根别名 网络服务=httpz 命中），
+#   类型签名 `fn h(求: *网络服务.请求, 应: *网络服务.响应) !空` 译成 `fn h(求: *httpz.Request, 应: *httpz.Response) !void`。
+#
+# 翻译边界（与标准库一致·刻意保守）：本层只译「点分限定路径」——模块根、公共类型、静态函数。
+#   实例方法/字段（init/router/get/post/listen/stop/deinit/query/param/json/writer/body/content_type/arena
+#   等）挂在局部变量上，按方言既有约定保留 ASCII 原样透传（如 `服务.listen()`、`应.json(...)`），不强译，
+#   以免裸词别名劫持同名变量。故下面 [docs] 里的示例把「译出的限定名」与「保留 ASCII 的方法名」并列示范。
+#
+# 存在性：每条 httpz 路径均经 demo/httpz 真依赖工程 `zig build` 编译坐实（Zig 0.17 + httpz dev），
+#   任一编不过即不入库——承「扩展翻译须经编译器存在性验证」铁律。
+
+# @overlay-of zh
+
+[aliases]
+网络服务 = httpz
+网络服务.服务器 = httpz.Server
+网络服务.请求 = httpz.Request
+网络服务.响应 = httpz.Response
+网络服务.路由器 = httpz.Router
+网络服务.网址 = httpz.Url
+网络服务.配置 = httpz.Config
+网络服务.内容类型 = httpz.ContentType
+网络服务.方法 = httpz.Method
+网络服务.协议 = httpz.Protocol
+网络服务.写指标 = httpz.writeMetrics
+
+[docs]
+# —— 模块总入口 ——
+网络服务 = httpz HTTP/1.1 服务端库总入口（第三方，需先在 build.zig.zon 声明 httpz 依赖并 `@import("httpz")`）。示例：`常数 网 = 网络服务;` 引成员前先 `@import`。
+# —— 核心类型（多用于函数签名与限定构造）——
+网络服务.服务器 = HTTP 服务器类型（按 Handler 类型参数化）。示例：`变量 服务 = 网络服务.服务器(空).初始化(io, 分配器, .{}, {}) catch return;`（`.init` 等成员名保留 ASCII）。
+网络服务.请求 = 入站请求对象（处理函数的第一个参数）。示例：`fn 处理(求: *网络服务.请求, 应: *网络服务.响应) !空 { ... }`。
+网络服务.响应 = 出站响应对象（处理函数的第二个参数，写回用）。示例：`fn 处理(求: *网络服务.请求, 应: *网络服务.响应) !空 { 应.body = "你好"; }`。
+网络服务.路由器 = 路由表类型（`server.router(.{})` 返回它，再挂 get/post 等）。示例：`变量 由 = try 服务.router(.{});`。
+网络服务.网址 = 已解析的 URL 对象。示例：`变量 u: 网络服务.网址 = ...;`。
+网络服务.配置 = 服务器/请求配置结构（init 的第三个匿名结构参数按其形）。示例：`.{ .address = .localhost(8801), .request = .{ .max_form_count = 20 } }`。
+网络服务.内容类型 = 响应 Content-Type 枚举（JSON/TEXT/HTML 等成员保留 ASCII）。示例：`应.content_type = 网络服务.内容类型.JSON;`。
+网络服务.方法 = HTTP 方法枚举（GET/POST 等）。示例：`求.method`（值为 网络服务.方法 枚举）。
+网络服务.协议 = 协议版本枚举（HTTP/1.0、1.1 等）。示例：类型标注用 `网络服务.协议`。
+网络服务.写指标 = 输出 Prometheus 风格内部指标（一个静态函数，接一个 Writer）。示例：`return 网络服务.写指标(应.writer());`。

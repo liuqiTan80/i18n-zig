@@ -1,0 +1,34 @@
+// zzc 中文方言 + httpz 第三方库翻译叠加层（经 --lang-overlay contrib/packs/httpz-中文.txt 提供 网络服务.*）
+// 阶段2端到端复验：本文件经 zzc eject 译出的 main.zig，须在挂了真依赖 httpz 的工程里 `zig build` 编得过。
+常数 标准库 = 导入("std");
+常数 网络服务 = 导入("httpz");
+
+// 处理函数：签名用译出的限定类型（网络服务.请求/响应 → httpz.Request/Response）；方法名保留 ASCII。
+函数 处理(求: *网络服务.请求, 应: *网络服务.响应) !空 {
+    常数 q = 尝试 求.query();
+    _ = q.get("name");
+    _ = 求.param("name");
+    应.body = "你好，方言 httpz！";
+    应.content_type = 网络服务.内容类型.JSON;
+    尝试 应.json(.{ .hello = "世界" }, .{});
+}
+
+// 指标端点：静态函数 网络服务.写指标 → httpz.writeMetrics。
+函数 指标(_: *网络服务.请求, 应: *网络服务.响应) !空 {
+    返回 网络服务.写指标(应.writer());
+}
+
+// 入口：网络服务.服务器(空) → httpz.Server(void)；类型标注 标准库.过程.Init → std.process.Init。
+公开 函数 主函数(初始: 标准库.过程.Init) !空 {
+    常数 gpa = 初始.gpa;
+    变量 服务 = 尝试 网络服务.服务器(空).init(初始.io, gpa, .{
+        .address = .localhost(8801),
+    }, {});
+    延迟 服务.deinit();
+    延迟 服务.stop();
+    变量 路由 = 尝试 服务.router(.{});
+    路由.get("/", 处理, .{});
+    路由.get("/metrics", 指标, .{});
+    标准库.调试.打印("方言 httpz 服务监听 http://localhost:8801/\n", .{});
+    尝试 服务.listen();
+}

@@ -48,6 +48,26 @@ pub fn writeWhole(io: Io, path: []const u8, data: []const u8) !void {
     try w.interface.flush();
 }
 
+/// 原子写整个文件（D130）：先写同目录的临时文件，再 rename 覆盖目标。
+/// 符号表是跨会话稳定的母语名→ASCII 名映射；旧形制直接 createFile 覆盖，写入中途崩溃
+/// 或两进程并发会把文件留成半截，下次 parseSymbolText 丢映射甚至撞号。`createFileAtomic`
+/// 的临时文件与 `replace` 的改名由 std 在 Windows/POSIX 上各自落到原子原语；失败时
+/// `deinit` 清理临时文件、旧目标原样保留。
+pub fn writeWholeAtomic(io: Io, path: []const u8, data: []const u8) !void {
+    const dir = std.Io.Dir.cwd();
+    if (std.fs.path.dirname(path)) |parent| {
+        try dir.createDirPath(io, parent);
+    }
+    var af = try dir.createFileAtomic(io, path, .{ .replace = true });
+    defer af.deinit(io);
+    var buf: [4096]u8 = undefined;
+    var w = af.file.writer(io, &buf);
+    try w.interface.writeAll(data);
+    try w.interface.flush();
+    try af.file.sync(io); // 先落盘再改名：崩溃时目标要么旧完整、要么新完整
+    try af.replace(io);
+}
+
 /// 判断相对当前工作目录的路径是否存在（仅用于避免覆盖，不区分文件/目录）。
 pub fn pathExists(io: Io, path: []const u8) bool {
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
@@ -327,4 +347,41 @@ test "writeWhole 必要时建父目录声明面：二级缺失嵌套真建可写
     try writeWhole(io, deep, "overwritten");
     const back2 = try readWhole(io, gpa, deep);
     try std.testing.expectEqualStrings("overwritten", back2);
+}
+
+test "writeWholeAtomic（D130）：覆盖旧文件为完整新内容、无临时残留" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    const priv = tpriv.Priv.init(io);
+    var db: [96]u8 = undefined;
+    var pb: [96]u8 = undefined;
+    // 独立子目录：原子写的临时文件也落在这里，walk 断言不会被同前缀的其他测块污染。
+    const parent = priv.path(&db, ".zig-cache/tmp/zzc_atomic_", "");
+    const probe = std.fmt.bufPrint(&pb, "{s}/probe.txt", .{parent}) catch unreachable;
+    defer std.Io.Dir.cwd().deleteTree(io, parent) catch {};
+
+    // 先有旧完整内容，再原子覆盖；读回必须是新内容（不得是半截/旧新混合）。
+    try writeWhole(io, probe, "旧内容完整");
+    try writeWholeAtomic(io, probe, "新内容完整且更长一些");
+    const back = try readWhole(io, gpa, probe);
+    try std.testing.expectEqualStrings("新内容完整且更长一些", back);
+
+    // 原子写不得在目标目录留下命名临时文件：walk 到的文件必须只有 probe 本体。
+    var dir = try std.Io.Dir.cwd().openDir(io, parent, .{ .iterate = true });
+    defer dir.close(io);
+    var walker = try dir.walk(gpa);
+    defer walker.deinit();
+    var n: usize = 0;
+    while (try walker.next(io)) |e| {
+        if (e.kind != .file) continue;
+        n += 1;
+        try std.testing.expectEqualStrings(std.fs.path.basename(probe), e.basename);
+    }
+    try std.testing.expectEqual(@as(usize, 1), n);
 }

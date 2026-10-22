@@ -13,3 +13,6 @@ logs/
 # zzc eject 毕业输出目录（可由 `zzc eject` 再生）
 **/standard/
 /_probe/
+
+# zig fetch 抓取的第三方依赖缓存（demo/httpz 真依赖验证工程，可由 build.zig.zon 的 URL+hash 复现，不入库）
+**/zig-pkg/

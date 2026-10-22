@@ -974,7 +974,7 @@ if ($msgs.Count -ne 5) { Write-Output ("  [FAIL] lsp: expected exactly 5 framed 
 if ($lspOk) {
     $N_cifa = Native 0x8BCD,0x6CD5        # ci-fa (lexical diagnostics kind)
     $N_gjz  = Native 0x5173,0x952E,0x5B57 # guan-jian-zi (hover group label)
-    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true') -and $msgs[0].Contains('"semanticTokensProvider"'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form / semanticTokensProvider)"; $lspOk = $false }
+    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true') -and $msgs[0].Contains('"semanticTokensProvider"') -and $msgs[0].Contains('"documentSymbolProvider":true') -and $msgs[0].Contains('"definitionProvider":true') -and $msgs[0].Contains('"referencesProvider":true') -and $msgs[0].Contains('"documentHighlightProvider":true') -and $msgs[0].Contains('"codeActionProvider":true') -and $msgs[0].Contains('"foldingRangeProvider":true') -and $msgs[0].Contains('"renameProvider":{"prepareProvider":true}') -and $msgs[0].Contains('"workspaceSymbolProvider":true') -and $msgs[0].Contains('"signatureHelpProvider":{"triggerCharacters":["(",","]}') -and $msgs[0].Contains('"selectionRangeProvider":true'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form / semanticTokensProvider / documentSymbolProvider / definitionProvider / referencesProvider / documentHighlightProvider / codeActionProvider / foldingRangeProvider / renameProvider{prepareProvider} / workspaceSymbolProvider / signatureHelpProvider / selectionRangeProvider)"; $lspOk = $false }
     if (-not ($msgs[1].Contains('publishDiagnostics') -and $msgs[1].Contains('file:///g156.zz') -and $msgs[1].Contains($N_cifa))) { Write-Output "  [FAIL] lsp: didOpen did not publish native-lexical diagnostics for the fullwidth comma"; $lspOk = $false }
     if (-not ($msgs[2].Contains('"id":2') -and $msgs[2].Contains('const') -and $msgs[2].Contains($N_gjz))) { Write-Output "  [FAIL] lsp: hover on chang-shu did not resolve to const/keyword-group"; $lspOk = $false }
     if (-not ($msgs[3].Contains('"id":4') -and $msgs[3].Contains('"data":[0,0,2,0,0') -and -not $msgs[3].Contains('"data":[]'))) { Write-Output "  [FAIL] lsp: semanticTokens/full did not return the chang-shu keyword tuple [0,0,2,0,0]"; $lspOk = $false }
@@ -1143,6 +1143,65 @@ if (-not ($langDesc -match '[\u4e00-\u9fff]')) { Write-Output "  [FAIL] client: 
 if (-not ($extSrc.Contains("function lspSpawnArgs") -and $extSrc.Contains("args.push('--lang', l)"))) { Write-Output "  [FAIL] client: zzc.lang not threaded into the lsp spawn as --lang"; $lcOk = $false }
 if (-not $extSrc.Contains("cp.spawn(zzcBinary(), lspSpawnArgs()")) { Write-Output "  [FAIL] client: lsp spawn does not use lspSpawnArgs (dialect --lang never reaches the server)"; $lcOk = $false }
 if (-not ($extSrc.Contains("onDidChangeConfiguration") -and $extSrc.Contains("affectsConfiguration('zzc.lang')") -and $extSrc.Contains("restartServer"))) { Write-Output "  [FAIL] client: no onDidChangeConfiguration -> restartServer wiring (dialect switch never takes effect)"; $lcOk = $false }
+# client overlay-pack wiring (round 267): zzc.langOverlay is threaded into the same
+# `zzc lsp` spawn as `--lang-overlay <file>`, so runtime third-party overlay packs
+# (contrib/packs/httpz-中文.txt) feed hover/docs in the editor; changing it restarts
+# the server. The server-side merge (overlay applied before cmdLsp) is proven
+# end-to-end by tools/lsp-live-smoke.sh, which spawns `zzc lsp --lang-overlay <pack>`.
+if (-not $pkg.contributes.configuration.properties."zzc.langOverlay") { Write-Output "  [FAIL] client: zzc.langOverlay configuration property missing"; $lcOk = $false }
+$ovlDesc = [string]$pkg.contributes.configuration.properties."zzc.langOverlay".description
+if (-not ($ovlDesc -match '[\u4e00-\u9fff]')) { Write-Output "  [FAIL] client: zzc.langOverlay settings description not native"; $lcOk = $false }
+if (-not ($extSrc.Contains("function zzLangOverlay") -and $extSrc.Contains("args.push('--lang-overlay', o)"))) { Write-Output "  [FAIL] client: zzc.langOverlay not threaded into the lsp spawn as --lang-overlay"; $lcOk = $false }
+if (-not $extSrc.Contains("affectsConfiguration('zzc.langOverlay')")) { Write-Output "  [FAIL] client: no restart wiring for zzc.langOverlay (overlay switch never takes effect)"; $lcOk = $false }
+# client quick-fix wiring (round 268): registering a CodeActionProvider alone would be a
+# dead lightbulb unless the provider actually requests textDocument/codeAction and turns
+# the returned literal edit.changes into a vscode.WorkspaceEdit replacement. The server
+# side (same danger table as fast diagnostics, ASCII-replacement only) is proven by the
+# codeAction unit test and tools/lsp-live-smoke.sh; the extension-host runtime is not
+# node-behavior testable here, so the two client seams are pinned as text contracts.
+if (-not $extSrc.Contains("registerCodeActionProvider")) { Write-Output "  [FAIL] client: CodeActionProvider not registered (fullwidth quick fixes never surface)"; $lcOk = $false }
+if (-not ($extSrc.Contains("textDocument/codeAction") -and $extSrc.Contains("new vscode.WorkspaceEdit()") -and $extSrc.Contains("action.edit.replace("))) { Write-Output "  [FAIL] client: codeAction request or WorkspaceEdit replacement missing (lightbulb would do nothing)"; $lcOk = $false }
+# client fix-all wiring (round 269): on save VS Code asks only for source.fixAll, so the
+# client must forward context.only (kind -> string array), map the returned kind back to
+# vscode.CodeActionKind.SourceFixAll, and advertise both kinds in provider metadata.
+# Without the only passthrough the bulk action never fires; without the kind mapping a
+# source.fixAll edit would be mislabelled QuickFix and rejected by the save-on-fix filter.
+if (-not ($extSrc.Contains("only: codeActionOnly(context.only),") -and $extSrc.Contains("CodeActionKind.SourceFixAll"))) { Write-Output "  [FAIL] client: codeAction context.only passthrough or source.fixAll kind mapping missing (save-time fix-all never fires)"; $lcOk = $false }
+if (-not $extSrc.Contains("providedCodeActionKinds")) { Write-Output "  [FAIL] client: providedCodeActionKinds metadata missing (VS Code cannot route source.fixAll to this provider)"; $lcOk = $false }
+# client folding wiring (round 270/271): registering a FoldingRangeProvider is only
+# useful if it actually requests textDocument/foldingRange and maps the returned
+# startLine/endLine into vscode.FoldingRange. The server's brace pairing (lexer
+# tokens keep strings/comments out) and consecutive comment blocks are proven by
+# the unit test and the FIFO smoke; the extension-host provider seam is pinned as
+# a text contract here.
+if (-not $extSrc.Contains("registerFoldingRangeProvider")) { Write-Output "  [FAIL] client: FoldingRangeProvider not registered (editor folding never reflects brace blocks)"; $lcOk = $false }
+if (-not ($extSrc.Contains("textDocument/foldingRange") -and $extSrc.Contains("new vscode.FoldingRange(") -and $extSrc.Contains("vscode.FoldingRangeKind.Comment"))) { Write-Output "  [FAIL] client: foldingRange request, FoldingRange mapping, or comment kind mapping missing (provider would return nothing or lose the comment colour)"; $lcOk = $false }
+# client rename wiring (round 272): the provider is only useful if it requests
+# textDocument/rename with the new name and rebuilds WorkspaceEdit from res.changes.
+if (-not $extSrc.Contains("registerRenameProvider")) { Write-Output "  [FAIL] client: RenameProvider not registered (F2 rename never reaches the server)"; $lcOk = $false }
+if (-not ($extSrc.Contains("textDocument/rename") -and $extSrc.Contains("newName,") -and $extSrc.Contains("Object.entries(res.changes)"))) { Write-Output "  [FAIL] client: rename request/newName passthrough or changes-map rebuild missing (edits would apply nowhere)"; $lcOk = $false }
+# client prepare-rename wiring (round 274): F2 must pre-check the cursor through
+# textDocument/prepareRename and feed the returned range/placeholder back to VS Code;
+# otherwise non-declaration words still open a dead rename box (rename then returns null).
+if (-not ($extSrc.Contains("prepareRename: async") -and $extSrc.Contains("textDocument/prepareRename") -and $extSrc.Contains("placeholder: res.placeholder"))) { Write-Output "  [FAIL] client: prepareRename request/range/placeholder passthrough missing (F2 opens a dead rename box on non-declaration words)"; $lcOk = $false }
+# client document-highlight wiring (round 273): registering a DocumentHighlightProvider is
+# only useful if it requests textDocument/documentHighlight and maps the returned range and
+# kind into vscode.DocumentHighlight (Write for the declaration, Read for references).
+if (-not $extSrc.Contains("registerDocumentHighlightProvider")) { Write-Output "  [FAIL] client: DocumentHighlightProvider not registered (same-symbol occurrences never highlight)"; $lcOk = $false }
+if (-not ($extSrc.Contains("textDocument/documentHighlight") -and $extSrc.Contains("new vscode.DocumentHighlight(") -and $extSrc.Contains("vscode.DocumentHighlightKind.Write"))) { Write-Output "  [FAIL] client: documentHighlight request, range mapping, or Write/Read kind mapping missing (provider would return nothing or lose the declaration/read distinction)"; $lcOk = $false }
+# client workspace-symbol wiring (round 275): the provider is only useful if it
+# requests workspace/symbol with the query and rebuilds a vscode.SymbolInformation
+# (location.uri + location.range) from each returned item; otherwise "Go to Symbol
+# in Workspace" never reaches the open-document table.
+if (-not ($extSrc.Contains("registerWorkspaceSymbolProvider") -and $extSrc.Contains("workspace/symbol") -and $extSrc.Contains("new vscode.SymbolInformation(") -and $extSrc.Contains("s.location.uri"))) { Write-Output "  [FAIL] client: workspace/symbol request or SymbolInformation location mapping missing (Go to Symbol in Workspace never returns open-document symbols)"; $lcOk = $false }
+# client signature-help wiring (round 276): typing inside a call paren must trigger
+# textDocument/signatureHelp and rebuild vscode.SignatureHelp (signatures, parameter
+# labels, activeParameter); otherwise the popup never opens or loses the parameter list.
+if (-not ($extSrc.Contains("registerSignatureHelpProvider") -and $extSrc.Contains("textDocument/signatureHelp") -and $extSrc.Contains("new vscode.SignatureInformation(") -and $extSrc.Contains("new vscode.ParameterInformation(") -and $extSrc.Contains("activeParameter: res.activeParameter"))) { Write-Output "  [FAIL] client: signatureHelp request or SignatureInformation/ParameterInformation mapping missing (call-paren popup never shows the declaration parameter list or active parameter)"; $lcOk = $false }
+# client selection-range wiring (round 277): Expand Selection must request
+# textDocument/selectionRange with every cursor position and rebuild the returned
+# range/parent chain as vscode.SelectionRange; otherwise it stops at the word/line.
+if (-not ($extSrc.Contains("registerSelectionRangeProvider") -and $extSrc.Contains("textDocument/selectionRange") -and $extSrc.Contains("new vscode.SelectionRange(") -and $extSrc.Contains("toSelectionRange(r.parent)"))) { Write-Output "  [FAIL] client: selectionRange request or SelectionRange parent-chain mapping missing (Expand Selection never reaches the enclosing block or whole document)"; $lcOk = $false }
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
     Write-Output "  [SKIP] client behavior test: node not on PATH"

@@ -2,7 +2,7 @@
 //!
 //! 旧形制下同一 `.zzc` 目录族由 4 个模块 6 处字面量各持一份：生成树 `cli/args.zig` 的 `gen_dir`（199 轮
 //! 已收）、符号表 `main.zig` 的 `symbols_path_default`、产物目录 `main.zig` 的 `.zzc/bin` 两枚（发射路径 +
-//! `createDirPath`）、深检临时发射物 `main.zig` 的 `-femit-bin=.zzc/tmp_check_root`、外置语言包
+//! `createDirPath`）、历史深检临时发射物路径（D129 起 check 改 `-fno-emit-bin`，不再落盘）、外置语言包
 //! `lang/userpack.zig` 的 `default_dir`。而**消费这些路径的隐藏判据** `diag/translate.zig` 的
 //! `isInternalPath` 只以裸子串 `".zzc"` 硬编在另一个模块里——族与判据之间没有任何引用关系。
 //!
@@ -122,15 +122,13 @@ pub const build_pack_face = [_]BuildFace{
 /// 符号表文件：跨会话稳定的母语名 → ASCII 名映射（D16/D36 语义，恢复失败须传播）。
 pub const symbols_file: []const u8 = root ++ "/symbols.txt";
 
-/// `check` 深检时各根的临时发射物（用后即弃、固定同名串行覆盖）。
+/// 历史深检临时发射物路径（D129 起 `check` 改 `-fno-emit-bin`，不再落盘；保留在隐藏判据/族清单中，
+/// 旧工程遗留的该路径仍不得外泄为诊断）。
 pub const check_root: []const u8 = root ++ "/tmp_check_root";
 
-/// zig 产物发射旗标前缀（第 224 轮 D92：旧形制下此前缀在两处手抄——本 `check_root_flag`
-/// 派生形与 `cmdBuild` 的 `-femit-bin={s}` argv 拼装模板；改持唯一真值后两处皆由它派生）。
+/// zig 产物发射旗标前缀（第 224 轮 D92：`cmdBuild` 的 `-femit-bin={s}` argv 拼装模板由它
+/// 派生；旧完整旗标派生形随 D129 改 `-fno-emit-bin` 删除）。
 pub const emit_bin_prefix: []const u8 = "-femit-bin=";
-
-/// 上者的完整 zig 旗标形（前缀与路径同源，不另立字面量）。
-pub const check_root_flag: []const u8 = emit_bin_prefix ++ check_root;
 
 /// 未翻译清单落盘目录的根（相对当前工作目录）——与 `root` 并列的**第二族根**（第 202 轮 D70）：
 /// `root` 树是我方内部状态/产物（对用户隐藏），本树是**用户/CI 可见的产出面**（语言包作者与 CI 在仓外
@@ -377,7 +375,7 @@ pub fn isWordByte(c: u8) bool {
     return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
 }
 
-test "第 200 轮 T0 .zzc 族单一真值：八枚字面量全员钉 + 形制契约（相对、正斜杠、前缀多一个分隔符）" {
+test "第 200 轮 T0 .zzc 族单一真值：七枚字面量全员钉 + 形制契约（相对、正斜杠、前缀多一个分隔符）" {
     // A1 族真值逐枚字面量钉（判据不复用常量，遵 196/197 通则）：改本模块任一枚即本钉红，
     //    连带要求消费/生产两侧与 `diag/translate.zig` 的组合锚同步复跑。
     try std.testing.expectEqualStrings(".zzc", root);
@@ -387,7 +385,6 @@ test "第 200 轮 T0 .zzc 族单一真值：八枚字面量全员钉 + 形制契
     try std.testing.expectEqualStrings(".zzc/lang", lang_dir);
     try std.testing.expectEqualStrings(".zzc/symbols.txt", symbols_file);
     try std.testing.expectEqualStrings(".zzc/tmp_check_root", check_root);
-    try std.testing.expectEqualStrings("-femit-bin=.zzc/tmp_check_root", check_root_flag);
 
     // A2 形制契约（独立 oracle、不引常量）：族成员必须是**相对**路径且用正斜杠——
     //    绝对形会让 `isInternalPath` 走前导分隔符臂而掩盖真实判据、反斜杠形在 Windows 上与

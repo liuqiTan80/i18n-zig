@@ -181,6 +181,12 @@ pub fn findLangFileFlag(args: []const []const u8) ?[]const u8 {
     return findFlag(args, flag_lang_file);
 }
 
+/// 第三方库翻译（本次）：取 `--lang-overlay <路径>` 外部叠加层语言包旗标（把叠加层累积并入
+/// 所选基包之上、免重编译）。与 `--lang`/`--lang-file` 可合用（overlay 叠在所选基包上，非互斥）。
+pub fn findLangOverlayFlag(args: []const []const u8) ?[]const u8 {
+    return findFlag(args, flag_lang_overlay);
+}
+
 // ---------------------------------------------------------------------------
 // 布尔旗标（第 154 轮 · 编辑器/CI 机读集成）
 // 与带值旗标的分野：布尔旗标只认**单元素形** `--machine`。等号形 `--machine=1` 故意不识别、
@@ -217,6 +223,11 @@ pub fn stripLangFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.Arra
 /// R9g：剔离 `--lang-file`（两参/等号形）——同不透传 zig 契约。
 pub fn stripLangFileFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
     return stripFlag(gpa, args, flag_lang_file);
+}
+
+/// 第三方库翻译（本次）：剔离 `--lang-overlay`（两参/等号形）——同不透传 zig 契约。
+pub fn stripLangOverlayFlag(gpa: std.mem.Allocator, args: []const []const u8) !std.ArrayList([]const u8) {
+    return stripFlag(gpa, args, flag_lang_overlay);
 }
 
 test "findLangFlag / stripLangFlag：两参与等号形都识别，剔离后不透传 zig" {
@@ -274,6 +285,33 @@ test "R9g findFlag/stripFlag：--lang-file 两参/等号形识别；同族前缀
     var s3 = try stripLangFileFlag(gpa, &d);
     defer s3.deinit(gpa);
     try std.testing.expectEqual(@as(usize, 1), s3.items.len);
+}
+
+test "第三方库翻译：--lang-overlay 两参/等号形识别、与 --lang/--lang-file 前缀互不误匹、连剔不透传 zig" {
+    const gpa = std.testing.allocator;
+    // 三枚同族前缀旗标并存：各取所得，--lang 不误匹 --lang-file/--lang-overlay（全等形取后继、等号形需 `=` 位）。
+    const a = [_][]const u8{ "run", "src/main.zz", "--lang", "zh", "--lang-file", "包.txt", "--lang-overlay", "contrib/httpz.txt" };
+    try std.testing.expectEqualStrings("zh", findLangFlag(&a).?);
+    try std.testing.expectEqualStrings("包.txt", findLangFileFlag(&a).?);
+    try std.testing.expectEqualStrings("contrib/httpz.txt", findLangOverlayFlag(&a).?);
+    // 串接剔离三枚 zzc 旗标（连值）后仅剩 run + 文件——皆不透传 zig。
+    var s1 = try stripLangFlag(gpa, &a);
+    defer s1.deinit(gpa);
+    var s2 = try stripLangFileFlag(gpa, s1.items);
+    defer s2.deinit(gpa);
+    var s3 = try stripLangOverlayFlag(gpa, s2.items);
+    defer s3.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 2), s3.items.len);
+    try std.testing.expectEqualStrings("run", s3.items[0]);
+    try std.testing.expectEqualStrings("src/main.zz", s3.items[1]);
+    // 等号形 + 裸尾缺值形。
+    const e = [_][]const u8{"--lang-overlay=contrib/httpz.txt"};
+    try std.testing.expectEqualStrings("contrib/httpz.txt", findLangOverlayFlag(&e).?);
+    const d = [_][]const u8{ "check", "--lang-overlay" };
+    try std.testing.expectEqual(@as(?[]const u8, null), findLangOverlayFlag(&d));
+    var s4 = try stripLangOverlayFlag(gpa, &d);
+    defer s4.deinit(gpa);
+    try std.testing.expectEqual(@as(usize, 1), s4.items.len);
 }
 
 test "护栏：旗标等号空值形边界——`--lang=`/`--lang-file=` 返回空串非 null、与裸尾缺值形语义相反（第 110 轮证伪落位）" {
@@ -561,13 +599,16 @@ pub fn isKnownSubcommand(cmd: []const u8) bool {
 pub const flag_lang: []const u8 = "--lang";
 /// `--lang-file <路径>`：从外部文件加载语言包（R9g 第二档、免重编译）。
 pub const flag_lang_file: []const u8 = "--lang-file";
+/// `--lang-overlay <路径>`：把外部叠加层语言包累积并入所选基包之上（第三方库翻译发行包，本次新增）。
+/// 承 R11 叠加语义：后写覆盖、overlay 无须自含 B6 契约（契约由基包供、合并后统一 validate）。
+pub const flag_lang_overlay: []const u8 = "--lang-overlay";
 /// `--machine`：把母语报错压成单行机读形制（与机读契约 hub 同源）。
 pub const flag_machine: []const u8 = mcon.flag_machine;
 /// `--as <注册名>`：`zzc lang add` 指定装入工程的注册名（此前全仓零测覆盖的孤点，D75 主靶）。
 pub const flag_as: []const u8 = "--as";
 
 /// zzc 层真实消费的旗标穷举表：find/strip 站与帮助行正向对账的单一真值。
-pub const zzc_flags = [_][]const u8{ flag_lang, flag_lang_file, flag_machine, flag_as };
+pub const zzc_flags = [_][]const u8{ flag_lang, flag_lang_file, flag_lang_overlay, flag_machine, flag_as };
 
 /// name 是否为 zzc 层旗标（帮助行正向对账与判据的共同真值）。
 pub fn isZzcFlag(name: []const u8) bool {
@@ -633,6 +674,7 @@ pub const usage_text =
     \\选项：
     \\  --lang <名>            选择语言包（如 zh / 中文；缺省为中文；该旗标不透传 zig）
     \\  --lang-file <路径>     从外部文件加载语言包（第三方发行包、免重编译；与 --lang 互斥；不透传 zig）
+    \\  --lang-overlay <路径>  把外部叠加层语言包累积并入所选基包之上（第三方库翻译包；可与 --lang/--lang-file 合用；不透传 zig）
     \\  --machine              把母语报错压成单行机读形制 `路径:行:列: 种类: 消息（提示：…）`（编辑器/CI 逐行正则消费；不透传 zig）
     \\方言文件默认取 src/main.zz；错误标签与 std 错误名保持 ASCII 原样。
 ;
@@ -878,6 +920,8 @@ pub const tl_test: []const u8 = "test";
 pub const tl_build: []const u8 = "build";
 /// 版本漂警子命令词（maybeWarnZigDrift）。
 pub const tl_version: []const u8 = "version";
+/// 深检臂「只查不发」旗标（D129）：check 只需语义分析，产物零发射零残留。
+pub const tl_no_emit_bin: []const u8 = "-fno-emit-bin";
 
 /// `cmdBuild` 非 test 臂的产物发射旗标模板：与 `zzc_paths.emit_bin_prefix` 同源派生，
 /// 不另立第二枚 `-femit-bin=` 手抄（旧形制 allocPrint 模板内另持整串前缀）。
@@ -887,7 +931,7 @@ pub const tl_emit_bin_fmt: []const u8 = zzc.emit_bin_prefix ++ "{s}";
 /// 消费侧若改回手抄字面量，委派形 needle 即消失、守卫红；`count` 由 224 T0 在测试图内
 /// 以 @embedFile 直接钉死（同一 needle 形可能多处同形，如 `zig build` 两臂）。
 pub const tl_face = .{
-    .{ .needle = "&.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, bin }", .count = @as(usize, 1), .why = "check 深检臂：含 main 的根走 build-exe 传递性语义深检，漂即 check 入口断裂" },
+    .{ .needle = "&.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, cli.tl_no_emit_bin }", .count = @as(usize, 1), .why = "check 深检臂：含 main 的根走 build-exe 传递性语义深检且 -fno-emit-bin 零残留，漂即 check 入口断裂" },
     .{ .needle = "&.{ cli.tl_zig, cli.tl_ast_check, u.gen_rel }", .count = @as(usize, 1), .why = "check 浅检臂：不含 main 的模块只 ast-check，漂即库模块检查断裂" },
     .{ .needle = "try argv.append(gpa_, cli.tl_zig);", .count = @as(usize, 1), .why = "cmdBuild spawn 首词：run/build/test 三入口共用，漂即三入口全断" },
     .{ .needle = "if (mode == .test_) cli.tl_test else cli.tl_build_exe", .count = @as(usize, 1), .why = "cmdBuild 模式分支词：test 与 build-exe 两臂同源，漂即对应入口断" },
@@ -897,13 +941,14 @@ pub const tl_face = .{
 };
 
 test "224 T0：工具链 spawn argv 词族单一真值＋委派形双向钉（第 224 轮）——D92" {
-    // A1：六枚词值钉＋发射旗标模板与 zzc_paths 前缀同源钉（hub 本体漂移即红）。
+    // A1：七枚词值钉＋发射旗标模板与 zzc_paths 前缀同源钉（hub 本体漂移即红）。
     try std.testing.expectEqualStrings("zig", tl_zig);
     try std.testing.expectEqualStrings("build-exe", tl_build_exe);
     try std.testing.expectEqualStrings("ast-check", tl_ast_check);
     try std.testing.expectEqualStrings("test", tl_test);
     try std.testing.expectEqualStrings("build", tl_build);
     try std.testing.expectEqualStrings("version", tl_version);
+    try std.testing.expectEqualStrings("-fno-emit-bin", tl_no_emit_bin);
     try std.testing.expectEqualStrings("-femit-bin=", zzc.emit_bin_prefix);
     try std.testing.expectEqualStrings("-femit-bin={s}", tl_emit_bin_fmt);
     // A2：对面十六清单自身钉（成员数与对面十五形制同骨：一面对多针）。

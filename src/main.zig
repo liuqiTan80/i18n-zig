@@ -144,6 +144,11 @@ fn writeWhole(path: []const u8, data: []const u8) !void {
     return file_io.writeWhole(io_, path, data);
 }
 
+/// 原子写薄封装（D130）：仅符号表等「读回即语义」的持久映射使用。
+fn writeWholeAtomic(path: []const u8, data: []const u8) !void {
+    return file_io.writeWholeAtomic(io_, path, data);
+}
+
 /// 判断相对当前工作目录的路径是否存在（仅用于避免覆盖，不区分文件/目录）。
 fn pathExists(path: []const u8) bool {
     return file_io.pathExists(io_, path);
@@ -245,7 +250,9 @@ fn saveSymbols(table: Mangle) void {
             return;
         };
     }
-    writeWhole(symbols_path, out.items) catch |e| {
+    // D130（第 262 轮）：符号表必须原子覆盖——旧 writeWhole 直接 createFile 截断旧文件，
+    // 写入中途崩溃或 LSP/CLI 两进程并发即留半截，下次启动丢映射/撞号。
+    writeWholeAtomic(symbols_path, out.items) catch |e| {
         printErr(zzc.prog_prefix ++ "保存符号表失败（写入文件）：{s}", .{@errorName(e)});
     };
 }
@@ -531,6 +538,31 @@ fn loadExternalPack(path: []const u8) !Pack {
     };
 }
 
+/// 第三方库翻译（本次）：把外部叠加层语言包字节**累积**并入已选基包之上（承 R11 叠加语义、
+/// 后写覆盖，走 `Pack.parseInto`）。叠加层无须自含 B6 契约（契约由基包供、合并后统一 validate）。
+/// 复用 `loadExternalPack` 同一对母语指引常量（fmt_too_new_hint/pack_syntax_hint），使 $format 过新/
+/// 语法错的贡献者向提示与基包外部源同形制；文件不存在另报「叠加」字样。失败一律 bail（源头已母语报出）。
+fn applyOverlayPack(lang: *Pack, path: []const u8) void {
+    const bytes = readWhole(path) catch |e| switch (e) {
+        error.FileNotFound => {
+            printErr(zzc.prog_prefix ++ "外部叠加语言包文件不存在：{s}", .{path});
+            bail(error.Failed);
+        },
+        else => bail(e), // 超限/权限等：bail 的 localizeFsErr 双层拦截既有形
+    };
+    lang.parseInto(gpa_, bytes) catch |e| switch (e) {
+        error.PackFormatTooNew => {
+            printErr(zzc.prog_prefix ++ fmt_too_new_hint ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ cli.np_upgrade ++ " " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
+            bail(error.Failed);
+        },
+        error.InvalidLangPack => {
+            printErr(zzc.prog_prefix ++ pack_syntax_hint, .{path});
+            bail(error.Failed);
+        },
+        else => bail(e), // OOM 等工具层错误传播致 bail
+    };
+}
+
 // ---------------------------------------------------------------- 子命令
 
 /// R9g 第二档（第 140 轮）：`zzc lang add <文件> [--as 注册名]`——把校验通过的外部包**装进当前工程**
@@ -596,11 +628,14 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     var seen = std.StringHashMap(void).init(gpa_);
     defer seen.deinit();
     // ① 对每个含 main 的根做 build-exe 传递性语义深检（沿 @import 覆盖被导入的库模块，
-    // 含用户点名的那个）。临时产物固定同名、串行覆盖即可（用后即弃）。
+    // 含用户点名的那个）。D129 起加 -fno-emit-bin：只查不发，无临时产物。
     for (proj.units.items) |u| {
         if (!cli.zigHasMainFn(u.zig_str)) continue;
-        const bin = zzc.check_root_flag; // 第 200 轮 D68：旗标前缀与路径同源（旧形制整串一枚字面量）
-        const argv: []const []const u8 = &.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, bin }; // 第 224 轮 D92：工具链词族取单一真值
+        // D129（第 262 轮）：check 只需语义分析，不需要可执行产物。旧形制以
+        // `-femit-bin=.zzc/tmp_check_root` 强制发射，每次 check 都留下约 10MB 的临时
+        // 可执行文件（用后即弃且从不清理）。改 `-fno-emit-bin`：Zig 仍做完整语义分析
+        //（类型错误照报），但零发射、零残留；工具链词族仍取 cli 单一真值。
+        const argv: []const []const u8 = &.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, cli.tl_no_emit_bin }; // 第 224 轮 D92：工具链词族取单一真值
         zigCompile(lang, table.*, proj, argv, &seen) catch |e| {
             if (e == error.Failed) {
                 any_fail = true;
@@ -1175,10 +1210,22 @@ fn cmdLsp(lang: Pack) void {
             pend.shrinkRetainingCapacity(rest.len);
             if (srv.stop) return; // exit 通知：环流结束（调用方 main 自然退 0）
         }
-        // 不足一帧：续读 stdin
+        // 不足一帧：续读 stdin。
+        // D128（第 262 轮）：旧形制用 `readSliceShort`，其语义是「读满 buffer 或到 EOF」
+        //（std/Io/Reader.zig：循环 readVec 直到 buffer 填满）——管道上不足 4096 字节的小帧
+        // 永远填不满，真实 LSP 客户端（VS Code 保持 stdin 打开）的 initialize 永不被处理，
+        // 只有 ps1 文件重定向/管道写完即关的 EOF 路径能绿（假绿根因）。改用单次 `readVec`：
+        // 有多少读多少，帧一到即处理；EOF 单独收束。
         var chunk: [4096]u8 = undefined;
-        const n = in_r.interface.readSliceShort(&chunk) catch 0;
-        if (n == 0) return; // stdin 关闭：客户端断开，正常收束
+        var iov: [1][]u8 = .{&chunk};
+        const n = in_r.interface.readVec(&iov) catch |e| switch (e) {
+            error.EndOfStream => return, // stdin 关闭：客户端断开，正常收束
+            error.ReadFailed => {
+                printErr(zzc.prog_prefix ++ "LSP 读取标准输入失败，结束。\n", .{});
+                return;
+            },
+        };
+        if (n == 0) continue; // 防御：无数据且非 EOF 时不忙等（正常实现走 EndOfStream 臂）
         pend.appendSlice(gpa_, chunk[0..n]) catch {
             printErr(zzc.prog_prefix ++ "LSP 读缓冲耗尽（内存不足），结束。\n", .{});
             return;
@@ -1290,6 +1337,9 @@ pub fn main(init: std.process.Init) !void {
         break :blk bp;
     };
     defer lang.deinit();
+    // 第三方库翻译（本次）：--lang-overlay 把外部叠加层累积并入所选基包之上（契约仍由基包供、
+    // 合并后统一 validate）；叠加失败（文件缺失/$format 过新/语法错）源头母语报出后 bail。
+    if (cli.findLangOverlayFlag(args)) |op| applyOverlayPack(&lang, op);
     var stripped = cli.stripLangFlag(gpa_, args) catch |e| {
         printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
         return e;
@@ -1300,7 +1350,12 @@ pub fn main(init: std.process.Init) !void {
         return e;
     };
     defer filtered.deinit(gpa_);
-    var mach_stripped = cli.stripBoolFlag(gpa_, filtered.items, mcon.flag_machine) catch |e| {
+    var ovl_stripped = cli.stripLangOverlayFlag(gpa_, filtered.items) catch |e| {
+        printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
+        return e;
+    };
+    defer ovl_stripped.deinit(gpa_);
+    var mach_stripped = cli.stripBoolFlag(gpa_, ovl_stripped.items, mcon.flag_machine) catch |e| {
         printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
         return e;
     };

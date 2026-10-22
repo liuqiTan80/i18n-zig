@@ -3,7 +3,7 @@
 //! 本模块全量进测试图（承 154/155 轮「纯逻辑下沉、编排薄接线」范式）。
 //!
 //! 能力面（MVP）：
-//!   - 生命周期：`initialize`（capabilities：全量文本同步 + hover）、`initialized`、
+//!   - 生命周期：`initialize`（capabilities：全量文本同步 + hover / 文档大纲 / 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检）/ 工作区符号 / 参数提示）、`initialized`、
 //!     `shutdown`、`exit`（置停旗标由环流侧结束）；
 //!   - 文档同步：`didOpen`/`didChange`（全量形）/`didClose`，服务端自持文档表；
 //!   - 快路诊断：didOpen/didChange/didClose 后 `publishDiagnostics`——判据取纯函数面
@@ -12,6 +12,24 @@
 //!     仍走 154 轮 task/problemMatcher 通道（每次键击起 zig 编译既慢又与 symbols.txt 竞争）；
 //!   - 悬停：`textDocument/hover`——光标词（含 `标准库.调试.打印` 点链整体取词）反查
 //!     语言包 keywords/aliases，详情分组与 155 轮补全描述同口径（`snippets.classify` 复用）。
+//!   - 文档大纲：`textDocument/documentSymbol`——按当前语言包的声明词（fn/struct/enum/union/
+//!     const/var）扫描顶层声明，供编辑器大纲/面包屑；词表与 hover 同取 `lang.keywords`，不另立。
+//!   - 跳转定义：`textDocument/definition`——光标词命中顶层声明名时返回该声明位置；词元经
+//!     lexer 过滤（注释/字符串不参与），当前限同文件、不做作用域消歧。
+//!   - 查找引用：`textDocument/references`——光标词解析到同文件顶层声明后，返回全部同名
+//!     代码词元（`includeDeclaration` 控制声明项去留）；同名局部变量/字段暂不消歧。
+//!   - 同名高亮：`textDocument/documentHighlight`——同上述声明解析，声明位标 Write、其余标
+//!     Read；字符串/注释不参与，未解析到声明返空；与引用同界、不做作用域消歧。
+//!   - 重命名：`textDocument/rename`——同文件顶层声明全量改名（`WorkspaceEdit.changes`）；
+//!     字符串/注释不参与，非法新名/非声明光标返 null；与引用同界、不做作用域消歧。
+//!   - 重命名预检：`textDocument/prepareRename`——返回光标词范围与占位符；非声明词/
+//!     字符串/注释/未打开文档返 null，F2 在不可改名处不开输入框。
+//!   - 工作区符号：`workspace/symbol`——按 `query` 子串过滤服务端文档表内各文档的顶层
+//!     声明，返回 `SymbolInformation[]`（name/kind/location{uri,range}）；只搜已打开文档，
+//!     不做全盘扫描、不做作用域消歧。
+//!   - 参数提示：`textDocument/signatureHelp`——光标落在调用括号内时，按被调名解析同文件
+//!     顶层函数声明，返回声明参数标签与按顶层逗号计的活动参数；非调用处/成员调用/未知
+//!     被调返 null（不猜跨行参数表）。
 //!
 //! 坐标制：LSP Position 为 0 基行 + UTF-16 码元列（默认协商制、不声明 positionEncoding）；
 //! 换算集中于 positionOfOffset/byteOfPosition 两处纯函数。第 165 轮起有直接边界单测钉往返不变量
@@ -102,12 +120,12 @@ pub fn parseClientLegendArray(comptime body: []const u8) ?[legend_types.len][]co
     return out;
 }
 
-/// LSP 方法名族（第 218 轮 D86 单一真值）：服务端 dispatch 十臂、`publishDiagnostics` 通知
-/// 写侧（`publishRaw`）与客户端 `editors/vscode/extension.js` 的十一处发起/消费面共此一份——
+/// LSP 方法名族（第 218 轮 D86 单一真值）：服务端 dispatch 十七臂、`publishDiagnostics` 通知
+/// 写侧（`publishRaw`）与客户端 `editors/vscode/extension.js` 的十八处发起/消费面共此一份——
 /// 此前两侧互不引用（t2 探针 P1–P4 实锤 js 侧改名对构建链零信号、真跑 P7 坐实漂形 `didSave`
 /// 不发诊断且无任何应答——通知形失联静默），方法词分道即握手不成/诊断冻结/悬停永空，
 /// 功能级断裂而测试恒绿。值钉与对面 needle 形钉见本文件 218 T0；客户端对面由守卫步
-/// check-machine-matcher 的对面十一对账（复用对面四已读 `extension.js`，零新增 I/O；
+/// check-machine-matcher 的对面十四对账（复用已读 `extension.js`，零新增 I/O；
 /// 202/203 轮判例）。FaceCheck/missing 判据复用 `jsonrpc.zig` 的 217 形制，不另立第二套。
 pub const m_initialize = "initialize";
 pub const m_initialized = "initialized";
@@ -119,10 +137,21 @@ pub const m_didClose = "textDocument/didClose";
 pub const m_didSave = "textDocument/didSave";
 pub const m_hover = "textDocument/hover";
 pub const m_semanticTokensFull = "textDocument/semanticTokens/full";
+pub const m_documentSymbol = "textDocument/documentSymbol";
+pub const m_definition = "textDocument/definition";
+pub const m_references = "textDocument/references";
+pub const m_documentHighlight = "textDocument/documentHighlight";
+pub const m_codeAction = "textDocument/codeAction";
+pub const m_foldingRange = "textDocument/foldingRange";
+pub const m_rename = "textDocument/rename";
+pub const m_prepareRename = "textDocument/prepareRename";
+pub const m_workspaceSymbol = "workspace/symbol";
+pub const m_signatureHelp = "textDocument/signatureHelp";
+pub const m_selectionRange = "textDocument/selectionRange";
 pub const m_publishDiagnostics = "textDocument/publishDiagnostics";
 
-/// 对面·`extension.js` 十一枚 needle（守卫判据的构造也在 hub，守卫视仅只读 I/O——
-/// 同 215/216/217 形制；序：生命周期四 → 文档同步四 → 请求二 → 服务端通知消费一）。
+/// 对面·`extension.js` 二十二枚 needle（守卫判据的构造也在 hub，守卫视仅只读 I/O——
+/// 同 215/216/217 形制；序：生命周期四 → 文档同步四 → 请求十三 → 服务端通知消费一）。
 pub const methods_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "request('" ++ m_initialize ++ "', initialize)", .why = "客户端握手发起词须逐字节等于服务端 dispatch 真值——分道即 initialize 应答都收不了，LSP 全废（真跑 P7 坐实漂形零应答）" },
     .{ .needle = "method: '" ++ m_initialized ++ "', params: {} }", .why = "初始化完毕通知词须等于服务端真值——通知形无应答，分道即服务端静默丢弃、无人感知" },
@@ -134,6 +163,17 @@ pub const methods_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "method: '" ++ m_didSave ++ "',", .why = "保存触发 on-save 语义诊断的词须等于服务端真值——分道即语义编译失联（t2 P1 静默 + 真跑 P7 坐实漂形不发诊断）" },
     .{ .needle = "request('" ++ m_hover ++ "', {", .why = "悬停请求词须等于服务端真值——分道即悬停永空（t2 P3 静默面）" },
     .{ .needle = "request('" ++ m_semanticTokensFull ++ "', {", .why = "语义 token 请求词须等于服务端真值——分道即母语高亮退白底" },
+    .{ .needle = "request('" ++ m_documentSymbol ++ "', {", .why = "文档大纲请求词须等于服务端真值——分道即大纲恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_definition ++ "', {", .why = "跳转定义请求词须等于服务端真值——分道即定义永空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_references ++ "', {", .why = "查找引用请求词须等于服务端真值——分道即引用恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_documentHighlight ++ "', {", .why = "同名符号高亮请求词须等于服务端真值——分道即光标处同名高亮恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_codeAction ++ "', {", .why = "快速修复请求词须等于服务端真值——分道即灯泡永不出现（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_foldingRange ++ "', {", .why = "代码折叠请求词须等于服务端真值——分道即折叠区恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_rename ++ "', {", .why = "重命名请求词须等于服务端真值——分道即 F2 改名恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_prepareRename ++ "', {", .why = "重命名预检请求词须等于服务端真值——分道即 F2 不弹输入框（客户端注册了 prepareRename 却永无结果）" },
+    .{ .needle = "request('" ++ m_workspaceSymbol ++ "', {", .why = "工作区符号请求词须等于服务端真值——分道即项目符号恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_signatureHelp ++ "', {", .why = "参数提示请求词须等于服务端真值——分道即调用括号提示恒空（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_selectionRange ++ "', {", .why = "智能扩选请求词须等于服务端真值——分道即扩选停在词/行、永不外扩到包围块与整文档（客户端注册了 provider 却永无结果）" },
     .{ .needle = "msg.method === '" ++ m_publishDiagnostics ++ "'", .why = "服务端发布诊断通知的消费订阅词须等于 publishRaw 写侧真值——分道即服务端照发、客户端全瞎，诊断面板恒空（t2 P2 静默面）" },
 };
 
@@ -155,9 +195,13 @@ pub const k_contentChanges = "contentChanges";
 pub const k_position = "position";
 pub const k_line = "line";
 pub const k_character = "character";
+pub const k_context = "context";
+pub const k_includeDeclaration = "includeDeclaration";
 pub const k_diagnostics = "diagnostics";
 pub const k_start = "start";
 pub const k_end = "end";
+pub const k_startLine = "startLine";
+pub const k_endLine = "endLine";
 
 /// —— D89 诊断项/悬停/错误对象字段族（第 221 轮）：写侧 `semItem`/`diagItem`/`hoverAt`/
 /// `errorResponse` 形串的字段词（range/severity/source/message/contents/kind/value/error/
@@ -177,6 +221,42 @@ pub const k_error = "error";
 pub const k_code = "code";
 pub const v_markdown = "markdown";
 
+/// —— 快速修复键族（第 268 轮）：CodeAction 结果体字段（title/edit/changes/newText，值 quickfix）
+/// ——服务端写侧形串与客户端 `extension.js` 消费面（item.title/item.edit.changes/e.newText）
+/// 跨侧手抄，随 codeAction 接线一并登记为单一真值。第 269 轮增补 `only`（CodeActionContext
+/// 的 kind 过滤器）与 `source.fixAll` 值：客户端把 `context.only` 映射为字符串数组，服务端据此
+/// 在「单点 quickfix」与「全文批量修复」两臂间分道——键或值漂即批量臂永不触发。
+pub const k_title = "title";
+pub const k_edit = "edit";
+pub const k_changes = "changes";
+pub const k_newText = "newText";
+pub const k_only = "only";
+/// 第 272 轮：重命名新名（`RenameParams.newName`）与客户端请求体同键。
+pub const k_newName = "newName";
+/// 第 274 轮：重命名预检占位符（`PrepareRenameResult.placeholder`）与客户端读取同键。
+pub const k_placeholder = "placeholder";
+/// 第 275 轮：工作区符号（`workspace/symbol`）请求过滤键与结果字段键——客户端写
+/// `{ query }`，读 `s.name`/`s.kind`/`s.location.uri`/`s.location.range`。
+pub const k_name = "name";
+pub const k_location = "location";
+pub const k_query = "query";
+/// 第 276 轮：参数提示（`SignatureHelp`）结果字段——服务端写 `signatures[].label` /
+/// `parameters[].label` / `activeSignature` / `activeParameter`，客户端逐一同键读取。
+pub const k_signatures = "signatures";
+pub const k_parameters = "parameters";
+pub const k_label = "label";
+pub const k_activeSignature = "activeSignature";
+pub const k_activeParameter = "activeParameter";
+/// 第 277 轮：智能扩选（`TextDocumentSelectionRangeParams` / `SelectionRange`）——客户端写
+/// `positions[]` 并在递归映射里读 `range` 与 `parent`。
+pub const k_positions = "positions";
+pub const k_parent = "parent";
+pub const v_quickfix = "quickfix";
+pub const v_source_fix_all = "source.fixAll";
+/// 第 271 轮：折叠区间 kind 值（LSP `FoldingRangeKind.Comment`）——客户端据此映射
+/// `vscode.FoldingRangeKind.Comment`，与注释块折叠写侧同源。
+pub const v_comment = "comment";
+
 /// —— D90 诊断严重度码值族（第 222 轮）：LSP `DiagnosticSeverity` 四枚数值码语义映射
 /// （1=Error／2=Warning／3=Information／4=Hint）——src 侧 clamp 边界（`semItem` 的
 /// `>= 1 and <= 4 else 1`）、快路恒码（`f_fast_item` 之 `:1`）、测侧数值钉，同客户端
@@ -189,6 +269,13 @@ pub const sv_error: u8 = 1;
 pub const sv_warning: u8 = 2;
 pub const sv_information: u8 = 3;
 pub const sv_hint: u8 = 4;
+
+/// —— 同名符号高亮种类码值族（第 273 轮）：LSP `DocumentHighlightKind` 三枚协议数值
+/// （1=Text／2=Read／3=Write）——写侧 `highlightAt` 分类、测侧值钉与客户端
+/// `results_face` 映射针（`h.kind === 3 ? ...Write : ...Read`）全由此源派生。
+pub const hk_text: u8 = 1;
+pub const hk_read: u8 = 2;
+pub const hk_write: u8 = 3;
 
 /// —— D91 JSON-RPC 错误码族（第 223 轮）：协议标准错误码三员（-32700 解析失败／-32600 请求非法／
 /// -32601 方法不支持）——src 写侧 handle 三臂内联数值字面、测侧值钉与宽松子串钉，同客户端
@@ -213,6 +300,18 @@ const cap_change_full = "\"change\":1"; // 全量同步 kind=1（TextDocumentSyn
 const cap_save_no_text = "\"save\":{\"includeText\":false}";
 const cap_sync_obj = "\"textDocumentSync\":{" ++ cap_open_close ++ "," ++ cap_change_full ++ "," ++ cap_save_no_text ++ "}";
 const cap_hover = "\"hoverProvider\":true";
+const cap_docsym = "\"documentSymbolProvider\":true";
+const cap_def = "\"definitionProvider\":true";
+const cap_refs = "\"referencesProvider\":true";
+const cap_document_highlight = "\"documentHighlightProvider\":true";
+const cap_codeaction = "\"codeActionProvider\":true";
+const cap_folding = "\"foldingRangeProvider\":true";
+const cap_rename = "\"renameProvider\":{\"prepareProvider\":true}";
+const cap_workspace_symbol = "\"workspaceSymbolProvider\":true";
+/// 第 276 轮：参数提示能力——触发字符 `(` 与 `,`（键入即弹；能力缺席则客户端不发起请求）。
+const cap_signature_help = "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}";
+/// 第 277 轮：智能扩选能力——布尔形（客户端据此注册 SelectionRangeProvider）。
+const cap_selection_range = "\"selectionRangeProvider\":true";
 const cap_semtok_key = "\"semanticTokensProvider\"";
 const cap_semtok = cap_semtok_key ++ ":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}";
 const cap_server_info = "\"serverInfo\":{\"name\":\"" ++ paths.prog_name ++ "-lsp\"}";
@@ -224,6 +323,16 @@ pub const cap_face = [_]jsonrpc.FaceCheck{
     .{ .needle = cap_sync_obj, .why = "ps1 断言应答含 save-对象形 sync 形串——与写侧 cap_sync_obj 分道即 e2e LSP 守卫静默失的（双盲从不跑·t2 P1/P3 形）" },
     .{ .needle = cap_hover, .why = "ps1 断言 hoverProvider 在——与写侧漂即能力协商断言与实际应答分道、守卫形同虚设" },
     .{ .needle = cap_semtok_key, .why = "ps1 断言 semanticTokensProvider 在——与写侧键漂即语义高亮供给能力无人核验" },
+    .{ .needle = cap_docsym, .why = "ps1 断言 documentSymbolProvider 在——与写侧漂即大纲能力协商断言与实际应答分道" },
+    .{ .needle = cap_def, .why = "ps1 断言 definitionProvider 在——与写侧漂即定义能力协商断言与实际应答分道" },
+    .{ .needle = cap_refs, .why = "ps1 断言 referencesProvider 在——与写侧漂即引用能力协商断言与实际应答分道" },
+    .{ .needle = cap_document_highlight, .why = "ps1 断言 documentHighlightProvider 在——与写侧漂即同名高亮能力协商断言与实际应答分道" },
+    .{ .needle = cap_codeaction, .why = "ps1 断言 codeActionProvider 在——与写侧漂即快速修复能力协商断言与实际应答分道" },
+    .{ .needle = cap_folding, .why = "ps1 断言 foldingRangeProvider 在——与写侧漂即代码折叠能力协商断言与实际应答分道" },
+    .{ .needle = cap_rename, .why = "ps1 断言 renameProvider 在——与写侧漂即重命名能力协商断言与实际应答分道" },
+    .{ .needle = cap_workspace_symbol, .why = "ps1 断言 workspaceSymbolProvider 在——与写侧漂即工作区符号能力协商断言与实际应答分道" },
+    .{ .needle = cap_signature_help, .why = "ps1 断言 signatureHelpProvider 触发字符形在——与写侧漂即参数提示能力协商断言与实际应答分道" },
+    .{ .needle = cap_selection_range, .why = "ps1 断言 selectionRangeProvider 在——与写侧漂即智能扩选能力协商断言与实际应答分道" },
 };
 
 /// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
@@ -240,6 +349,8 @@ const ek_character = "\"" ++ k_character ++ "\"";
 const ek_textDocument = "\"" ++ k_textDocument ++ "\"";
 const ek_start = "\"" ++ k_start ++ "\"";
 const ek_end = "\"" ++ k_end ++ "\"";
+const ek_startLine = "\"" ++ k_startLine ++ "\"";
+const ek_endLine = "\"" ++ k_endLine ++ "\"";
 const ek_range = "\"" ++ k_range ++ "\"";
 const ek_severity = "\"" ++ k_severity ++ "\"";
 const ek_source = "\"" ++ k_source ++ "\"";
@@ -249,6 +360,19 @@ const ek_kind = "\"" ++ k_kind ++ "\"";
 const ek_value = "\"" ++ k_value ++ "\"";
 const ek_error = "\"" ++ k_error ++ "\"";
 const ek_code = "\"" ++ k_code ++ "\"";
+const ek_title = "\"" ++ k_title ++ "\"";
+const ek_edit = "\"" ++ k_edit ++ "\"";
+const ek_changes = "\"" ++ k_changes ++ "\"";
+const ek_newText = "\"" ++ k_newText ++ "\"";
+const ek_placeholder = "\"" ++ k_placeholder ++ "\"";
+const ek_name = "\"" ++ k_name ++ "\"";
+const ek_location = "\"" ++ k_location ++ "\"";
+const ek_signatures = "\"" ++ k_signatures ++ "\"";
+const ek_parameters = "\"" ++ k_parameters ++ "\"";
+const ek_label = "\"" ++ k_label ++ "\"";
+const ek_activeSignature = "\"" ++ k_activeSignature ++ "\"";
+const ek_activeParameter = "\"" ++ k_activeParameter ++ "\"";
+const ek_parent = "\"" ++ k_parent ++ "\"";
 const em_markdown = "\"" ++ v_markdown ++ "\"";
 const eq_prog_name = "\"" ++ paths.prog_name ++ "\"";
 const ek_v20 = "\"" ++ jsonrpc.version_value ++ "\"";
@@ -260,6 +384,31 @@ const f_publish_diagnostics = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_m
 const f_sem_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
 const f_fast_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
 const f_hover_result = "{{" ++ ek_contents ++ ":{{" ++ ek_kind ++ ":" ++ em_markdown ++ "," ++ ek_value ++ ":{s}}}," ++ ek_range ++ ":{s}}}";
+const f_code_action = "{{" ++ ek_title ++ ":{s}," ++ ek_kind ++ ":\"" ++ v_quickfix ++ "\"," ++ ek_edit ++ ":{{" ++ ek_changes ++ ":{{{s}:[" ++ "{{" ++ ek_range ++ ":{s}," ++ ek_newText ++ ":{s}}}]}}}}}}";
+/// 第 269 轮：批量修复的单条 edit 与整条 `source.fixAll` 动作骨架（changes 内多枚 edit 由调用方拼好）。
+const f_code_action_edit = "{{" ++ ek_range ++ ":{s}," ++ ek_newText ++ ":{s}}}";
+const f_fix_all_action = "{{" ++ ek_title ++ ":{s}," ++ ek_kind ++ ":\"" ++ v_source_fix_all ++ "\"," ++ ek_edit ++ ":{{" ++ ek_changes ++ ":{{{s}:[{s}]}}}}}}";
+/// 第 270 轮：折叠区间项骨架（LSP `FoldingRange` 只取行号两键；客户端直接读同名属性）。
+const f_fold_item = "{{" ++ ek_startLine ++ ":{d}," ++ ek_endLine ++ ":{d}}}";
+/// 第 271 轮：注释块折叠项——多带一枚 `kind:"comment"`，客户端映射为注释色标。
+const f_fold_comment = "{{" ++ ek_startLine ++ ":{d}," ++ ek_endLine ++ ":{d}," ++ ek_kind ++ ":\"" ++ v_comment ++ "\"}}";
+/// 第 272 轮：重命名 WorkspaceEdit 骨架（edits 已是 JSON 数组文本，单条 edit 复用 f_code_action_edit）。
+const f_workspace_edit = "{{" ++ ek_changes ++ ":{{{s}:{s}}}}}";
+/// 第 273 轮：同名符号高亮项（LSP `DocumentHighlight`：range + kind 数值码）。
+const f_highlight_item = "{{" ++ ek_range ++ ":{s}," ++ ek_kind ++ ":{d}}}";
+/// 第 274 轮：重命名预检结果（`{range, placeholder}`；range 为光标词范围，placeholder 为新名初值）。
+const f_prepare_rename = "{{" ++ ek_range ++ ":{s}," ++ ek_placeholder ++ ":{s}}}";
+/// 第 275 轮：工作区符号项骨架（LSP `SymbolInformation`：name + kind + location{uri,range}）。
+const f_workspace_symbol = "{{" ++ ek_name ++ ":{s}," ++ ek_kind ++ ":{d}," ++ ek_location ++ ":{s}}}";
+/// 第 276 轮：参数提示骨架（LSP `SignatureHelp`：signatures[].label/parameters[].label +
+/// 活动签名/活动参数）。活动签名恒 0（每个被调名只返回一条声明签名）。
+const f_signature_param = "{{" ++ ek_label ++ ":{s}}}";
+const f_signature_item = "{{" ++ ek_label ++ ":{s}," ++ ek_parameters ++ ":[{s}]}}";
+const f_signature_help = "{{" ++ ek_signatures ++ ":[{s}]," ++ ek_activeSignature ++ ":0," ++ ek_activeParameter ++ ":{d}}}";
+/// 第 277 轮：智能扩选区骨架（LSP `SelectionRange`：range + 可选 parent，parent 为更大一层的
+/// 同一链节；叶节无 parent 键）。链由内到外折叠：叶先落，逐层外包成 node。
+const f_selection_leaf = "{{" ++ ek_range ++ ":{s}}}";
+const f_selection_node = "{{" ++ ek_range ++ ":{s}," ++ ek_parent ++ ":{s}}}";
 
 /// 消息本体形串骨架（写侧拼接与测内 fixture 共用派生——同 214 `legend_json` 同骨形制：
 /// 键词漂则 fixture 随漂、解析臂随漂，两侧不可能分道）。
@@ -302,6 +451,10 @@ pub const params_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "      " ++ k_textDocument ++ ": { uri: doc.uri.toString(), version", .why = "didChange 写侧 textDocument 键——漂即变更失联，诊断冻结在打开一刻" },
     .{ .needle = "      " ++ k_contentChanges ++ ": [{ " ++ k_text ++ ":", .why = "didChange 全文同步数组键——服务端取末项全文的入口，漂即变更被拒（t2 P3 静默面）" },
     .{ .needle = "      " ++ k_position ++ ": { " ++ k_line ++ ": pos.line, " ++ k_character ++ ": pos.character }", .why = "hover 坐标子对象键族——漂即 intField 拒、悬停永空（t2 P4 同骨）" },
+    .{ .needle = "only: codeActionOnly(context.only),", .why = "codeAction 的 kind 过滤器键须等于服务端 k_only 解析面——漂即 context.only 永不送达，source.fixAll 批量臂与保存时修复全静默" },
+    .{ .needle = "      " ++ k_newName ++ ",", .why = "重命名请求的新名键须等于服务端 k_newName 解析面——漂即新名取不到、F2 改名恒 null" },
+    .{ .needle = "request('" ++ m_workspaceSymbol ++ "', { " ++ k_query ++ " });", .why = "工作区符号请求的过滤键须等于服务端 k_query 解析面——漂即 query 丢弃、项目符号恒返回全量（过滤静默失效）" },
+    .{ .needle = k_positions ++ ": positions.map((p) => ({ " ++ k_line ++ ": p." ++ k_line ++ ", " ++ k_character ++ ": p." ++ k_character ++ " })),", .why = "智能扩选的 positions 逐位置映射键须等于服务端 k_positions/k_line/k_character 解析面——漂即位置丢失、扩选区链错位" },
 };
 
 /// 对面·`extension.js` 结果体字段族 needle 清单（守卫对面十三——同 220 `params_face` 形制，
@@ -316,6 +469,16 @@ pub const results_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "if (!res || !res." ++ k_contents ++ ")", .why = "hover 结果 contents 守门读——漂即悬停恒 null（t2 P3 静默面）" },
     .{ .needle = "res." ++ k_contents ++ "." ++ k_value ++ " ||", .why = "contents.value 读须等于 f_hover_result 写侧键——漂即悬停正文坠空串" },
     .{ .needle = "contentFormat: ['" ++ v_markdown ++ "'", .why = "hover 声明的 contentFormat 值须等于 f_hover_result 写侧 kind 值——漂即声明面与供给面格式分道（t2 P4 静默面）" },
+    .{ .needle = "new vscode.FoldingRange(r." ++ k_startLine ++ ", r." ++ k_endLine ++ ", r." ++ k_kind ++ " === '" ++ v_comment ++ "' ? vscode.FoldingRangeKind.Comment : undefined)", .why = "折叠区间读侧属性与 comment kind 映射须等于 f_fold_*/v_comment 写侧键值——漂即行号 undefined 或注释块丢色标、折叠静默全灭" },
+    .{ .needle = "Object.entries(res." ++ k_changes ++ ")", .why = "重命名结果 changes 表读侧键须等于写侧键——漂即编辑表取不到、F2 确认后零改动（静默未改最劣形）" },
+    .{ .needle = "h." ++ k_kind ++ " === " ++ std.fmt.comptimePrint("{d}", .{hk_write}) ++ " ? vscode.DocumentHighlightKind.Write : vscode.DocumentHighlightKind.Read", .why = "高亮项的 kind 读侧映射须等于写侧 hk_write 码值——漂即声明位与引用位同色，高亮语义静默塌陷" },
+    .{ .needle = k_placeholder ++ ": res." ++ k_placeholder, .why = "重命名预检的占位符读侧须等于写侧键——漂即 F2 输入框初值为空（预检形同虚设）" },
+    .{ .needle = "!Array.isArray(res." ++ k_signatures ++ ")", .why = "参数提示结果 signatures 数组守门读须等于写侧键——漂即每次请求恒 null，调用括号提示静默失效" },
+    .{ .needle = "(p) => new vscode.ParameterInformation(p." ++ k_label, .why = "逐参标签读侧属性须等于写侧 parameters[].label——漂即提示框只渲染签名、参数说明恒空" },
+    .{ .needle = "help." ++ k_activeParameter ++ " = res." ++ k_activeParameter, .why = "活动参数回写读侧键须等于写侧键——漂即永远高亮首个参数（多参调用提示错位）" },
+    .{ .needle = "s." ++ k_location ++ "." ++ k_uri ++ "), new vscode.Range(s." ++ k_location ++ "." ++ k_range ++ "." ++ k_start ++ ".line", .why = "工作区符号的 location.uri/range 读侧须等于写侧 f_workspace_symbol 字段——漂即 SymbolInformation 落错文件/错行" },
+    .{ .needle = "new vscode.SelectionRange(", .why = "扩选区链节重建须用 vscode.SelectionRange——漂即客户端丢弃整条链、扩选不生效" },
+    .{ .needle = "r." ++ k_parent ++ " ? toSelectionRange(r." ++ k_parent ++ ") : undefined", .why = "扩选区 parent 递归读侧须等于写侧 f_selection_node 键——漂即只扩到第一层，包围块/整文档永不入选" },
 };
 
 /// 对面·`extension.js` severity 码值映射面 needle 清单（守卫对面十四——同 `results_face`
@@ -413,11 +576,409 @@ fn byteOfPosition(text: []const u8, line: usize, character: usize) ?usize {
     return if (chars <= character) i else null;
 }
 
+/// 请求 Range → 字节区间；越界/逆序返 null（与 `byteOfPosition` 的「无结果」策略一致）。
+const ByteSpan = struct { start: usize, end: usize };
+
+fn rangeSpan(text: []const u8, r: std.json.ObjectMap) ?ByteSpan {
+    const s = objIn(r.get(k_start)) orelse return null;
+    const e = objIn(r.get(k_end)) orelse return null;
+    const sl = intField(s, k_line) orelse return null;
+    const sc = intField(s, k_character) orelse return null;
+    const el = intField(e, k_line) orelse return null;
+    const ec = intField(e, k_character) orelse return null;
+    if (sl < 0 or sc < 0 or el < 0 or ec < 0) return null;
+    const start = byteOfPosition(text, @intCast(sl), @intCast(sc)) orelse return null;
+    const end = byteOfPosition(text, @intCast(el), @intCast(ec)) orelse return null;
+    if (end < start) return null;
+    return .{ .start = start, .end = end };
+}
+
 /// 字节区间 [start,end) → LSP Range JSON 文本（调用方 free）。
 fn rangeJson(gpa: std.mem.Allocator, text: []const u8, start: usize, end: usize) ![]const u8 {
     const a = positionOfOffset(text, start);
     const b = positionOfOffset(text, end);
     return std.fmt.allocPrint(gpa, f_range_json, .{ a.line, a.character, b.line, b.character });
+}
+
+/// URI + 字节区间 → LSP Location JSON（调用方 free）。
+fn locationJson(gpa: std.mem.Allocator, text: []const u8, uri: []const u8, start: usize, end: usize) ![]const u8 {
+    const range = try rangeJson(gpa, text, start, end);
+    defer gpa.free(range);
+    const uri_js = try jsonrpc.jsonString(gpa, uri);
+    defer gpa.free(uri_js);
+    return std.fmt.allocPrint(gpa, "{{\"uri\":{s},\"range\":{s}}}", .{ uri_js, range });
+}
+
+// ---------------------------------------------------------------------------
+// 文档大纲（documentSymbol）：顶层声明扫描
+// ---------------------------------------------------------------------------
+
+/// 大纲项：kind 取 LSP SymbolKind（Function=12 / Variable=13 / Constant=14 / Enum=10 / Struct=23）。
+const Decl = struct {
+    kind: u32,
+    name: []const u8,
+    name_start: usize,
+    name_end: usize,
+};
+
+/// 声明词 → LSP SymbolKind；词表取当前语言包 keywords（不硬编码方言词）。
+fn declKind(lang: *const Pack, word: []const u8) ?u32 {
+    const zig = lang.keywords.get(word) orelse return null;
+    if (std.mem.eql(u8, zig, "fn")) return 12;
+    if (std.mem.eql(u8, zig, "struct")) return 23;
+    if (std.mem.eql(u8, zig, "enum")) return 10;
+    if (std.mem.eql(u8, zig, "union")) return 23;
+    if (std.mem.eql(u8, zig, "const")) return 14;
+    if (std.mem.eql(u8, zig, "var")) return 13;
+    return null;
+}
+
+/// 声明前的修饰词（公开/导出/外部/内联/计期/紧实等）跳过，继续找声明词。
+fn isDeclModifier(lang: *const Pack, word: []const u8) bool {
+    const zig = lang.keywords.get(word) orelse return false;
+    const mods = [_][]const u8{
+        "pub",         "export",    "extern",   "inline",   "noinline",
+        "threadlocal", "comptime",  "packed",   "callconv", "linksection",
+        "align",       "allowzero", "volatile",
+    };
+    for (mods) |m| if (std.mem.eql(u8, zig, m)) return true;
+    return false;
+}
+
+fn isSymbolDelim(c: u8) bool {
+    return switch (c) {
+        ' ', '\t', '\r', '(', ')', '{', '}', '[', ']', ':', ';', ',', '=', '!', '?', '*', '&', '|', '<', '>', '+', '-', '/', '%', '^', '~', '.' => true,
+        else => false,
+    };
+}
+
+/// 行内找「[修饰词]* 声明词 名称」；不是声明行/名称为关键字 → null。
+fn findDecl(lang: *const Pack, line: []const u8) ?Decl {
+    var i: usize = 0;
+    while (i < line.len) {
+        while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+        if (i >= line.len) return null;
+        const start = i;
+        while (i < line.len and !isSymbolDelim(line[i])) i += 1;
+        if (start == i) return null; // 行首标点：注释 `//`、闭合括号等
+        const word = line[start..i];
+        if (word[0] == '#') return null; // 行式注释/指令
+        if (isDeclModifier(lang, word)) continue;
+        const kind = declKind(lang, word) orelse return null;
+        while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+        const name_start = i;
+        while (i < line.len and !isSymbolDelim(line[i])) i += 1;
+        if (name_start == i) return null;
+        const name = line[name_start..i];
+        if (lang.keywords.get(name) != null) return null; // 关键字不能作声明名
+        return .{ .kind = kind, .name = name, .name_start = name_start, .name_end = i };
+    }
+    return null;
+}
+
+/// 声明名范围是否落在真实词元上（排除注释/字符串等非代码文本里伪造的零缩进行）。
+fn isCodeWord(toks: []const lexer.Token, start: usize, end: usize) bool {
+    for (toks) |t| {
+        if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+        if (t.off == start and t.off + t.len == end) return true;
+    }
+    return false;
+}
+
+/// 光标处代码词（词内或词尾回退）；注释/字符串/标点 → null。
+fn wordTokenAt(toks: []const lexer.Token, text: []const u8, off: usize) ?[]const u8 {
+    for (toks) |t| {
+        if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+        if (t.off <= off and off < t.off + t.len) return text[t.off..][0..t.len];
+    }
+    // 光标停在词尾（无后续词元）时回退取前一词元——编辑器 F12 常把位置落在末字符之后。
+    if (off > 0) {
+        for (toks) |t| {
+            if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+            if (t.off < off and t.off + t.len == off) return text[t.off..][0..t.len];
+        }
+    }
+    return null;
+}
+
+/// 光标前最近一个未闭合的 `(` 词元下标（括号配对向后回扫）；无 → null。
+/// 嵌套调用时取最内层：回扫遇 `)` 计深度、遇 `(` 先抵深度，深度 0 的 `(` 即目标。
+fn callParenBefore(toks: []const lexer.Token, text: []const u8, off: usize) ?usize {
+    var depth: usize = 0;
+    var i = toks.len;
+    while (i > 0) {
+        i -= 1;
+        const t = toks[i];
+        if (t.off >= off) continue; // 光标处/之后的词元不算（光标在 `(` 上时不当作已进括号）
+        if (t.kind != .punct or t.len != 1) continue;
+        switch (text[t.off]) {
+            ')' => depth += 1,
+            '(' => {
+                if (depth == 0) return i;
+                depth -= 1;
+            },
+            else => {},
+        }
+    }
+    return null;
+}
+
+/// 调用括号后到光标之间的顶层逗号数（即活动参数序）。嵌套括号/方括号/花括号里的
+/// 逗号不计；字符串整体是一个词元，故字符串里的逗号天然不切参数。
+fn activeParamAt(toks: []const lexer.Token, text: []const u8, open_off: usize, off: usize) usize {
+    var depth: usize = 0;
+    var n: usize = 0;
+    for (toks) |t| {
+        if (t.off <= open_off or t.off >= off) continue;
+        if (t.kind != .punct or t.len != 1) continue;
+        switch (text[t.off]) {
+            '(', '[', '{' => depth += 1,
+            ')', ']', '}' => {
+                if (depth > 0) depth -= 1;
+            },
+            ',' => {
+                if (depth == 0) n += 1;
+            },
+            else => {},
+        }
+    }
+    return n;
+}
+
+const NameRange = struct { start: usize, end: usize };
+
+/// 光标处代码词的绝对字节范围（词内或词尾回退）；注释/字符串/标点 → null。
+/// 与 `wordTokenAt` 同判据，供需要位置而非切片的调用方使用（第 274 轮 prepareRename）。
+fn wordRangeAt(toks: []const lexer.Token, off: usize) ?NameRange {
+    for (toks) |t| {
+        if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+        if (t.off <= off and off < t.off + t.len) return .{ .start = t.off, .end = t.off + t.len };
+    }
+    if (off > 0) {
+        for (toks) |t| {
+            if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+            if (t.off < off and t.off + t.len == off) return .{ .start = t.off, .end = t.off + t.len };
+        }
+    }
+    return null;
+}
+
+/// 光标所在整行的绝对字节范围（不含 `\n`，行尾剥 `\r`）；越界 → null。
+/// 与折叠/词元同源：扩选区链的第二层是「整行」，换行符不入选。
+fn lineRangeAt(text: []const u8, off: usize) ?NameRange {
+    if (off > text.len) return null;
+    var start = off;
+    while (start > 0 and text[start - 1] != '\n') start -= 1;
+    var end = off;
+    while (end < text.len and text[end] != '\n') end += 1;
+    if (end > start and text[end - 1] == '\r') end -= 1;
+    return .{ .start = start, .end = end };
+}
+
+/// 扩选区链的一节（绝对字节区间）。
+const SelRange = struct { start: usize, end: usize };
+
+/// `outer` 是否严格包含 `inner`（相等不算——链节须逐级外扩，同区去重）。
+fn selRangeContains(outer: SelRange, inner: SelRange) bool {
+    return outer.start <= inner.start and outer.end >= inner.end and
+        (outer.start < inner.start or outer.end > inner.end);
+}
+
+/// 只收严格包含当前末节的更大区间，保证 parent 链逐级外扩且无重复；首节（无末节）直收。
+fn pushContaining(gpa: std.mem.Allocator, list: *std.ArrayList(SelRange), r: SelRange) !void {
+    if (list.items.len > 0 and !selRangeContains(r, list.items[list.items.len - 1])) return;
+    try list.append(gpa, r);
+}
+
+/// 按跨度升序（内层先）；同跨度时起点大者先（同区内层）。
+fn selRangeLessThan(_: void, a: SelRange, b: SelRange) bool {
+    const a_len = a.end - a.start;
+    const b_len = b.end - b.start;
+    if (a_len != b_len) return a_len < b_len;
+    return a.start > b.start;
+}
+
+/// 按名称找首个顶层声明名称的绝对字节范围；无 → null。
+fn findTopLevelDecl(lang: *const Pack, toks: []const lexer.Token, text: []const u8, name: []const u8) ?NameRange {
+    var line_start: usize = 0;
+    while (line_start < text.len) {
+        const nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n');
+        var line_end = nl orelse text.len;
+        if (line_end > line_start and text[line_end - 1] == '\r') line_end -= 1;
+        const line = text[line_start..line_end];
+        var indent: usize = 0;
+        while (indent < line.len and (line[indent] == ' ' or line[indent] == '\t')) indent += 1;
+        if (indent == 0) {
+            if (findDecl(lang, line)) |d| {
+                if (std.mem.eql(u8, d.name, name)) {
+                    const start = line_start + d.name_start;
+                    const end = line_start + d.name_end;
+                    if (isCodeWord(toks, start, end)) return .{ .start = start, .end = end };
+                }
+            }
+        }
+        line_start = if (nl) |n| n + 1 else text.len;
+    }
+    return null;
+}
+
+/// 顶层声明项（第 275 轮从 collectSymbolsJson 抽出）：带整行范围，供大纲与工作区符号共用。
+const TopDecl = struct {
+    kind: u32,
+    name: []const u8,
+    name_start: usize,
+    name_end: usize,
+    line_start: usize,
+    line_end: usize,
+};
+
+/// 扫顶层（零缩进）声明；空文档/无声明 → 空切片。注释/字符串里的伪声明由词元校验排除。
+fn scanTopLevelDecls(gpa: std.mem.Allocator, lang: *const Pack, text: []const u8) ![]TopDecl {
+    const toks = try lexer.scan(gpa, text);
+    defer gpa.free(toks);
+    var items: std.ArrayList(TopDecl) = .empty;
+    errdefer items.deinit(gpa);
+    var line_start: usize = 0;
+    while (line_start < text.len) {
+        const nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n');
+        var line_end = nl orelse text.len;
+        if (line_end > line_start and text[line_end - 1] == '\r') line_end -= 1;
+        const line = text[line_start..line_end];
+        var indent: usize = 0;
+        while (indent < line.len and (line[indent] == ' ' or line[indent] == '\t')) indent += 1;
+        if (indent == 0) {
+            if (findDecl(lang, line)) |d| {
+                if (isCodeWord(toks, line_start + d.name_start, line_start + d.name_end)) {
+                    try items.append(gpa, .{
+                        .kind = d.kind,
+                        .name = d.name,
+                        .name_start = line_start + d.name_start,
+                        .name_end = line_start + d.name_end,
+                        .line_start = line_start,
+                        .line_end = line_end,
+                    });
+                }
+            }
+        }
+        line_start = if (nl) |n| n + 1 else text.len;
+    }
+    return items.toOwnedSlice(gpa);
+}
+
+/// 顶层函数签名（第 276 轮）：展示标签（声明词起至参数右括号）与逐参标签；均借用文档文本。
+const FnSig = struct {
+    label: []const u8,
+    params: []const []const u8,
+};
+
+/// 切单行函数声明的参数表：名称后 `(` 到配对 `)`，按顶层逗号分割并去两端空白；
+/// 无参数表/行内无配对右括号（跨行形不猜）→ null。标签从声明词起（保留「函数」等方言词）。
+fn parseFnSignature(gpa: std.mem.Allocator, line: []const u8, d: Decl) !?FnSig {
+    var i = d.name_end;
+    while (i < line.len and (line[i] == ' ' or line[i] == '\t')) i += 1;
+    if (i >= line.len or line[i] != '(') return null;
+    const open = i;
+    var depth: usize = 0;
+    var close: ?usize = null;
+    while (i < line.len) : (i += 1) {
+        if (line[i] == '(') {
+            depth += 1;
+        } else if (line[i] == ')') {
+            depth -= 1;
+            if (depth == 0) {
+                close = i;
+                break;
+            }
+        }
+    }
+    const cp = close orelse return null;
+    // 声明词起点：从名称回退跳过空白再取前一词（`公开 函数 名(…)` 的标签以「函数」起）。
+    var kw_start = d.name_start;
+    while (kw_start > 0 and (line[kw_start - 1] == ' ' or line[kw_start - 1] == '\t')) kw_start -= 1;
+    const kw_end = kw_start;
+    while (kw_start > 0 and !isSymbolDelim(line[kw_start - 1])) kw_start -= 1;
+    if (kw_start == kw_end) return null;
+    var items: std.ArrayList([]const u8) = .empty;
+    errdefer items.deinit(gpa);
+    var seg_start = open + 1;
+    var seg_depth: usize = 0;
+    var j = open + 1;
+    while (j <= cp) : (j += 1) {
+        const at_end = j == cp;
+        if (!at_end) {
+            const c = line[j];
+            if (c == '(' or c == '[' or c == '{') seg_depth += 1;
+            if ((c == ')' or c == ']' or c == '}') and seg_depth > 0) seg_depth -= 1;
+            if (!(c == ',' and seg_depth == 0)) continue;
+        }
+        var a = seg_start;
+        var b = j;
+        while (a < b and (line[a] == ' ' or line[a] == '\t')) a += 1;
+        while (b > a and (line[b - 1] == ' ' or line[b - 1] == '\t')) b -= 1;
+        if (b > a) try items.append(gpa, line[a..b]);
+        seg_start = j + 1;
+    }
+    return .{ .label = line[kw_start .. cp + 1], .params = try items.toOwnedSlice(gpa) };
+}
+
+/// 按名称找同文件顶层函数声明并切参数表（kind 12 = LSP SymbolKind Function）；
+/// 非函数声明/名称是注释或字符串伪造/跨行参数表 → null（词元校验同大纲）。
+fn findFnSignature(gpa: std.mem.Allocator, lang: *const Pack, toks: []const lexer.Token, text: []const u8, name: []const u8) !?FnSig {
+    var line_start: usize = 0;
+    while (line_start < text.len) {
+        const nl = std.mem.indexOfScalarPos(u8, text, line_start, '\n');
+        var line_end = nl orelse text.len;
+        if (line_end > line_start and text[line_end - 1] == '\r') line_end -= 1;
+        const line = text[line_start..line_end];
+        var indent: usize = 0;
+        while (indent < line.len and (line[indent] == ' ' or line[indent] == '\t')) indent += 1;
+        if (indent == 0) {
+            if (findDecl(lang, line)) |d| {
+                if (d.kind == 12 and std.mem.eql(u8, d.name, name) and
+                    isCodeWord(toks, line_start + d.name_start, line_start + d.name_end))
+                {
+                    if (try parseFnSignature(gpa, line, d)) |sig| return sig;
+                }
+            }
+        }
+        line_start = if (nl) |n| n + 1 else text.len;
+    }
+    return null;
+}
+
+/// 工作区符号命中项：文档 uri/全文 + 声明（名切片借用文档表文本）。
+const WsHit = struct { uri: []const u8, text: []const u8, decl: TopDecl };
+
+/// 工作区符号稳定序：先 uri 字典序，再声明位置（HashMap 迭代序不固定）。
+fn wsHitLessThan(_: void, a: WsHit, b: WsHit) bool {
+    switch (std.mem.order(u8, a.uri, b.uri)) {
+        .lt => return true,
+        .gt => return false,
+        .eq => return a.decl.name_start < b.decl.name_start,
+    }
+}
+
+/// 扫顶层（零缩进）声明，产出 LSP DocumentSymbol 数组；空文档/无声明 → `[]`。
+fn collectSymbolsJson(gpa: std.mem.Allocator, lang: *const Pack, text: []const u8) ![]const u8 {
+    const decls = try scanTopLevelDecls(gpa, lang, text);
+    defer gpa.free(decls);
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(gpa);
+    try buf.append(gpa, '[');
+    for (decls, 0..) |d, i| {
+        if (i > 0) try buf.append(gpa, ',');
+        const name_js = try jsonrpc.jsonString(gpa, d.name);
+        defer gpa.free(name_js);
+        const range = try rangeJson(gpa, text, d.line_start, d.line_end);
+        defer gpa.free(range);
+        const sel = try rangeJson(gpa, text, d.name_start, d.name_end);
+        defer gpa.free(sel);
+        const item = try std.fmt.allocPrint(gpa, "{{\"name\":{s},\"kind\":{d},\"range\":{s},\"selectionRange\":{s}}}", .{ name_js, d.kind, range, sel });
+        defer gpa.free(item);
+        try buf.appendSlice(gpa, item);
+    }
+    try buf.append(gpa, ']');
+    return buf.toOwnedSlice(gpa);
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +997,31 @@ fn objIn(v: ?std.json.Value) ?std.json.ObjectMap {
     return asObject(x);
 }
 
+/// 快速修复的 kind 过滤器（第 269 轮）：`context.only` 缺省 → 保持第 268 轮的
+/// 「光标处 quickfix」默认行为；一旦出现，则按成员分道（空数组/未知 kind → 空结果，
+/// 与 LSP「只在请求的 kind 内返回」一致）。`source.fixAll` 与 `quickfix` 可同时命中。
+const ActionFilter = struct { quickfix: bool, fix_all: bool };
+
+fn actionFilter(params_obj: ?std.json.ObjectMap) ActionFilter {
+    const p = params_obj orelse return .{ .quickfix = true, .fix_all = false };
+    const ctx = objIn(p.get(k_context)) orelse return .{ .quickfix = true, .fix_all = false };
+    const only_v = ctx.get(k_only) orelse return .{ .quickfix = true, .fix_all = false };
+    const arr = switch (only_v) {
+        .array => |a| a,
+        else => return .{ .quickfix = true, .fix_all = false },
+    };
+    var f: ActionFilter = .{ .quickfix = false, .fix_all = false };
+    for (arr.items) |it| {
+        const s = switch (it) {
+            .string => |sv| sv,
+            else => continue,
+        };
+        if (std.mem.eql(u8, s, v_quickfix)) f.quickfix = true;
+        if (std.mem.eql(u8, s, v_source_fix_all)) f.fix_all = true;
+    }
+    return f;
+}
+
 fn strField(obj: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const x = obj.get(key) orelse return null;
     return switch (x) {
@@ -448,6 +1034,14 @@ fn intField(obj: std.json.ObjectMap, key: []const u8) ?i64 {
     const x = obj.get(key) orelse return null;
     return switch (x) {
         .integer => |n| n,
+        else => null,
+    };
+}
+
+fn boolField(obj: std.json.ObjectMap, key: []const u8) ?bool {
+    const x = obj.get(key) orelse return null;
+    return switch (x) {
+        .bool => |b| b,
         else => null,
     };
 }
@@ -488,6 +1082,41 @@ fn itemsJoinAndFree(gpa: std.mem.Allocator, items: *std.ArrayList([]const u8)) !
     for (items.items) |s| gpa.free(s);
     items.clearAndFree(gpa);
     return joined;
+}
+
+/// 行首到 `off` 之间是否只有水平空白（判 `//` 是否独占行首——尾随注释不成块）。
+fn blankBefore(text: []const u8, begin: usize, off: usize) bool {
+    for (text[begin..off]) |c| {
+        if (c != ' ' and c != '\t' and c != '\r') return false;
+    }
+    return true;
+}
+
+/// 注释块落盘：单行块不出（无可隐藏行），多行块带 `kind:"comment"`。
+fn appendCommentFold(gpa: std.mem.Allocator, items: *std.ArrayList([]const u8), s: usize, e: usize) !void {
+    if (e <= s) return;
+    const item = try std.fmt.allocPrint(gpa, f_fold_comment, .{ s, e });
+    items.append(gpa, item) catch |err| {
+        gpa.free(item);
+        return err;
+    };
+}
+
+/// 重命名新名合法性（第 272 轮）：lexer 扫出恰一个代码词且覆盖全串（空格/点/引号/标点即拒）；
+/// ASCII 首字节不可为数字；全角/不可见字符复用 `translate.preCheck` 危险表（单一真值）。
+/// 关键字冲突不在本轮（与声明名同口径，编译期报错兜底）。
+fn validRenameName(gpa: std.mem.Allocator, name: []const u8) bool {
+    if (name.len == 0) return false;
+    const toks = lexer.scan(gpa, name) catch return false;
+    defer gpa.free(toks);
+    if (toks.len != 1) return false;
+    const t = toks[0];
+    if (t.off != 0 or t.len != name.len) return false;
+    if (t.kind != .ascii_word and t.kind != .nonascii_word) return false;
+    if (t.kind == .ascii_word and name[0] >= '0' and name[0] <= '9') return false;
+    const vs = translate.preCheck(gpa, name) catch return false;
+    defer gpa.free(vs);
+    return vs.len == 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -550,7 +1179,7 @@ pub const Server = struct {
             // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
             // semanticTokensProvider（第 161 轮）：声明语义 token 图例（token 类型索引即下表顺序）+ full 供给，
             // 把方言母语词汇的语义高亮据 LSP 标准面供任意客户端（编辑端渲染留 162）。
-            const res = "{\"capabilities\":{" ++ cap_sync_obj ++ "," ++ cap_hover ++ "," ++ cap_semtok ++ "}," ++ cap_server_info ++ "}";
+            const res = "{\"capabilities\":{" ++ cap_sync_obj ++ "," ++ cap_hover ++ "," ++ cap_semtok ++ "," ++ cap_docsym ++ "," ++ cap_def ++ "," ++ cap_refs ++ "," ++ cap_document_highlight ++ "," ++ cap_codeaction ++ "," ++ cap_folding ++ "," ++ cap_rename ++ "," ++ cap_workspace_symbol ++ "," ++ cap_signature_help ++ "," ++ cap_selection_range ++ "}," ++ cap_server_info ++ "}";
             try self.respond(out, idv, res);
             return;
         }
@@ -613,6 +1242,50 @@ pub const Server = struct {
         }
         if (std.mem.eql(u8, method, m_hover)) {
             try self.hover(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_documentSymbol)) {
+            try self.documentSymbol(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_definition)) {
+            try self.definition(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_references)) {
+            try self.references(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_documentHighlight)) {
+            try self.documentHighlight(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_codeAction)) {
+            try self.codeAction(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_foldingRange)) {
+            try self.foldingRange(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_rename)) {
+            try self.rename(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_prepareRename)) {
+            try self.prepareRename(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_workspaceSymbol)) {
+            try self.workspaceSymbol(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_signatureHelp)) {
+            try self.signatureHelp(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_selectionRange)) {
+            try self.selectionRange(out, idv, params_obj);
             return;
         }
         if (std.mem.eql(u8, method, m_semanticTokensFull)) {
@@ -748,6 +1421,706 @@ pub const Server = struct {
         const msg_js = try jsonrpc.jsonString(gpa, msg);
         defer gpa.free(msg_js);
         return std.fmt.allocPrint(gpa, f_fast_item, .{ range, sv_error, msg_js });
+    }
+
+    /// 文档大纲：取服务端自持文档表文本，扫顶层声明；文档不在表 → 空数组。
+    fn documentSymbol(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        result_json = try collectSymbolsJson(gpa, self.lang, text);
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "[]");
+    }
+
+    /// 工作区符号（第 275 轮）：按 `query` 子串过滤服务端文档表内各文档的顶层声明，
+    /// 返回 `SymbolInformation[]`（name/kind/location{uri,range}）；空 query 返回全部。
+    fn workspaceSymbol(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        const query = if (params_obj) |p| strField(p, k_query) orelse "" else "";
+        const res = try self.collectWorkspaceSymbolsJson(query);
+        defer gpa.free(res);
+        try self.respond(out, idv, res);
+    }
+
+    fn collectWorkspaceSymbolsJson(self: *Server, query: []const u8) ![]const u8 {
+        const gpa = self.gpa;
+        var hits: std.ArrayList(WsHit) = .empty;
+        defer hits.deinit(gpa);
+        var it = self.docs.iterator();
+        while (it.next()) |e| {
+            const uri = e.key_ptr.*;
+            const text = e.value_ptr.*;
+            const decls = try scanTopLevelDecls(gpa, self.lang, text);
+            defer gpa.free(decls);
+            for (decls) |d| {
+                if (query.len > 0 and std.mem.indexOf(u8, d.name, query) == null) continue;
+                try hits.append(gpa, .{ .uri = uri, .text = text, .decl = d });
+            }
+        }
+        std.mem.sort(WsHit, hits.items, {}, wsHitLessThan);
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(gpa);
+        try buf.append(gpa, '[');
+        for (hits.items, 0..) |h, i| {
+            if (i > 0) try buf.append(gpa, ',');
+            const name_js = try jsonrpc.jsonString(gpa, h.decl.name);
+            defer gpa.free(name_js);
+            const loc = try locationJson(gpa, h.text, h.uri, h.decl.name_start, h.decl.name_end);
+            defer gpa.free(loc);
+            const item = try std.fmt.allocPrint(gpa, f_workspace_symbol, .{ name_js, h.decl.kind, loc });
+            defer gpa.free(item);
+            try buf.appendSlice(gpa, item);
+        }
+        try buf.append(gpa, ']');
+        return buf.toOwnedSlice(gpa);
+    }
+
+    /// 参数提示（第 276 轮）：光标落在调用括号内时，按被调名找到同文件顶层函数声明，
+    /// 返回声明参数表与按顶层逗号计的活动参数；非调用处/成员调用/未知被调 → null。
+    fn signatureHelp(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
+                            if (line >= 0 and character >= 0) {
+                                if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                    result_json = try self.signatureHelpAt(text, off);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "null");
+    }
+
+    /// 光标处调用括号 → 被调名 → 同文件顶层函数签名；未命中一律 null（不猜）。
+    fn signatureHelpAt(self: *Server, text: []const u8, off: usize) !?[]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+        const pi = callParenBefore(toks, text, off) orelse return null;
+        if (pi == 0) return null;
+        const callee = toks[pi - 1];
+        if (callee.kind != .nonascii_word and callee.kind != .ascii_word) return null;
+        const name = text[callee.off..][0..callee.len];
+        // 成员调用（`接收者.名(`）不提示：同文件函数声明不候选成员解析，宁缺不错。
+        if (pi >= 2) {
+            const dot = toks[pi - 2];
+            if (dot.kind == .punct and dot.off + dot.len == callee.off and text[dot.off] == '.') return null;
+        }
+        const sig = (try findFnSignature(gpa, self.lang, toks, text, name)) orelse return null;
+        defer gpa.free(sig.params);
+
+        var params_buf: std.ArrayList(u8) = .empty;
+        defer params_buf.deinit(gpa);
+        for (sig.params, 0..) |p, i| {
+            if (i > 0) try params_buf.append(gpa, ',');
+            const p_js = try jsonrpc.jsonString(gpa, p);
+            defer gpa.free(p_js);
+            const item = try std.fmt.allocPrint(gpa, f_signature_param, .{p_js});
+            defer gpa.free(item);
+            try params_buf.appendSlice(gpa, item);
+        }
+        const label_js = try jsonrpc.jsonString(gpa, sig.label);
+        defer gpa.free(label_js);
+        const sig_item = try std.fmt.allocPrint(gpa, f_signature_item, .{ label_js, params_buf.items });
+        defer gpa.free(sig_item);
+        const active = activeParamAt(toks, text, toks[pi].off, off);
+        const clamped = if (sig.params.len == 0) 0 else @min(active, sig.params.len - 1);
+        return try std.fmt.allocPrint(gpa, f_signature_help, .{ sig_item, clamped });
+    }
+
+    /// 智能扩选（第 277 轮）：每个 position 返回一条由内到外的扩选链——词元 → 整行 →
+    /// 包围花括号块（由内到外）→ 整文档；位置非法时只回整文档（一条结果不缺）。
+    fn selectionRange(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        result_json = try self.selectionRangesJson(text, p.get(k_positions));
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "null");
+    }
+
+    /// `positions[]` → 逐位置同序的 `SelectionRange[]`；缺 positions/非数组 → null，空数组 → `[]`。
+    fn selectionRangesJson(self: *Server, text: []const u8, positions: ?std.json.Value) !?[]const u8 {
+        const gpa = self.gpa;
+        const arr = switch (positions orelse return null) {
+            .array => |a| a.items,
+            else => return null,
+        };
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(gpa);
+        try buf.append(gpa, '[');
+        for (arr, 0..) |v, i| {
+            if (i > 0) try buf.append(gpa, ',');
+            var off: ?usize = null;
+            if (asObject(v)) |m| {
+                const line = intField(m, k_line) orelse -1;
+                const character = intField(m, k_character) orelse -1;
+                if (line >= 0 and character >= 0) {
+                    off = byteOfPosition(text, @intCast(line), @intCast(character));
+                }
+            }
+            const chain = try self.selectionChainJson(text, off);
+            defer gpa.free(chain);
+            try buf.appendSlice(gpa, chain);
+        }
+        try buf.append(gpa, ']');
+        return try buf.toOwnedSlice(gpa);
+    }
+
+    /// 单位置扩选链：词元（词内/词尾才收）→ 整行 → 包围块（词元配对栈，按跨度内→外）→
+    /// 整文档。字符串/注释整体成词元，故其中的括号不参与配对；每步只收严格包含前节者。
+    fn selectionChainJson(self: *Server, text: []const u8, off0: ?usize) ![]const u8 {
+        const gpa = self.gpa;
+        var ranges: std.ArrayList(SelRange) = .empty;
+        defer ranges.deinit(gpa);
+        if (off0) |off| {
+            const toks = try lexer.scan(gpa, text);
+            defer gpa.free(toks);
+            if (wordRangeAt(toks, off)) |wr| {
+                try pushContaining(gpa, &ranges, .{ .start = wr.start, .end = wr.end });
+            }
+            if (lineRangeAt(text, off)) |lr| {
+                if (lr.start < lr.end) try pushContaining(gpa, &ranges, .{ .start = lr.start, .end = lr.end });
+            }
+            var opens: std.ArrayList(usize) = .empty; // 待配对开括号的绝对字节偏移
+            defer opens.deinit(gpa);
+            var blocks: std.ArrayList(SelRange) = .empty;
+            defer blocks.deinit(gpa);
+            for (toks) |t| {
+                if (t.kind != .punct or t.len != 1) continue;
+                switch (text[t.off]) {
+                    '{' => try opens.append(gpa, t.off),
+                    '}' => {
+                        const open = opens.pop() orelse continue;
+                        if (open < off and off <= t.off) {
+                            try blocks.append(gpa, .{ .start = open, .end = t.off + 1 });
+                        }
+                    },
+                    else => {},
+                }
+            }
+            std.mem.sort(SelRange, blocks.items, {}, selRangeLessThan);
+            for (blocks.items) |b| try pushContaining(gpa, &ranges, b);
+        }
+        try pushContaining(gpa, &ranges, .{ .start = 0, .end = text.len });
+        var chain: ?[]const u8 = null;
+        errdefer if (chain) |c| gpa.free(c);
+        // 链根须是最内层（词元），parent 逐级外扩：故从最外层向内折叠，后包者成新根。
+        var ri = ranges.items.len;
+        while (ri > 0) {
+            ri -= 1;
+            const r = ranges.items[ri];
+            const st = positionOfOffset(text, r.start);
+            const en = positionOfOffset(text, r.end);
+            const rj = try std.fmt.allocPrint(gpa, f_range_json, .{ st.line, st.character, en.line, en.character });
+            defer gpa.free(rj);
+            const old = chain;
+            chain = null;
+            const next = if (old) |inner| blk: {
+                const node = std.fmt.allocPrint(gpa, f_selection_node, .{ rj, inner }) catch |e| {
+                    gpa.free(inner);
+                    return e;
+                };
+                gpa.free(inner);
+                break :blk node;
+            } else try std.fmt.allocPrint(gpa, f_selection_leaf, .{rj});
+            chain = next;
+        }
+        return chain.?;
+    }
+
+    /// 跳转定义：同文件顶层声明名 → 声明位置；未命中/文档不在表 → null。
+    fn definition(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
+                            if (line >= 0 and character >= 0) {
+                                if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                    result_json = self.definitionAt(text, uri, off);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "null");
+    }
+
+    /// 光标词元 → 顶层声明位置（Location JSON）；注释/字符串/未命中 → null。
+    /// 仅同文件、仅顶层声明、同名多声明取首个；不做作用域消歧（名遮蔽场景可能跳错，边界入台账）。
+    fn definitionAt(self: *Server, text: []const u8, uri: []const u8, off: usize) ?[]const u8 {
+        const gpa = self.gpa;
+        const toks = lexer.scan(gpa, text) catch return null;
+        defer gpa.free(toks);
+        const w = wordTokenAt(toks, text, off) orelse return null;
+        const d = findTopLevelDecl(self.lang, toks, text, w) orelse return null;
+        return locationJson(gpa, text, uri, d.start, d.end) catch null;
+    }
+
+    /// 查找引用：同文件顶层声明名 → 全部词元位置；未命中 → []。
+    fn references(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
+                            if (line >= 0 and character >= 0) {
+                                if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                    var include_decl = true;
+                                    if (objIn(p.get(k_context))) |ctx| {
+                                        if (boolField(ctx, k_includeDeclaration)) |b| include_decl = b;
+                                    }
+                                    result_json = self.referencesAt(text, uri, off, include_decl) catch null;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "[]");
+    }
+
+    /// 同文件词元级引用收集；仅收与顶层声明同名的代码词元（字符串/注释自然排除）。
+    /// 边界：不做作用域消歧——同名局部变量/字段也会被计入；include_decl 控制声明项去留。
+    fn referencesAt(self: *Server, text: []const u8, uri: []const u8, off: usize, include_decl: bool) ![]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+        const w = wordTokenAt(toks, text, off) orelse return try gpa.dupe(u8, "[]");
+        const d = findTopLevelDecl(self.lang, toks, text, w) orelse return try gpa.dupe(u8, "[]");
+        var items: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (items.items) |s| gpa.free(s);
+            items.deinit(gpa);
+        }
+        for (toks) |t| {
+            if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+            if (!std.mem.eql(u8, text[t.off..][0..t.len], w)) continue;
+            const is_decl = t.off == d.start and t.off + t.len == d.end;
+            if (is_decl and !include_decl) continue;
+            const loc = try locationJson(gpa, text, uri, t.off, t.off + t.len);
+            items.append(gpa, loc) catch |e| {
+                gpa.free(loc);
+                return e;
+            };
+        }
+        return itemsJoinAndFree(gpa, &items);
+    }
+
+    /// `textDocument/documentHighlight`（第 273 轮）：光标词解析到同文件顶层声明后，
+    /// 收集全部同名代码词元——声明位标 Write、其余标 Read；未解析到声明 → []。
+    /// 边界：与 references/rename 同源同界，不做作用域消歧。
+    fn documentHighlight(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
+                            if (line >= 0 and character >= 0) {
+                                if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                    result_json = self.highlightAt(text, off) catch null;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "[]");
+    }
+
+    /// 顶层声明的全部同名代码词元 → DocumentHighlight JSON；非声明词 → []。
+    fn highlightAt(self: *Server, text: []const u8, off: usize) ![]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+        const w = wordTokenAt(toks, text, off) orelse return try gpa.dupe(u8, "[]");
+        const d = findTopLevelDecl(self.lang, toks, text, w) orelse return try gpa.dupe(u8, "[]");
+        var items: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (items.items) |s| gpa.free(s);
+            items.deinit(gpa);
+        }
+        for (toks) |t| {
+            if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+            if (!std.mem.eql(u8, text[t.off..][0..t.len], w)) continue;
+            const kind: u8 = if (t.off == d.start and t.off + t.len == d.end) hk_write else hk_read;
+            const range = try rangeJson(gpa, text, t.off, t.off + t.len);
+            defer gpa.free(range);
+            const item = try std.fmt.allocPrint(gpa, f_highlight_item, .{ range, kind });
+            items.append(gpa, item) catch |e| {
+                gpa.free(item);
+                return e;
+            };
+        }
+        return itemsJoinAndFree(gpa, &items);
+    }
+
+    /// `textDocument/rename`（第 272 轮）：同文件顶层声明的重命名——收集全部同名代码词元，
+    /// 产 `WorkspaceEdit`（`changes{uri:[{range,newText}]}`）。非声明光标、注释/字符串、
+    /// 非法新名 → null（编辑器不弹替换框）。
+    /// 边界：与 references 同源同界——不做作用域消歧（同名局部变量/字段会一并改）；
+    /// 新名不核关键字冲突（编译期报错兜底）。
+    fn rename(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (strField(p, k_newName)) |new_name| {
+                            if (objIn(p.get(k_position))) |pos| {
+                                const line = intField(pos, k_line) orelse -1;
+                                const character = intField(pos, k_character) orelse -1;
+                                if (line >= 0 and character >= 0 and validRenameName(gpa, new_name)) {
+                                    if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                        result_json = try self.renameAt(text, uri, off, new_name);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "null");
+    }
+
+    /// 顶层声明的全部同名代码词元 → WorkspaceEdit JSON；光标词不是声明名 → null。
+    fn renameAt(self: *Server, text: []const u8, uri: []const u8, off: usize, new_name: []const u8) !?[]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+        const w = wordTokenAt(toks, text, off) orelse return null;
+        _ = findTopLevelDecl(self.lang, toks, text, w) orelse return null;
+        const new_js = try jsonrpc.jsonString(gpa, new_name);
+        defer gpa.free(new_js);
+        const uri_js = try jsonrpc.jsonString(gpa, uri);
+        defer gpa.free(uri_js);
+        var edits: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (edits.items) |s| gpa.free(s);
+            edits.deinit(gpa);
+        }
+        for (toks) |t| {
+            if (t.kind != .nonascii_word and t.kind != .ascii_word) continue;
+            if (!std.mem.eql(u8, text[t.off..][0..t.len], w)) continue;
+            const range = try rangeJson(gpa, text, t.off, t.off + t.len);
+            defer gpa.free(range);
+            const item = try std.fmt.allocPrint(gpa, f_code_action_edit, .{ range, new_js });
+            edits.append(gpa, item) catch |e| {
+                gpa.free(item);
+                return e;
+            };
+        }
+        const edits_joined = try itemsJoinAndFree(gpa, &edits);
+        defer gpa.free(edits_joined);
+        return try std.fmt.allocPrint(gpa, f_workspace_edit, .{ uri_js, edits_joined });
+    }
+
+    /// `textDocument/prepareRename`（第 274 轮）：F2 预检——光标词解析到同文件顶层声明后，
+    /// 返回光标词范围与占位符；非声明词/字符串/注释/未打开文档 → null（不弹输入框）。
+    fn prepareRename(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
+                            if (line >= 0 and character >= 0) {
+                                if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                    result_json = try self.prepareRenameAt(text, off);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "null");
+    }
+
+    /// 光标词 + 顶层声明同界校验 → `{range, placeholder}`；不满足 → null。
+    fn prepareRenameAt(self: *Server, text: []const u8, off: usize) !?[]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+        const w = wordTokenAt(toks, text, off) orelse return null;
+        _ = findTopLevelDecl(self.lang, toks, text, w) orelse return null;
+        const span = wordRangeAt(toks, off) orelse return null;
+        const range = try rangeJson(gpa, text, span.start, span.end);
+        defer gpa.free(range);
+        const name_js = try jsonrpc.jsonString(gpa, w);
+        defer gpa.free(name_js);
+        return try std.fmt.allocPrint(gpa, f_prepare_rename, .{ range, name_js });
+    }
+
+    /// 快速修复（第 268 轮）：选区/光标处的全角标点 → 建议半角 ASCII 的 CodeAction。
+    /// 与快路诊断同源（`translate.preCheck` 复用 fullwidth 危险表），只对「有建议替换值」的
+    /// 违规出灯泡；零宽空格等 `ascii` 为空者不出（删除类修复不在本轮范围）。
+    fn codeAction(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        const f = actionFilter(p);
+                        var items: std.ArrayList([]const u8) = .empty;
+                        errdefer {
+                            for (items.items) |s| gpa.free(s);
+                            items.deinit(gpa);
+                        }
+                        // quickfix 臂需合法 range；source.fixAll 管全文，不依赖选区。
+                        if (f.quickfix) {
+                            if (objIn(p.get(k_range))) |r| {
+                                if (rangeSpan(text, r)) |span| {
+                                    try self.appendQuickfixes(text, uri, span.start, span.end, &items);
+                                }
+                            }
+                        }
+                        if (f.fix_all) {
+                            if (try self.fixAllItem(text, uri)) |it| {
+                                items.append(gpa, it) catch |e| {
+                                    gpa.free(it);
+                                    return e;
+                                };
+                            }
+                        }
+                        result_json = try itemsJoinAndFree(gpa, &items);
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "[]");
+    }
+
+    /// 选区内可替换的全角违规 → CodeAction JSON 数组；无可用修复时返回 `[]`。
+    fn fixActionsJson(self: *Server, text: []const u8, uri: []const u8, sel_start: usize, sel_end: usize) ![]const u8 {
+        const gpa = self.gpa;
+        var items: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (items.items) |s| gpa.free(s);
+            items.deinit(gpa);
+        }
+        try self.appendQuickfixes(text, uri, sel_start, sel_end, &items);
+        return itemsJoinAndFree(gpa, &items);
+    }
+
+    /// 把与选区/光标相交且有半角建议值的违规逐条追加为 quickfix 项。
+    fn appendQuickfixes(self: *Server, text: []const u8, uri: []const u8, sel_start: usize, sel_end: usize, items: *std.ArrayList([]const u8)) !void {
+        const gpa = self.gpa;
+        const vs = translate.preCheck(gpa, text) catch return;
+        defer gpa.free(vs);
+        const uri_js = try jsonrpc.jsonString(gpa, uri);
+        defer gpa.free(uri_js);
+        for (vs) |v| {
+            if (v.ascii.len == 0) continue; // 零宽空格等无建议替换值：不出「修复」
+            // 选区相交；空选区（光标）取违规范围含右边界的那一条——光标停在字符右侧也能修。
+            const hit = if (sel_start == sel_end)
+                (v.off <= sel_start and sel_start <= v.off + v.len)
+            else
+                (v.off < sel_end and v.off + v.len > sel_start);
+            if (!hit) continue;
+            const title = if (std.mem.eql(u8, v.ascii, " "))
+                try std.fmt.allocPrint(gpa, "{s}：替换为半角空格", .{v.hint})
+            else
+                try std.fmt.allocPrint(gpa, "{s}：替换为半角「{s}」", .{ v.hint, v.ascii });
+            defer gpa.free(title);
+            const title_js = try jsonrpc.jsonString(gpa, title);
+            defer gpa.free(title_js);
+            const range = try rangeJson(gpa, text, v.off, v.off + v.len);
+            defer gpa.free(range);
+            const new_js = try jsonrpc.jsonString(gpa, v.ascii);
+            defer gpa.free(new_js);
+            const item = try std.fmt.allocPrint(gpa, f_code_action, .{ title_js, uri_js, range, new_js });
+            items.append(gpa, item) catch |e| {
+                gpa.free(item);
+                return e;
+            };
+        }
+    }
+
+    /// 全文可替换违规 → 单条 `source.fixAll` 动作；无可修项时 null（不出空动作）。
+    fn fixAllItem(self: *Server, text: []const u8, uri: []const u8) !?[]const u8 {
+        const gpa = self.gpa;
+        const vs = translate.preCheck(gpa, text) catch return null;
+        defer gpa.free(vs);
+        var edits: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (edits.items) |s| gpa.free(s);
+            edits.deinit(gpa);
+        }
+        var n: usize = 0;
+        for (vs) |v| {
+            if (v.ascii.len == 0) continue;
+            const range = try rangeJson(gpa, text, v.off, v.off + v.len);
+            defer gpa.free(range);
+            const new_js = try jsonrpc.jsonString(gpa, v.ascii);
+            defer gpa.free(new_js);
+            const edit = try std.fmt.allocPrint(gpa, f_code_action_edit, .{ range, new_js });
+            edits.append(gpa, edit) catch |e| {
+                gpa.free(edit);
+                return e;
+            };
+            n += 1;
+        }
+        if (n == 0) {
+            for (edits.items) |s| gpa.free(s);
+            edits.deinit(gpa);
+            return null;
+        }
+        const edits_joined = try itemsJoinAndFree(gpa, &edits);
+        defer gpa.free(edits_joined);
+        const title = try std.fmt.allocPrint(gpa, "修复全文全角标点（{d} 处）", .{n});
+        defer gpa.free(title);
+        const title_js = try jsonrpc.jsonString(gpa, title);
+        defer gpa.free(title_js);
+        const uri_js = try jsonrpc.jsonString(gpa, uri);
+        defer gpa.free(uri_js);
+        return try std.fmt.allocPrint(gpa, f_fix_all_action, .{ title_js, uri_js, edits_joined });
+    }
+
+    /// `textDocument/foldingRange`（第 270/271 轮）：按 lexer 词元配对花括号，产结构化折叠区；
+    /// 第 271 轮叠加连续行首注释块（`kind:"comment"`）。字符串/注释整体成词元，故其中的括号
+    /// 不参与配对；单行块与单行注释不出折叠（无可隐藏行）。
+    /// 边界：`// #region` 标记仍由客户端 language-configuration 折叠。
+    fn foldingRange(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        result_json = self.foldingRangesJson(text) catch null;
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse "[]");
+    }
+
+    /// 花括号配对＋连续行首注释块 → `FoldingRange` JSON 数组；未闭合的开括号静默丢弃。
+    /// 行号单次扫进：词元按源码序排列，累计换行即可，不必逐括号重扫全文。
+    /// 注释块＝行首（仅水平空白）且与上一条注释行号紧邻的连续 `//` 行；尾随注释不入块、
+    /// 空行与代码行断开。块在遇到非注释词元或新块起点时落盘，次序即源码序。
+    fn foldingRangesJson(self: *Server, text: []const u8) ![]const u8 {
+        const gpa = self.gpa;
+        const toks = try lexer.scan(gpa, text);
+        defer gpa.free(toks);
+        var opens: std.ArrayList(usize) = .empty; // 待配对开括号所在行
+        defer opens.deinit(gpa);
+        var items: std.ArrayList([]const u8) = .empty;
+        errdefer {
+            for (items.items) |s| gpa.free(s);
+            items.deinit(gpa);
+        }
+        var line: usize = 0;
+        var scanned: usize = 0;
+        var line_begin: usize = 0; // 当前行首字节偏移：判注释是否独占行首
+        var prev: ?struct { s: usize, e: usize } = null;
+        var cblock: ?struct { s: usize, e: usize } = null;
+        for (toks) |t| {
+            while (scanned < t.off) : (scanned += 1) {
+                if (text[scanned] == '\n') {
+                    line += 1;
+                    line_begin = scanned + 1;
+                }
+            }
+            if (t.kind == .comment) {
+                if (blankBefore(text, line_begin, t.off)) {
+                    if (cblock) |b| {
+                        if (b.e + 1 == line) {
+                            cblock = .{ .s = b.s, .e = line };
+                            continue;
+                        }
+                        try appendCommentFold(gpa, &items, b.s, b.e);
+                    }
+                    cblock = .{ .s = line, .e = line };
+                } else if (cblock) |b| {
+                    // 尾随注释打断块：先落已收块，本行不入任何块。
+                    try appendCommentFold(gpa, &items, b.s, b.e);
+                    cblock = null;
+                }
+                continue;
+            }
+            if (cblock) |b| {
+                try appendCommentFold(gpa, &items, b.s, b.e);
+                cblock = null;
+            }
+            if (t.kind != .punct or t.len != 1) continue;
+            switch (text[t.off]) {
+                '{' => try opens.append(gpa, line),
+                '}' => {
+                    const open_line = opens.pop() orelse continue;
+                    if (line == open_line) continue; // 单行块无可隐藏行
+                    // 嵌套同跨度的块（`{ if (x) { … } }` 共两行）去重，避免两个同区折叠标记。
+                    if (prev) |p| {
+                        if (p.s == open_line and p.e == line) continue;
+                    }
+                    prev = .{ .s = open_line, .e = line };
+                    const item = try std.fmt.allocPrint(gpa, f_fold_item, .{ open_line, line });
+                    items.append(gpa, item) catch |e| {
+                        gpa.free(item);
+                        return e;
+                    };
+                },
+                else => {},
+            }
+        }
+        if (cblock) |b| try appendCommentFold(gpa, &items, b.s, b.e);
+        return itemsJoinAndFree(gpa, &items);
     }
 
     /// 悬停：光标词（含点链）反查语言包；未命中/越界/文档不在表 → result null。
@@ -963,6 +2336,22 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     // 第 214 轮 D82 手抄清剿：图例段断言改以 hub 派生的 legend_json 构造（改图例则断言随动，
     // 杜绝「应答与测各抄一份、一改两红」的自照形制）。
     try testing.expect(std.mem.indexOf(u8, out.items[0], cap_semtok) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_docsym) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_def) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_refs) != null);
+    // 第 273 轮：新增同文件同名符号高亮供给能力。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_document_highlight) != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_codeaction) != null);
+    // 第 270 轮：新增结构化折叠供给能力（花括号配对）。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_folding) != null);
+    // 第 272 轮：新增同文件顶层声明重命名供给能力。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_rename) != null);
+    // 第 275 轮：新增工作区符号供给能力。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_workspace_symbol) != null);
+    // 第 276 轮：新增参数提示供给能力（触发字符形）。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_signature_help) != null);
+    // 第 277 轮：新增智能扩选供给能力。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_selection_range) != null);
 }
 
 test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 对面 needle 形钉：片段组合／值形／serverInfo 程序名派生／cap_face 同源基数／近名负例" {
@@ -976,15 +2365,35 @@ test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 �
     );
     // A2 各 capability 值形钉（本族基线；改形须同时过写侧应答、自测、ps1 守卫对面二十）。
     try testing.expectEqualStrings("\"hoverProvider\":true", cap_hover);
+    try testing.expectEqualStrings("\"documentSymbolProvider\":true", cap_docsym);
+    try testing.expectEqualStrings("\"definitionProvider\":true", cap_def);
+    try testing.expectEqualStrings("\"referencesProvider\":true", cap_refs);
+    try testing.expectEqualStrings("\"documentHighlightProvider\":true", cap_document_highlight);
+    try testing.expectEqualStrings("\"codeActionProvider\":true", cap_codeaction);
+    try testing.expectEqualStrings("\"foldingRangeProvider\":true", cap_folding);
+    try testing.expectEqualStrings("\"renameProvider\":{\"prepareProvider\":true}", cap_rename);
+    try testing.expectEqualStrings("\"workspaceSymbolProvider\":true", cap_workspace_symbol);
+    try testing.expectEqualStrings("\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}", cap_signature_help);
+    try testing.expectEqualStrings("\"selectionRangeProvider\":true", cap_selection_range);
     try testing.expectEqualStrings("\"semanticTokensProvider\"", cap_semtok_key);
     try testing.expectEqualStrings("\"serverInfo\":{\"name\":\"zzc-lsp\"}", cap_server_info);
     // A3 serverInfo 名程序名派生钉：随 D78 prog_name 真值动（脱钩即此处红·承 matcher_name 形制）。
     try testing.expectEqualStrings("\"serverInfo\":{\"name\":\"" ++ paths.prog_name ++ "-lsp\"}", cap_server_info);
-    // A4 cap_face 同源与基数钉：三枚 needle 逐字节等于写侧 cap_* 常量（守卫据此对 ps1 实文，针源=写侧源）。
-    try testing.expectEqual(@as(usize, 3), cap_face.len);
+    // A4 cap_face 同源与基数钉：十三枚 needle 逐字节等于写侧 cap_* 常量（守卫据此对 ps1 实文，针源=写侧源）。
+    try testing.expectEqual(@as(usize, 13), cap_face.len);
     try testing.expectEqualStrings(cap_sync_obj, cap_face[0].needle);
     try testing.expectEqualStrings(cap_hover, cap_face[1].needle);
     try testing.expectEqualStrings(cap_semtok_key, cap_face[2].needle);
+    try testing.expectEqualStrings(cap_docsym, cap_face[3].needle);
+    try testing.expectEqualStrings(cap_def, cap_face[4].needle);
+    try testing.expectEqualStrings(cap_refs, cap_face[5].needle);
+    try testing.expectEqualStrings(cap_document_highlight, cap_face[6].needle);
+    try testing.expectEqualStrings(cap_codeaction, cap_face[7].needle);
+    try testing.expectEqualStrings(cap_folding, cap_face[8].needle);
+    try testing.expectEqualStrings(cap_rename, cap_face[9].needle);
+    try testing.expectEqualStrings(cap_workspace_symbol, cap_face[10].needle);
+    try testing.expectEqualStrings(cap_signature_help, cap_face[11].needle);
+    try testing.expectEqualStrings(cap_selection_range, cap_face[12].needle);
     // A5 判据小样：真形命中、change:1→2 漂形即缺（t2 P1/P3 消费侧漂形转锚·防子串假命中）。
     const ps1_good = "Contains('" ++ cap_sync_obj ++ "')";
     const ps1_drift = "Contains('\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}}')";
@@ -1172,6 +2581,656 @@ test "lsp.server：hover 点链别名整体取词（标准库.调试.打印 形�
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.zz\"},\"position\":{\"line\":0,\"character\":4}}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "std.debug.print") != null);
+}
+
+test "lsp.server：codeAction 全角标点快速修复／选区不相交出空／无建议值不出修复（第 268 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    const doc_text = "常数 甲 = 1，\n常数 乙 = 2；\n";
+    const text_js = try jsonrpc.jsonString(gpa, doc_text);
+    const open = try std.fmt.allocPrint(gpa, "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///fix.zz\",\"text\":{s}}}}}}}", .{text_js});
+    defer gpa.free(open);
+    try srv.handle(open, &out);
+    freeOut(gpa, &out);
+
+    // 光标（空选区）落在全角逗号上：一条 quickfix，范围恰为逗号本身，newText 为半角逗号。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":8},\"end\":{\"line\":0,\"character\":8}},\"context\":{\"diagnostics\":[]}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "全角逗号") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":\"quickfix\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"newText\":\",\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"range\":{\"start\":{\"line\":0,\"character\":8},\"end\":{\"line\":0,\"character\":9}}") != null);
+
+    // 选区与违规不交叠（行首两字）：空数组，不给全局修复。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":2}},\"context\":{\"diagnostics\":[]}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+
+    // 无建议替换值的违规（零宽空格）不出「修复」——先钉「确有此违规」，再验空数组。
+    const zw = "常数 甲 = 1;\u{200B}";
+    const vs = try translate.preCheck(gpa, zw);
+    defer gpa.free(vs);
+    var zero_ascii = false;
+    for (vs) |v| {
+        if (v.ascii.len == 0) zero_ascii = true;
+    }
+    try testing.expect(zero_ascii);
+    const none = try srv.fixActionsJson(zw, "file:///fix.zz", 0, zw.len);
+    defer gpa.free(none);
+    try testing.expectEqualStrings("[]", none);
+
+    // 文档级 source.fixAll（第 269 轮）：只在 context.only 请求时返回；单条动作
+    // 批量覆盖全文两处违规，不混入单点 quickfix。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":0}},\"context\":{\"diagnostics\":[],\"only\":[\"source.fixAll\"]}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":\"source.fixAll\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "修复全文全角标点（2 处）") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"newText\":\",\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"newText\":\";\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":\"quickfix\"") == null);
+
+    // only 只要 quickfix：仍只出单点臂，批量动作不混入。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":8},\"end\":{\"line\":0,\"character\":8}},\"context\":{\"diagnostics\":[],\"only\":[\"quickfix\"]}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":\"quickfix\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "source.fixAll") == null);
+
+    // 空 only / 未知 kind：严格按 LSP「只在请求的 kind 内返回」→ 空数组。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":8},\"end\":{\"line\":0,\"character\":8}},\"context\":{\"diagnostics\":[],\"only\":[]}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":8},\"end\":{\"line\":0,\"character\":8}},\"context\":{\"diagnostics\":[],\"only\":[\"source.organizeImports\"]}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+
+    // 全文无可修项时不出空动作（零宽空格无建议值）。
+    const no_fix_all = try srv.fixAllItem(zw, "file:///fix.zz");
+    try testing.expect(no_fix_all == null);
+}
+
+test "lsp.server：foldingRange 花括号配对／单行块略过／字符串与注释内括号不误判（第 270 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    const doc_text = "公开 函数 主函数() !空 {\n" ++
+        "    如果 (真) {\n" ++
+        "        标准库.调试.打印(\"括号 { 与 } 不参与\\n\", .{});\n" ++
+        "    }\n" ++
+        "    // 注释里的 } 不参与\n" ++
+        "}\n" ++
+        "常数 单行 = .{ 1, 2 };\n" ++
+        "}\n";
+    const text_js = try jsonrpc.jsonString(gpa, doc_text);
+    const open = try std.fmt.allocPrint(gpa, "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///fold.zz\",\"text\":{s}}}}}}}", .{text_js});
+    defer gpa.free(open);
+    try srv.handle(open, &out);
+    freeOut(gpa, &out);
+
+    // 内层块先闭合先出；字符串/注释内的括号不参与；单行块与孤立闭括号略过。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/foldingRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///fold.zz\"}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[{\"startLine\":1,\"endLine\":3},{\"startLine\":0,\"endLine\":5}]") != null);
+
+    // 未打开文档 → 空数组（与 hover/semantic 同策）。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/foldingRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///nope.zz\"}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+
+    // 嵌套同跨度去重：两个 `{` 与两个 `}` 各居首尾两行，只出一个折叠区。
+    const dedup = try srv.foldingRangesJson("公开 函数 甲() 空 { 如果 (真) {\n乙();\n} }\n");
+    defer gpa.free(dedup);
+    try testing.expectEqualStrings("[{\"startLine\":0,\"endLine\":2}]", dedup);
+
+    // 未闭合开括号静默丢弃（词法级容错，不因半截源码拒绝其余块）。
+    const unclosed = try srv.foldingRangesJson("公开 函数 乙() 空 {\n乙();\n");
+    defer gpa.free(unclosed);
+    try testing.expectEqualStrings("[]", unclosed);
+}
+
+test "lsp.server：foldingRange 注释块——连续行成块／空行与代码断开／尾随注释不入块（第 271 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    // 三行行首注释成块；空行断开后两行成第二块且不吸收尾随注释；
+    // 函数体内注释块与花括号块并存，块先于其后的词元落盘（源码序）。
+    const doc = "// 第一行\n" ++
+        "// 第二行\n" ++
+        "// 第三行\n" ++
+        "\n" ++
+        "// 甲\n" ++
+        "// 乙\n" ++
+        "常数 甲 = 1; // 尾随不入块\n" ++
+        "公开 函数 主函数() 空 {\n" ++
+        "    // 体内一\n" ++
+        "    // 体内二\n" ++
+        "    甲();\n" ++
+        "}\n";
+    const folds = try srv.foldingRangesJson(doc);
+    defer gpa.free(folds);
+    try testing.expectEqualStrings("[{\"startLine\":0,\"endLine\":2,\"kind\":\"comment\"}," ++
+        "{\"startLine\":4,\"endLine\":5,\"kind\":\"comment\"}," ++
+        "{\"startLine\":8,\"endLine\":9,\"kind\":\"comment\"}," ++
+        "{\"startLine\":7,\"endLine\":11}]", folds);
+
+    // 尾随注释不能自成块：两行尾随各自独立→无折叠。
+    const trailing = try srv.foldingRangesJson("甲(); // 一\n乙(); // 二\n");
+    defer gpa.free(trailing);
+    try testing.expectEqualStrings("[]", trailing);
+
+    // 单行注释不出折叠（无可隐藏行）。
+    const single = try srv.foldingRangesJson("// 独占一行\n甲();\n");
+    defer gpa.free(single);
+    try testing.expectEqualStrings("[]", single);
+}
+
+test "lsp.server：rename 顶层声明全量改名／非法新名与非声明光标拒改（第 272 轮）" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+
+    const doc = "常数 标准库 = 导入(\"std\");\n" ++
+        "公开 函数 主函数() !空 {\n" ++
+        "    标准库.调试.打印(\"标准库\", .{});\n" ++
+        "}\n" ++
+        "// 标准库\n";
+    const text_js = try jsonrpc.jsonString(gpa, doc);
+    const open = try std.fmt.allocPrint(gpa, "{{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///ren.zz\",\"text\":{s}}}}}}}", .{text_js});
+    try srv.handle(open, &out);
+    freeOut(gpa, &out);
+
+    // A1 从引用处发起：声明与引用两处编辑；字符串/注释内的同名不参与。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///ren.zz\"},\"position\":{\"line\":2,\"character\":4},\"newName\":\"工具\"}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":{\"changes\":{\"file:///ren.zz\":[" ++
+        "{\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":6}},\"newText\":\"工具\"}," ++
+        "{\"range\":{\"start\":{\"line\":2,\"character\":4},\"end\":{\"line\":2,\"character\":7}},\"newText\":\"工具\"}]}}") != null);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.items[0], "\"newText\":\"工具\""));
+
+    // A2 从声明处发起：与引用处同集合（changes 表同键、编辑数仍为 2）。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///ren.zz\"},\"position\":{\"line\":0,\"character\":4},\"newName\":\"工具\"}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"changes\":{\"file:///ren.zz\":[") != null);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.items[0], "\"newText\":\"工具\""));
+
+    // A3 非法新名：空串/含空格/含点/数字开头 → null（编辑器不弹替换框）。
+    const bad_names = [_][]const u8{ "", "工具 甲", "工具.调试", "1工具" };
+    for (bad_names) |bad| {
+        freeOut(gpa, &out);
+        const req = try std.fmt.allocPrint(gpa, "{{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/rename\",\"params\":{{\"textDocument\":{{\"uri\":\"file:///ren.zz\"}},\"position\":{{\"line\":2,\"character\":4}},\"newName\":\"{s}\"}}}}", .{bad});
+        try srv.handle(req, &out);
+        try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+    }
+
+    // A4 非声明光标：成员调用词与字符串内词均拒改。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///ren.zz\"},\"position\":{\"line\":2,\"character\":11},\"newName\":\"工具\"}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///ren.zz\"},\"position\":{\"line\":2,\"character\":15},\"newName\":\"工具\"}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+
+    // A5 未打开文档 → null；新名合法性闸直接钉（含引号/注释/标点形态）。
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"file:///none.zz\"},\"position\":{\"line\":0,\"character\":0},\"newName\":\"工具\"}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+    try testing.expect(validRenameName(gpa, "工具"));
+    try testing.expect(validRenameName(gpa, "abc"));
+    try testing.expect(validRenameName(gpa, "zh_1"));
+    try testing.expect(!validRenameName(gpa, ""));
+    try testing.expect(!validRenameName(gpa, "\"工具\""));
+    try testing.expect(!validRenameName(gpa, "// 工具"));
+    try testing.expect(!validRenameName(gpa, "工具；"));
+}
+
+test "第 273 轮 documentHighlight：声明位 Write／引用位 Read／字符串注释不混入／非声明词空数组" {
+    const tg = testing.allocator;
+    // A1 协议码值钉：LSP DocumentHighlightKind 1/2/3——客户端映射针由 hk_write 派生。
+    try testing.expectEqual(@as(u8, 1), hk_text);
+    try testing.expectEqual(@as(u8, 2), hk_read);
+    try testing.expectEqual(@as(u8, 3), hk_write);
+    // A2 模板 round-trip：range + kind 渲染后以 k_* 回读。
+    {
+        const rg = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 0), @as(usize, 1), @as(usize, 0), @as(usize, 3) });
+        defer tg.free(rg);
+        const one = try std.fmt.allocPrint(tg, f_highlight_item, .{ rg, hk_write });
+        defer tg.free(one);
+        var p = try std.json.parseFromSlice(std.json.Value, tg, one, .{});
+        defer p.deinit();
+        const o = asObject(p.value).?;
+        try testing.expect(objIn(o.get(k_range)) != null);
+        try testing.expectEqual(@as(i64, hk_write), intField(o, k_kind).?);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    const text =
+        "常数 上限 = 1;\n" ++
+        "函数 主函数() 空 {\n" ++
+        "    返回 上限;\n" ++
+        "}\n" ++
+        "常数 提示 = \"上限\";\n" ++
+        "// 上限\n";
+    const uri = "file:///h.zz";
+    const decl_off = std.mem.indexOf(u8, text, "上限").?;
+    const ret_off = std.mem.indexOf(u8, text, "返回").?;
+    const ref_off = std.mem.indexOfPos(u8, text, ret_off, "上限").?;
+
+    // A3 从声明发起：声明位 Write(3)、函数体引用位 Read(2)；字符串/注释同名不混入。
+    const from_decl = try srv.highlightAt(text, decl_off);
+    defer gpa.free(from_decl);
+    try testing.expectEqualStrings(
+        "[{\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":5}},\"kind\":3}," ++
+            "{\"range\":{\"start\":{\"line\":2,\"character\":7},\"end\":{\"line\":2,\"character\":9}},\"kind\":2}]",
+        from_decl,
+    );
+    // A4 从引用发起：与声明发起同集（同词元扫描，不因光标位置改归属）。
+    const from_ref = try srv.highlightAt(text, ref_off);
+    defer gpa.free(from_ref);
+    try testing.expectEqualStrings(from_decl, from_ref);
+
+    // A5 字符串/注释/非声明词（关键字）→ 空数组。
+    const str_off = (std.mem.indexOf(u8, text, "\"上限\"") orelse return error.TestUnexpectedResult) + 1;
+    const empty1 = try srv.highlightAt(text, str_off);
+    defer gpa.free(empty1);
+    try testing.expectEqualStrings("[]", empty1);
+    const cmt_off = (std.mem.indexOf(u8, text, "// 上限") orelse return error.TestUnexpectedResult) + 3;
+    const empty2 = try srv.highlightAt(text, cmt_off);
+    defer gpa.free(empty2);
+    try testing.expectEqualStrings("[]", empty2);
+    const empty3 = try srv.highlightAt(text, ret_off);
+    defer gpa.free(empty3);
+    try testing.expectEqualStrings("[]", empty3);
+
+    // A6 dispatch：打开文档后从声明处请求 → 真应答（两项、两种 kind）；未打开文档 → []。
+    try srv.upsertDoc(uri, text);
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"textDocument/documentHighlight\",\"params\":{\"textDocument\":{\"uri\":\"file:///h.zz\"},\"position\":{\"line\":0,\"character\":3}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":11") != null);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, out.items[0], "\"kind\":"));
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":3") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":2") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"textDocument/documentHighlight\",\"params\":{\"textDocument\":{\"uri\":\"file:///none.zz\"},\"position\":{\"line\":0,\"character\":0}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+}
+
+test "第 274 轮 prepareRename：声明/引用/词尾三入口范围与占位符／字符串注释非声明词 null" {
+    const tg = testing.allocator;
+    // A1 模板 round-trip：range + placeholder 渲染后以 k_* 回读。
+    {
+        const rg = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 0), @as(usize, 3), @as(usize, 0), @as(usize, 5) });
+        defer tg.free(rg);
+        const name_js = try jsonrpc.jsonString(tg, "上限");
+        defer tg.free(name_js);
+        const one = try std.fmt.allocPrint(tg, f_prepare_rename, .{ rg, name_js });
+        defer tg.free(one);
+        var p = try std.json.parseFromSlice(std.json.Value, tg, one, .{});
+        defer p.deinit();
+        const o = asObject(p.value).?;
+        try testing.expect(objIn(o.get(k_range)) != null);
+        try testing.expectEqualStrings("上限", strField(o, k_placeholder).?);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    const text =
+        "常数 上限 = 1;\n" ++
+        "函数 主函数() 空 {\n" ++
+        "    返回 上限;\n" ++
+        "}\n" ++
+        "常数 提示 = \"上限\";\n" ++
+        "// 上限\n";
+    const uri = "file:///p.zz";
+    const decl_off = std.mem.indexOf(u8, text, "上限").?;
+    const ret_off = std.mem.indexOf(u8, text, "返回").?;
+    const ref_off = std.mem.indexOfPos(u8, text, ret_off, "上限").?;
+
+    // A2 声明处：范围即声明词，占位符即旧名。
+    const from_decl = (try srv.prepareRenameAt(text, decl_off)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(from_decl);
+    try testing.expectEqualStrings("{\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":5}},\"placeholder\":\"上限\"}", from_decl);
+    // A3 引用处：范围为光标词本身（非声明位），占位符同旧名。
+    const from_ref = (try srv.prepareRenameAt(text, ref_off)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(from_ref);
+    try testing.expectEqualStrings("{\"range\":{\"start\":{\"line\":2,\"character\":7},\"end\":{\"line\":2,\"character\":9}},\"placeholder\":\"上限\"}", from_ref);
+    // A4 词尾回退：光标停在末字符之后仍取前一词元。
+    const tail = (try srv.prepareRenameAt(text, ref_off + "上限".len)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(tail);
+    try testing.expectEqualStrings(from_ref, tail);
+
+    // A5 字符串/注释/非声明词 → null（不可改名处不弹 F2 输入框）。
+    const str_off = (std.mem.indexOf(u8, text, "\"上限\"") orelse return error.TestUnexpectedResult) + 1;
+    try testing.expect((try srv.prepareRenameAt(text, str_off)) == null);
+    const cmt_off = (std.mem.indexOf(u8, text, "// 上限") orelse return error.TestUnexpectedResult) + 3;
+    try testing.expect((try srv.prepareRenameAt(text, cmt_off)) == null);
+    try testing.expect((try srv.prepareRenameAt(text, ret_off)) == null);
+
+    // A6 dispatch：打开文档后真应答；未打开文档 → null。
+    try srv.upsertDoc(uri, text);
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":13,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"file:///p.zz\"},\"position\":{\"line\":2,\"character\":7}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":13") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"placeholder\":\"上限\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"line\":2,\"character\":7") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":14,\"method\":\"textDocument/prepareRename\",\"params\":{\"textDocument\":{\"uri\":\"file:///none.zz\"},\"position\":{\"line\":0,\"character\":0}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+}
+
+test "第 275 轮 workspace/symbol：多文档顶层声明聚合与 query 过滤／location 字段／关闭即出表" {
+    const tg = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(tg);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    // 两份已打开文档；a.zz 内另含缩进声明与关键字引用，验顶层边界。
+    try srv.upsertDoc("file:///b.zz", "常数 乙项 = 2;\n");
+    try srv.upsertDoc("file:///a.zz", "常数 上限 = 1;\n" ++
+        "函数 主函数() 空 {\n" ++
+        "    常数 内层 = 3;\n" ++
+        "    返回 上限;\n" ++
+        "}\n");
+
+    // A1 空 query：两份文档三枚顶层声明按 (uri, 声明位置) 稳定排序，location 带 name 范围。
+    const all = try srv.collectWorkspaceSymbolsJson("");
+    defer gpa.free(all);
+    try testing.expectEqualStrings(
+        "[{\"name\":\"上限\",\"kind\":14,\"location\":{\"uri\":\"file:///a.zz\",\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":5}}}}," ++
+            "{\"name\":\"主函数\",\"kind\":12,\"location\":{\"uri\":\"file:///a.zz\",\"range\":{\"start\":{\"line\":1,\"character\":3},\"end\":{\"line\":1,\"character\":6}}}}," ++
+            "{\"name\":\"乙项\",\"kind\":14,\"location\":{\"uri\":\"file:///b.zz\",\"range\":{\"start\":{\"line\":0,\"character\":3},\"end\":{\"line\":0,\"character\":5}}}}]",
+        all,
+    );
+    // A2 query 子串过滤：命中一枚；无匹配 → 空数组。
+    const one = try srv.collectWorkspaceSymbolsJson("主");
+    defer gpa.free(one);
+    try testing.expectEqualStrings(
+        "[{\"name\":\"主函数\",\"kind\":12,\"location\":{\"uri\":\"file:///a.zz\",\"range\":{\"start\":{\"line\":1,\"character\":3},\"end\":{\"line\":1,\"character\":6}}}}]",
+        one,
+    );
+    const none = try srv.collectWorkspaceSymbolsJson("不存在");
+    defer gpa.free(none);
+    try testing.expectEqualStrings("[]", none);
+    // A3 顶层边界：缩进声明与关键字引用都不入结果。
+    const inner = try srv.collectWorkspaceSymbolsJson("内层");
+    defer gpa.free(inner);
+    try testing.expectEqualStrings("[]", inner);
+    const kw = try srv.collectWorkspaceSymbolsJson("返回");
+    defer gpa.free(kw);
+    try testing.expectEqualStrings("[]", kw);
+
+    // A4 dispatch：请求形真应答带 id；query 过滤后不混入另一文档的声明。
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"上\"}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":11") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"name\":\"上限\"") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "乙项") == null);
+    freeOut(gpa, &out);
+    // A5 关闭即出表：didClose 后同一 query 归空（只搜文档表，不做全盘扫描）。
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"file:///a.zz\"}}}", &out);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"workspace/symbol\",\"params\":{\"query\":\"上\"}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+}
+
+test "第 276 轮 signatureHelp：调用括号定位/参数标签与活动参数／嵌套与字符串逗号不入／非调用处 null" {
+    const tg = testing.allocator;
+    // A1 模板 round-trip：signatures[].label/parameters[].label/活动参数以 k_* 回读。
+    {
+        const label_js = try jsonrpc.jsonString(tg, "函数 分类(值: 整数)");
+        defer tg.free(label_js);
+        const p_js = try jsonrpc.jsonString(tg, "值: 整数");
+        defer tg.free(p_js);
+        const one_param = try std.fmt.allocPrint(tg, f_signature_param, .{p_js});
+        defer tg.free(one_param);
+        const sig_item = try std.fmt.allocPrint(tg, f_signature_item, .{ label_js, one_param });
+        defer tg.free(sig_item);
+        const help = try std.fmt.allocPrint(tg, f_signature_help, .{ sig_item, @as(usize, 0) });
+        defer tg.free(help);
+        var p = try std.json.parseFromSlice(std.json.Value, tg, help, .{});
+        defer p.deinit();
+        const o = asObject(p.value).?;
+        const sigs = switch (o.get(k_signatures).?) {
+            .array => |a| a.items,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expectEqual(@as(usize, 1), sigs.len);
+        const s0 = asObject(sigs[0]).?;
+        try testing.expectEqualStrings("函数 分类(值: 整数)", strField(s0, k_label).?);
+        const ps = switch (s0.get(k_parameters).?) {
+            .array => |a| a.items,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expectEqual(@as(usize, 1), ps.len);
+        try testing.expectEqualStrings("值: 整数", strField(asObject(ps[0]).?, k_label).?);
+        try testing.expectEqual(@as(i64, 0), intField(o, k_activeParameter).?);
+        try testing.expectEqual(@as(i64, 0), intField(o, k_activeSignature).?);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(tg);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    // 行 0 是注释里的伪造声明（不得被当函数）；行 4 的「打印」只用于验成员调用不提示。
+    const text =
+        "// 函数 缺省(甲: 整数)\n" ++
+        "函数 分类(值: 整数, 精度: 整数, 标记: 文本) 文本 {\n" ++
+        "    返回 值;\n" ++
+        "}\n" ++
+        "函数 打印(值: 整数) 空 {\n" ++
+        "}\n" ++
+        "函数 主函数() 空 {\n" ++
+        "    分类(1, 2);\n" ++
+        "    分类(分类(1, 2), 3);\n" ++
+        "    分类(1, \"甲,乙,丙\");\n" ++
+        "    标准库.打印(1);\n" ++
+        "}\n" ++
+        "常数 上限 = 1;\n" ++
+        "常数 调用 = 上限(1);\n" ++
+        "常数 缺省 = 缺省(1);\n";
+    const uri = "file:///s.zz";
+
+    // A2 首个实参：签名标签从声明词起（略去公开等修饰词）、逐参标签去空白、活动参数 0。
+    const first = (try srv.signatureHelpAt(text, std.mem.indexOf(u8, text, "分类(1, 2)").? + "分类(".len)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(first);
+    try testing.expectEqualStrings(
+        "{\"signatures\":[{\"label\":\"函数 分类(值: 整数, 精度: 整数, 标记: 文本)\",\"parameters\":[{\"label\":\"值: 整数\"},{\"label\":\"精度: 整数\"},{\"label\":\"标记: 文本\"}]}],\"activeSignature\":0,\"activeParameter\":0}",
+        first,
+    );
+    // A3 第二个实参：活动参数随顶层逗号递增。
+    const two_off = std.mem.indexOf(u8, text, "分类(1, 2)").? + "分类(1, ".len;
+    const second = (try srv.signatureHelpAt(text, two_off)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(second);
+    try testing.expect(std.mem.indexOf(u8, second, "\"activeParameter\":1") != null);
+    // A4 嵌套调用：光标在内层实参时仍取最内层未闭合括号（内层签名，活动参数 1）。
+    const nested_off = std.mem.indexOf(u8, text, "分类(分类(1, 2), 3)").? + "分类(分类(1, 2), ".len;
+    const nested = (try srv.signatureHelpAt(text, nested_off)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(nested);
+    try testing.expect(std.mem.indexOf(u8, nested, "\"label\":\"函数 分类(值: 整数, 精度: 整数, 标记: 文本)\"") != null);
+    try testing.expect(std.mem.indexOf(u8, nested, "\"activeParameter\":1") != null);
+    // A5 字符串内逗号不切参数：`"甲,乙,丙"` 里两个逗号不算——光标在字符串之后
+    //    仍是第二参数；若按字节数逗号（3 个）则得 2，在三参声明下不会被 clamp 掩盖。
+    const str_end = std.mem.indexOf(u8, text, "\"甲,乙,丙\"").? + "\"甲,乙,丙\"".len;
+    const in_str = (try srv.signatureHelpAt(text, str_end)) orelse return error.TestUnexpectedResult;
+    defer gpa.free(in_str);
+    try testing.expect(std.mem.indexOf(u8, in_str, "\"activeParameter\":1") != null);
+    // A6 括号已闭合 / 成员调用（同名顶层函数仍不提示）/ 非函数声明被调 / 仅注释伪造 → null。
+    try testing.expect((try srv.signatureHelpAt(text, std.mem.indexOf(u8, text, "分类(1, 2);").? + "分类(1, 2)".len + 1)) == null);
+    try testing.expect((try srv.signatureHelpAt(text, std.mem.indexOf(u8, text, "标准库.打印(1)").? + "标准库.打印(".len)) == null);
+    try testing.expect((try srv.signatureHelpAt(text, std.mem.indexOf(u8, text, "上限(1)").? + "上限(".len)) == null);
+    try testing.expect((try srv.signatureHelpAt(text, std.mem.indexOf(u8, text, "缺省(1)").? + "缺省(".len)) == null);
+
+    // A7 dispatch：打开文档后真应答带 id；未打开文档 → null。
+    try srv.upsertDoc(uri, text);
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":17,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///s.zz\"},\"position\":{\"line\":7,\"character\":10}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":17") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"activeParameter\":1") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":18,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"file:///none.zz\"},\"position\":{\"line\":0,\"character\":0}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+}
+
+test "第 277 轮 selectionRange：词元→整行→包围块→整文档链／多位置同序／非词与非法位置兜底／dispatch 真应答" {
+    const tg = testing.allocator;
+    // A1 模板 round-trip：叶节只携 range，node 节携 parent；按 k_range/k_parent 回读。
+    {
+        const r_in = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 2), @as(usize, 8), @as(usize, 2), @as(usize, 10) });
+        defer tg.free(r_in);
+        const r_line = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 2), @as(usize, 0), @as(usize, 2), @as(usize, 13) });
+        defer tg.free(r_line);
+        const leaf = try std.fmt.allocPrint(tg, f_selection_leaf, .{r_in});
+        defer tg.free(leaf);
+        var lp = try std.json.parseFromSlice(std.json.Value, tg, leaf, .{});
+        defer lp.deinit();
+        const lo = asObject(lp.value).?;
+        try testing.expect(objIn(lo.get(k_range)) != null);
+        try testing.expect(lo.get(k_parent) == null); // 叶节不携 parent（链尾）
+        const node = try std.fmt.allocPrint(tg, f_selection_node, .{ r_line, leaf });
+        defer tg.free(node);
+        var p = try std.json.parseFromSlice(std.json.Value, tg, node, .{});
+        defer p.deinit();
+        const o = asObject(p.value).?;
+        const rr = objIn(o.get(k_range)) orelse return error.TestUnexpectedResult;
+        const rs = objIn(rr.get(k_start)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(i64, 2), intField(rs, k_line).?);
+        try testing.expectEqual(@as(i64, 0), intField(rs, k_character).?);
+        const par = objIn(o.get(k_parent)) orelse return error.TestUnexpectedResult;
+        const pr = objIn(par.get(k_range)) orelse return error.TestUnexpectedResult;
+        const ps = objIn(pr.get(k_start)) orelse return error.TestUnexpectedResult;
+        try testing.expectEqual(@as(i64, 8), intField(ps, k_character).?);
+    }
+
+    var arena = std.heap.ArenaAllocator.init(tg);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    // 行 2 的实参落在两层花括号里：链应为 词元→行→内块→外块→整文档。
+    const text =
+        "函数 外层() 空 {\n" ++
+        "    如果 (真) {\n" ++
+        "        返回 1;\n" ++
+        "    }\n" ++
+        "}\n" ++
+        "常数 甲 = 1;\n";
+    // A2 词内位置：完整链逐字节对拍（parent 嵌套由内到外）。
+    const off = std.mem.indexOf(u8, text, "返回 1;").? + 1;
+    const chain = try srv.selectionChainJson(text, off);
+    defer gpa.free(chain);
+    try testing.expectEqualStrings(
+        "{\"range\":{\"start\":{\"line\":2,\"character\":8},\"end\":{\"line\":2,\"character\":10}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":2,\"character\":0},\"end\":{\"line\":2,\"character\":13}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":1,\"character\":11},\"end\":{\"line\":3,\"character\":5}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":4,\"character\":1}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":6,\"character\":0}}}}}}}",
+        chain,
+    );
+    // A3 非词位置（行首缩进）：无词元节，链从整行开始；字符串/注释不入块配对。
+    const indent_off = std.mem.indexOf(u8, text, "        返回").?;
+    const from_line = try srv.selectionChainJson(text, indent_off);
+    defer gpa.free(from_line);
+    try testing.expectEqualStrings(
+        "{\"range\":{\"start\":{\"line\":2,\"character\":0},\"end\":{\"line\":2,\"character\":13}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":1,\"character\":11},\"end\":{\"line\":3,\"character\":5}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":0,\"character\":10},\"end\":{\"line\":4,\"character\":1}}," ++
+            "\"parent\":{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":6,\"character\":0}}}}}}",
+        from_line,
+    );
+    // A4 位置非法（off=null）：只回整文档一节，保证每个 position 必有一条结果。
+    const doc_only = try srv.selectionChainJson(text, null);
+    defer gpa.free(doc_only);
+    try testing.expectEqualStrings("{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":6,\"character\":0}}}", doc_only);
+
+    // A5 dispatch：多位置同序（首个带 3 层 parent，越界位置落整文档）；空数组/缺键/未打开文档分道。
+    const uri = "file:///sel.zz";
+    try srv.upsertDoc(uri, text);
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/selectionRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///sel.zz\"},\"positions\":[{\"line\":2,\"character\":9},{\"line\":99,\"character\":0}]}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":21") != null);
+    var parents: usize = 0;
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, out.items[0], at, ek_parent)) |hit| : (at = hit + ek_parent.len) parents += 1;
+    try testing.expectEqual(@as(usize, 4), parents); // 词元→行→内块→外块→整文档 = 5 节 4 层 parent
+    try testing.expect(std.mem.indexOf(u8, out.items[0], ",{\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":6,\"character\":0}}}]}") != null); // 第二个位置越界 → 只回整文档
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/selectionRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///sel.zz\"},\"positions\":[]}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":[]") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"textDocument/selectionRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///sel.zz\"}}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
+    freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/selectionRange\",\"params\":{\"textDocument\":{\"uri\":\"file:///none.zz\"},\"positions\":[{\"line\":0,\"character\":0}]}}", &out);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"result\":null") != null);
 }
 
 // 假语义供给器（第 166 轮单测）：char_len=0 与 severity 越界归一化臂验证。
@@ -2069,8 +4128,8 @@ test "第 214 轮 T1 图例派生面与客户端声明判据：needle/legend_jso
 // 第 218 轮 D86：LSP 方法名族单一真值钉
 // ---------------------------------------------------------------------------
 
-test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + 判据正反小样 + dispatch 同骨 round-trip + 覆盖钉（防 js 侧改名静默失联而构建链恒绿）" {
-    // A1 值钉：十一枚真值逐字节锚定 LSP 标准词形——改真值必先在此声明意图（t2 P5/P6 坐实
+test "第 218 轮 T0 方法名族单源钉：二十二枚值钉 + needle 形钉 + 判据正反小样 + dispatch 同骨 round-trip + 覆盖钉（防 js 侧改名静默失联而构建链恒绿）" {
+    // A1 值钉：二十二枚真值逐字节锚定 LSP 标准词形——改真值必先在此声明意图（t2 P5/P6 坐实
     // 旧形下 src 侧漂移仅同文件手抄 fixture 自照红，本钉把「改词」变成显式动作）。
     try testing.expectEqualStrings("initialize", m_initialize);
     try testing.expectEqualStrings("initialized", m_initialized);
@@ -2082,8 +4141,19 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     try testing.expectEqualStrings("textDocument/didSave", m_didSave);
     try testing.expectEqualStrings("textDocument/hover", m_hover);
     try testing.expectEqualStrings("textDocument/semanticTokens/full", m_semanticTokensFull);
+    try testing.expectEqualStrings("textDocument/documentSymbol", m_documentSymbol);
+    try testing.expectEqualStrings("textDocument/definition", m_definition);
+    try testing.expectEqualStrings("textDocument/references", m_references);
+    try testing.expectEqualStrings("textDocument/documentHighlight", m_documentHighlight);
+    try testing.expectEqualStrings("textDocument/codeAction", m_codeAction);
+    try testing.expectEqualStrings("textDocument/foldingRange", m_foldingRange);
+    try testing.expectEqualStrings("textDocument/rename", m_rename);
+    try testing.expectEqualStrings("textDocument/prepareRename", m_prepareRename);
+    try testing.expectEqualStrings("workspace/symbol", m_workspaceSymbol);
+    try testing.expectEqualStrings("textDocument/signatureHelp", m_signatureHelp);
+    try testing.expectEqualStrings("textDocument/selectionRange", m_selectionRange);
     try testing.expectEqualStrings("textDocument/publishDiagnostics", m_publishDiagnostics);
-    // A2 needle 形钉：十一枚对面声明形逐字节锚当前 extension.js 活路形——needle 拼装改样
+    // A2 needle 形钉：二十二枚对面声明形逐字节锚当前 extension.js 活路形——needle 拼装改样
     // 即红，免得守卫与对面两头猜书写形。
     try testing.expectEqualStrings("request('initialize', initialize)", methods_face[0].needle);
     try testing.expectEqualStrings("method: 'initialized', params: {} }", methods_face[1].needle);
@@ -2095,7 +4165,18 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     try testing.expectEqualStrings("method: 'textDocument/didSave',", methods_face[7].needle);
     try testing.expectEqualStrings("request('textDocument/hover', {", methods_face[8].needle);
     try testing.expectEqualStrings("request('textDocument/semanticTokens/full', {", methods_face[9].needle);
-    try testing.expectEqualStrings("msg.method === 'textDocument/publishDiagnostics'", methods_face[10].needle);
+    try testing.expectEqualStrings("request('textDocument/documentSymbol', {", methods_face[10].needle);
+    try testing.expectEqualStrings("request('textDocument/definition', {", methods_face[11].needle);
+    try testing.expectEqualStrings("request('textDocument/references', {", methods_face[12].needle);
+    try testing.expectEqualStrings("request('textDocument/documentHighlight', {", methods_face[13].needle);
+    try testing.expectEqualStrings("request('textDocument/codeAction', {", methods_face[14].needle);
+    try testing.expectEqualStrings("request('textDocument/foldingRange', {", methods_face[15].needle);
+    try testing.expectEqualStrings("request('textDocument/rename', {", methods_face[16].needle);
+    try testing.expectEqualStrings("request('textDocument/prepareRename', {", methods_face[17].needle);
+    try testing.expectEqualStrings("request('workspace/symbol', {", methods_face[18].needle);
+    try testing.expectEqualStrings("request('textDocument/signatureHelp', {", methods_face[19].needle);
+    try testing.expectEqualStrings("request('textDocument/selectionRange', {", methods_face[20].needle);
+    try testing.expectEqualStrings("msg.method === 'textDocument/publishDiagnostics'", methods_face[21].needle);
     // A3 判据正反小样：真 extension.js 实形为「不缺」；P1–P4 探针漂形为「缺」（本轮把
     // 四路静默面预先钉为有锚）；exit 针附尾防误配：进程级 child.on('exit') 形不算命中。
     try testing.expect(!jsonrpc.missing("request('initialize', initialize).then((res) => {", methods_face[0].needle));
@@ -2104,9 +4185,27 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     try testing.expect(!jsonrpc.missing("send({ jsonrpc: '2.0', method: 'exit' });", methods_face[3].needle));
     try testing.expect(!jsonrpc.missing("send({ jsonrpc: '2.0', method: 'textDocument/didSave', params: 0 });", methods_face[7].needle));
     try testing.expect(!jsonrpc.missing("const res = await request('textDocument/hover', {", methods_face[8].needle));
-    try testing.expect(!jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnostics') {", methods_face[10].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/references', {", methods_face[12].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/documentHighlight', {", methods_face[13].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/codeAction', {", methods_face[14].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/foldingRange', {", methods_face[15].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/rename', {", methods_face[16].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/prepareRename', {", methods_face[17].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('workspace/symbol', { query });", methods_face[18].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/signatureHelp', {", methods_face[19].needle));
+    try testing.expect(!jsonrpc.missing("const res = await request('textDocument/selectionRange', {", methods_face[20].needle));
+    try testing.expect(!jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnostics') {", methods_face[21].needle));
     try testing.expect(jsonrpc.missing("send({ jsonrpc: '2.0', method: 'textDocument/didSve', params: 0 });", methods_face[7].needle)); // P1 形
-    try testing.expect(jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnosticX') {", methods_face[10].needle)); // P2 形
+    try testing.expect(jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnosticX') {", methods_face[21].needle)); // P2 形
+    try testing.expect(jsonrpc.missing("request('textDocument/signatureHelX', {", methods_face[19].needle)); // 参数提示面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/selectionRangX', {", methods_face[20].needle)); // 智能扩选面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/referenceX', {", methods_face[12].needle)); // 引用面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/documentHighlighX', {", methods_face[13].needle)); // 高亮面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/codeActioX', {", methods_face[14].needle)); // 快速修复面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/foldingRangX', {", methods_face[15].needle)); // 折叠面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/renamX', {", methods_face[16].needle)); // 重命名面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/prepareRenamX', {", methods_face[17].needle)); // 预检面漂形
+    try testing.expect(jsonrpc.missing("request('workspace/symboX', {", methods_face[18].needle)); // 工作区符号面漂形
     try testing.expect(jsonrpc.missing("const res = await request('textDocument/hove', {", methods_face[8].needle)); // P3 形
     try testing.expect(jsonrpc.missing("request('initializeX', initialize).then(() => {});", methods_face[0].needle)); // P4 形
     try testing.expect(jsonrpc.missing("child.on('exit', () => { ready = false; });", methods_face[3].needle)); // 防误配反样
@@ -2128,11 +4227,17 @@ test "第 218 轮 T0 方法名族单源钉：十一枚值钉 + needle 形钉 + �
     try srv.handle("{\"jsonrpc\":\"2.0\",\"method\":\"" ++ m_didOpen ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.zz\",\"text\":\"常数 a = 1，\\n\"}}}", &out);
     try testing.expectEqual(@as(usize, 2), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[1], "\"method\":\"" ++ m_publishDiagnostics ++ "\"") != null); // 写侧词即 hub 真值（publishRaw 委派）
-    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"" ++ m_initialize ++ "X\",\"params\":{}}", &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"" ++ m_documentSymbol ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.zz\"}}}", &out);
     try testing.expectEqual(@as(usize, 3), out.items.len);
-    try testing.expect(std.mem.indexOf(u8, out.items[2], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null); // 漂形落不支持面（通知形则静默丢弃，请求形必报错）
-    // A5 覆盖钉：十一枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
-    try testing.expectEqual(@as(usize, 11), methods_face.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[2], "\"name\":\"a\"") != null); // 大纲臂经 dispatch 真应答
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"" ++ m_initialize ++ "X\",\"params\":{}}", &out);
+    try testing.expectEqual(@as(usize, 4), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[3], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null); // 漂形落不支持面（通知形则静默丢弃，请求形必报错）
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"" ++ m_selectionRange ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.zz\"},\"positions\":[{\"line\":0,\"character\":3}]}}", &out);
+    try testing.expectEqual(@as(usize, 5), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[4], ek_parent) != null); // 扩选链带 parent（词元→行→文档）
+    // A5 覆盖钉：二十二枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
+    try testing.expectEqual(@as(usize, 22), methods_face.len);
 }
 
 // 219 T0（第 219 轮 D87）：词类标签族六员单一真值——值钉 + classify→classToTokenType 全域
@@ -2223,6 +4328,9 @@ test "220 T0：消息本体键族 hub 单源＋骨架渲染＋round-trip＋漂�
         const r3 = try std.fmt.allocPrint(tg, f_range_json, .{ @as(usize, 1), @as(usize, 2), @as(usize, 3), @as(usize, 4) });
         defer tg.free(r3);
         try testing.expectEqualStrings("{\"start\":{\"line\":1,\"character\":2},\"end\":{\"line\":3,\"character\":4}}", r3);
+        const r4 = try std.fmt.allocPrint(tg, f_fold_item, .{ @as(usize, 1), @as(usize, 3) });
+        defer tg.free(r4);
+        try testing.expectEqualStrings("{\"startLine\":1,\"endLine\":3}", r4);
     }
     var lang = try Pack.parse(tg, @embedFile(paths.builtin_pack_embed_child));
     defer lang.deinit();
@@ -2271,14 +4379,14 @@ test "220 T0：消息本体键族 hub 单源＋骨架渲染＋round-trip＋漂�
     defer tg.free(drift);
     try srv.handle(drift, &out);
     try testing.expectEqual(@as(usize, 0), out.items.len);
-    // A5 对面十二清单成员数钉：九枚 needle 全由 hub k_* 派生（对账在守卫对面十二）。
-    try testing.expectEqual(@as(usize, 9), params_face.len);
+    // A5 对面十二清单成员数钉：十三枚 needle 全由 hub k_* 派生（对账在守卫对面十二）。
+    try testing.expectEqual(@as(usize, 13), params_face.len);
 }
 // 221 T0（第 221 轮 D89）：诊断项/悬停/错误对象字段族 hub——十枚值钉 / 四模板渲染 reparse 回读
 // round-trip / didOpen→publish 诊断项字段活体回读 / hover 结果 contents 活体回读 / 对面十三数形钉。
 test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果体活体回读（第 221 轮）——D89" {
     const tg = testing.allocator;
-    // A1 十枚值钉：hub 字段词逐一等于 LSP 协议词汇字面——改真值须声明意图。
+    // A1 十二枚值钉：hub 字段词逐一等于 LSP 协议词汇字面——改真值须声明意图。
     try testing.expectEqualStrings("range", k_range);
     try testing.expectEqualStrings("severity", k_severity);
     try testing.expectEqualStrings("source", k_source);
@@ -2288,7 +4396,10 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
     try testing.expectEqualStrings("value", k_value);
     try testing.expectEqualStrings("error", k_error);
     try testing.expectEqualStrings("code", k_code);
+    try testing.expectEqualStrings("startLine", k_startLine);
+    try testing.expectEqualStrings("endLine", k_endLine);
     try testing.expectEqualStrings("markdown", v_markdown);
+    try testing.expectEqualStrings("placeholder", k_placeholder);
     // A2 模板渲染 round-trip：f_sem_item/f_fast_item/f_hover_result/f_error_response 渲染后 reparse，
     // 以 k_* 回读——写形与解析形同骨；source 值由 eq_prog_name comptime 内联、与客户端 needle 同源。
     {
@@ -2377,8 +4488,8 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
     try testing.expectEqualStrings(v_markdown, strField(hc, k_kind).?);
     try testing.expect(strField(hc, k_value).?.len > 0);
     try testing.expect(objIn(ro.get(k_range)) != null);
-    // A5 对面十三清单成员数钉：八枚 needle 全由 hub k_*/v_markdown/paths.prog_name 派生（对账在守卫对面十三）。
-    try testing.expectEqual(@as(usize, 8), results_face.len);
+    // A5 对面十三清单成员数钉：十八枚 needle 全由 hub k_*/v_markdown/paths.prog_name 派生（对账在守卫对面十三）。
+    try testing.expectEqual(@as(usize, 18), results_face.len);
 }
 
 // 222 T0（第 222 轮 · D90）：severity 码值族 hub——A1 四枚协议值钉／A2 clamp 边界
@@ -2491,4 +4602,167 @@ test "223 T0：JSON-RPC 错误码族 hub 单源＋应答体 round-trip＋客户�
     // A4 errors_face 成员数钉＋needle 派生形钉
     try testing.expectEqual(@as(usize, 1), errors_face.len);
     try testing.expectEqualStrings("error: { code: -32601", errors_face[0].needle);
+}
+
+test "第 263 轮 documentSymbol：顶层声明扫描/修饰词跳过/嵌套与注释不收/空文档空数组" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+
+    const text =
+        "// 顶层注释\n" ++
+        "公开 函数 主函数() 空 {\n" ++
+        "    常数 内层 = 1;\n" ++
+        "}\n" ++
+        "结构 配置 {\n" ++
+        "    变量 字段 = 0;\n" ++
+        "}\n" ++
+        "枚举 颜色 {\n" ++
+        "    红,\n" ++
+        "}\n" ++
+        "常数 上限: 整数 = 100;\n" ++
+        "变量 计数 = 0;\n";
+    const js = try collectSymbolsJson(gpa, &lang, text);
+    defer gpa.free(js);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, js, .{});
+    defer parsed.deinit();
+    const arr = switch (parsed.value) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 5), arr.len);
+    const want_names = [_][]const u8{ "主函数", "配置", "颜色", "上限", "计数" };
+    const want_kinds = [_]i64{ 12, 23, 10, 14, 13 };
+    for (arr, 0..) |item, i| {
+        const o = asObject(item).?;
+        try testing.expectEqualStrings(want_names[i], strField(o, "name").?);
+        try testing.expectEqual(want_kinds[i], intField(o, "kind").?);
+        try testing.expect(o.get("range") != null);
+        try testing.expect(o.get("selectionRange") != null);
+    }
+    // 嵌套声明（内层常数/结构体字段）只出现在缩进行，不收入顶层大纲；注释行更不收入。
+    try testing.expect(std.mem.indexOf(u8, js, "内层") == null);
+    try testing.expect(std.mem.indexOf(u8, js, "字段") == null);
+
+    const empty = try collectSymbolsJson(gpa, &lang, "");
+    defer gpa.free(empty);
+    try testing.expectEqualStrings("[]", empty);
+}
+
+test "第 264 轮 definition：声明名与引用跳同一定位/字符串与注释及未知词不跳" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    const text =
+        "常数 上限 = 1;\n" ++
+        "函数 主函数() 空 {\n" ++
+        "    返回 上限;\n" ++
+        "}\n" ++
+        "常数 提示 = \"上限\";\n" ++
+        "// 上限\n";
+    const uri = "file:///t.zz";
+    const decl_off = std.mem.indexOf(u8, text, "上限").?;
+    const ret_off = std.mem.indexOf(u8, text, "返回").?;
+    const ref_off = std.mem.indexOfPos(u8, text, ret_off, "上限").?;
+
+    const decl_js = srv.definitionAt(text, uri, decl_off) orelse return error.TestUnexpectedResult;
+    defer gpa.free(decl_js);
+    const ref_js = srv.definitionAt(text, uri, ref_off) orelse return error.TestUnexpectedResult;
+    defer gpa.free(ref_js);
+    // 声明名与函数体内的引用都落到同一顶层声明（0 基行 0、字符 3 起）。
+    for ([_][]const u8{ decl_js, ref_js }) |js| {
+        try testing.expect(std.mem.indexOf(u8, js, "\"uri\":\"file:///t.zz\"") != null);
+        try testing.expect(std.mem.indexOf(u8, js, "\"line\":0,\"character\":3") != null);
+    }
+    // 光标落在引用词尾（末字符之后）仍取前一词元，兼容编辑器把 position 报在词尾。
+    const tail_js = srv.definitionAt(text, uri, ref_off + "上限".len) orelse return error.TestUnexpectedResult;
+    defer gpa.free(tail_js);
+    try testing.expect(std.mem.indexOf(u8, tail_js, "\"line\":0,\"character\":3") != null);
+
+    // 字符串、注释、关键字词元不参与跳转（lexer 词类过滤，不做上下文猜测）。
+    const str_off = (std.mem.indexOf(u8, text, "\"上限\"") orelse return error.TestUnexpectedResult) + 1;
+    try testing.expect(srv.definitionAt(text, uri, str_off) == null);
+    const cmt_off = (std.mem.indexOf(u8, text, "// 上限") orelse return error.TestUnexpectedResult) + 3;
+    try testing.expect(srv.definitionAt(text, uri, cmt_off) == null);
+    try testing.expect(srv.definitionAt(text, uri, ret_off) == null);
+}
+
+test "第 266 轮 references：声明与引用全收/可排除声明/字符串注释不混入/无声明空数组" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    const text =
+        "常数 上限 = 1;\n" ++
+        "函数 主函数() 空 {\n" ++
+        "    返回 上限;\n" ++
+        "}\n" ++
+        "常数 提示 = \"上限\";\n" ++
+        "// 上限\n";
+    const uri = "file:///t.zz";
+    const decl_off = std.mem.indexOf(u8, text, "上限").?;
+    const ret_off = std.mem.indexOf(u8, text, "返回").?;
+    const ref_off = std.mem.indexOfPos(u8, text, ret_off, "上限").?;
+
+    const all = try srv.referencesAt(text, uri, decl_off, true);
+    defer gpa.free(all);
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, all, .{});
+    defer parsed.deinit();
+    const arr = switch (parsed.value) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    // 声明 + 函数体内引用各一枚；字符串与注释中的「上限」不混入。
+    try testing.expectEqual(@as(usize, 2), arr.len);
+    try testing.expect(std.mem.indexOf(u8, all, "\"line\":0,\"character\":3") != null);
+    try testing.expect(std.mem.indexOf(u8, all, "\"line\":2,\"character\":7") != null);
+
+    // includeDeclaration=false 只留引用；从引用发起与从声明发起结果同集。
+    const refs_only = try srv.referencesAt(text, uri, ref_off, false);
+    defer gpa.free(refs_only);
+    var parsed_refs = try std.json.parseFromSlice(std.json.Value, gpa, refs_only, .{});
+    defer parsed_refs.deinit();
+    const refs_arr = switch (parsed_refs.value) {
+        .array => |a| a.items,
+        else => return error.TestUnexpectedResult,
+    };
+    try testing.expectEqual(@as(usize, 1), refs_arr.len);
+    try testing.expect(std.mem.indexOf(u8, refs_only, "\"line\":2,\"character\":7") != null);
+    try testing.expect(std.mem.indexOf(u8, refs_only, "\"line\":0,\"character\":3") == null);
+
+    const from_ref = try srv.referencesAt(text, uri, ref_off, true);
+    defer gpa.free(from_ref);
+    try testing.expect(std.mem.eql(u8, all, from_ref));
+
+    // 光标词没有同名顶层声明 → 空数组（不把局部/未知词硬凑成引用）。
+    const unknown_text = "函数 主函数() 空 { 返回 未知; }\n";
+    const unknown_off = std.mem.indexOf(u8, unknown_text, "未知").?;
+    const unknown = try srv.referencesAt(unknown_text, uri, unknown_off, true);
+    defer gpa.free(unknown);
+    try testing.expectEqualStrings("[]", unknown);
+
+    // dispatch 路径：context.includeDeclaration=false 必须被解析并只回引用项。
+    try srv.upsertDoc(uri, text);
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.zz\"},\"position\":{\"line\":0,\"character\":3},\"context\":{\"includeDeclaration\":false}}}", &out);
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":9") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"line\":2,\"character\":7") != null);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], "\"line\":0,\"character\":3") == null);
 }

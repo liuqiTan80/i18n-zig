@@ -1,7 +1,30 @@
 // zzc dialect VS Code client (round 157). Zero npm dependencies: it spawns
 // `zzc lsp` and speaks the LSP base protocol directly through client_frames.js,
-// wiring only the two server surfaces that exist today -- publishDiagnostics
-// (fast checks: fullwidth / lexical / pure-native) and textDocument/hover.
+// wiring the server surfaces that exist today -- publishDiagnostics (fast
+// checks: fullwidth / lexical / pure-native), textDocument/hover,
+// textDocument/documentSymbol (round 263) for the outline/breadcrumb view,
+// same-file textDocument/definition (round 264) for go-to-definition on
+// top-level declarations, textDocument/references (round 266) for
+// find-all-references over the same file, textDocument/documentHighlight
+// (round 273) for same-file symbol occurrence highlighting, and
+// textDocument/codeAction
+// (round 268) for one-click fullwidth-punctuation quick fixes (round 269 adds
+// the document-wide source.fixAll kind for editor.codeActionsOnSave), and
+// textDocument/foldingRange (round 270) for brace-based structural folding.
+// Round 274: the RenameProvider also answers textDocument/prepareRename, so F2
+// pre-fills the current name and refuses non-declaration words before an edit
+// box ever opens; the server advertises renameProvider{prepareProvider:true}.
+// Round 275: WorkspaceSymbolProvider answers workspace/symbol by filtering the
+// server's open-document table (top-level declarations, name substring match),
+// which lights up "Go to Symbol in Workspace" without any disk scan.
+// Round 276: SignatureHelpProvider answers textDocument/signatureHelp inside a
+// call paren -- the server matches the callee against same-file top-level
+// function declarations and reports the parameter labels plus the comma-counted
+// active parameter; member calls and unknown callees return null (no popup).
+// Round 277: SelectionRangeProvider answers textDocument/selectionRange so
+// Expand Selection walks token -> line -> enclosing brace blocks (inner to
+// outer) -> whole document; the server returns the full range/parent chain and
+// the client rebuilds it recursively as vscode.SelectionRange.
 // Completions and highlighting stay declarative (rounds 154/155), so this
 // file deliberately registers NO completion provider.
 // Round 160: the client now declares didSave and fires textDocument/didSave on
@@ -24,6 +47,11 @@
 // so switching repaints in-editor without a second tmLanguage). Changing zzc.lang
 // (or zzc.lspPath) auto-restarts the server. tmLanguage stays the default-dialect
 // static base -- a deliberate scope decision recorded in the ledger.
+// Round 267: runtime third-party overlay packs. The client reads zzc.langOverlay
+// and appends `--lang-overlay <file>` to the same spawn; the server merges the
+// overlay into the selected base pack before LSP starts (round 265 CLI seam), so
+// overlay aliases/docs (e.g. contrib/packs/httpz-中文.txt) reach hover without a
+// rebuild. Changing zzc.langOverlay also restarts the server.
 'use strict';
 
 const vscode = require('vscode');
@@ -64,10 +92,21 @@ function zzLang() {
   return l && l.trim() ? l.trim() : '';
 }
 
+// Round 267: optional overlay pack path -> `--lang-overlay <file>`. Empty keeps
+// the built-in packs only; an unreadable/invalid file is reported server-side via
+// the existing stderr -> output-channel path (same policy as zzc.lang).
+function zzLangOverlay() {
+  const cfg = vscode.workspace.getConfiguration('zzc');
+  const p = cfg.get('langOverlay');
+  return p && p.trim() ? p.trim() : '';
+}
+
 function lspSpawnArgs() {
   const args = ['lsp'];
   const l = zzLang();
   if (l) args.push('--lang', l);
+  const o = zzLangOverlay();
+  if (o) args.push('--lang-overlay', o);
   return args;
 }
 
@@ -158,7 +197,40 @@ function applyDiagnostics(params) {
   diags.set(vscode.Uri.parse(params.uri), list);
 }
 
+// Round 263: document symbols -> outline/breadcrumbs. The server returns plain
+// LSP DocumentSymbol objects (kind/range/selectionRange); map them straight to
+// vscode.DocumentSymbol so nested children keep working if the server adds them.
+function toDocumentSymbol(s) {
+  const r = s.range;
+  const sr = s.selectionRange || r;
+  const sym = new vscode.DocumentSymbol(
+    s.name || '',
+    s.detail || '',
+    s.kind || vscode.SymbolKind.Variable,
+    new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character),
+    new vscode.Range(sr.start.line, sr.start.character, sr.end.line, sr.end.character));
+  if (s.children && s.children.length) sym.children = s.children.map(toDocumentSymbol);
+  return sym;
+}
+
+// Round 277: selection ranges -> expand-selection chain. The server nests the
+// larger ranges under `parent` (token -> line -> blocks -> document), so map the
+// chain recursively; a node without parent is the whole-document terminus.
+function toSelectionRange(r) {
+  const rg = r.range;
+  return new vscode.SelectionRange(
+    new vscode.Range(rg.start.line, rg.start.character, rg.end.line, rg.end.character),
+    r.parent ? toSelectionRange(r.parent) : undefined);
+}
+
 function docText(doc) { return doc.getText(); }
+
+// Round 269: VS Code filters code actions by CodeActionKind (e.g. on save it asks
+// only for source.fixAll). Forward that as LSP context.only; undefined keeps the
+// server's round-268 default (quickfix at the cursor).
+function codeActionOnly(kind) {
+  return kind ? [kind.value] : undefined;
+}
 
 function onOpened(doc) {
   if (doc.languageId !== LANGUAGE_ID) return;
@@ -197,6 +269,15 @@ function boot() {
       textDocument: {
         synchronization: { didSave: true }, // round 160: server declares save{includeText:false}; we drive it on save
         hover: { contentFormat: ['markdown', 'plaintext'] },
+        documentSymbol: {},
+        definition: {},
+        references: {},
+        documentHighlight: {},
+        codeAction: {},
+        foldingRange: {},
+        rename: {},
+        signatureHelp: {},
+        selectionRange: {},
         // round 162: declare full semantic-tokens consumption over the shared legend.
         semanticTokens: {
           requests: { full: true },
@@ -206,6 +287,7 @@ function boot() {
         },
       },
       window: {},
+      workspace: { symbol: {} },
     },
     rootUri: null,
   };
@@ -224,9 +306,11 @@ function activate(context) {
   boot();
 
   context.subscriptions.push(
-    // round 163: switching dialect (or lsp path) restarts the server so --lang takes effect.
+    // round 163/267: switching dialect, lsp path or overlay pack restarts the
+    // server so --lang / --lang-overlay take effect without a window reload.
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('zzc.lang') || e.affectsConfiguration('zzc.lspPath')) restartServer();
+      if (e.affectsConfiguration('zzc.lang') || e.affectsConfiguration('zzc.lspPath')
+        || e.affectsConfiguration('zzc.langOverlay')) restartServer();
     }),
     vscode.workspace.onDidOpenTextDocument(onOpened),
     vscode.workspace.onDidChangeTextDocument((e) => fullChange(e.document)),
@@ -245,6 +329,227 @@ function activate(context) {
         });
         if (!res || !res.contents) return null;
         return new vscode.Hover(new vscode.MarkdownString(res.contents.value || String(res.contents)));
+      },
+    }),
+    // round 276: signature help -- inside a call paren the server resolves the
+    // callee to a same-file top-level function declaration and returns its
+    // parameter labels plus the active parameter; anything else yields null so
+    // the popup stays closed instead of guessing.
+    vscode.languages.registerSignatureHelpProvider({ language: LANGUAGE_ID }, {
+      provideSignatureHelp: async (doc, pos) => {
+        if (!ready) return null;
+        const res = await request('textDocument/signatureHelp', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+        });
+        if (!res || !Array.isArray(res.signatures) || !res.signatures.length) return null;
+        const help = new vscode.SignatureHelp();
+        help.signatures = res.signatures.map((s) => new vscode.SignatureInformation(
+          s.label || '',
+          undefined,
+          (s.parameters || []).map((p) => new vscode.ParameterInformation(p.label || ''))));
+        help.activeSignature = res.activeSignature || 0;
+        help.activeParameter = res.activeParameter || 0;
+        return help;
+      },
+    }, '(', ','),
+    // round 277: selection ranges -- the server walks token -> line -> enclosing
+    // brace block (inner to outer) -> whole document and returns one chain per
+    // requested position; map every chain recursively into vscode.SelectionRange.
+    vscode.languages.registerSelectionRangeProvider({ language: LANGUAGE_ID }, {
+      provideSelectionRanges: async (doc, positions) => {
+        if (!ready) return [];
+        const res = await request('textDocument/selectionRange', {
+          textDocument: { uri: doc.uri.toString() },
+          positions: positions.map((p) => ({ line: p.line, character: p.character })),
+        });
+        if (!Array.isArray(res)) return [];
+        return res.map((r) => toSelectionRange(r));
+      },
+    }),
+    // round 263: outline/breadcrumb surface -- the server scans top-level dialect
+    // declarations through the active pack's keyword map (no hardcoded dialect words).
+    vscode.languages.registerDocumentSymbolProvider({ language: LANGUAGE_ID }, {
+      provideDocumentSymbols: async (doc) => {
+        if (!ready) return [];
+        const res = await request('textDocument/documentSymbol', {
+          textDocument: { uri: doc.uri.toString() },
+        });
+        return Array.isArray(res) ? res.map(toDocumentSymbol) : [];
+      },
+    }),
+    // round 275: workspace symbols -- the server filters top-level declarations
+    // across every document it currently holds (no disk scan), so "Go to Symbol
+    // in Workspace" and quick-open work across the open .zz files.
+    vscode.languages.registerWorkspaceSymbolProvider({
+      provideWorkspaceSymbols: async (query) => {
+        if (!ready) return [];
+        const res = await request('workspace/symbol', { query });
+        return Array.isArray(res) ? res.map((s) => new vscode.SymbolInformation(
+          s.name || '',
+          s.kind || vscode.SymbolKind.Variable,
+          '',
+          new vscode.Location(vscode.Uri.parse(s.location.uri), new vscode.Range(s.location.range.start.line, s.location.range.start.character, s.location.range.end.line, s.location.range.end.character)))) : [];
+      },
+    }),
+    // round 264: same-file go-to-definition -- the server resolves the token under
+    // the cursor against top-level declaration names; lexer token kinds keep
+    // comments and strings out, and no scope/cross-file resolution is claimed.
+    vscode.languages.registerDefinitionProvider({ language: LANGUAGE_ID }, {
+      provideDefinition: async (doc, pos) => {
+        if (!ready) return null;
+        const res = await request('textDocument/definition', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+        });
+        if (!res) return null;
+        const locs = Array.isArray(res) ? res : [res];
+        return locs.map((loc) => new vscode.Location(
+          vscode.Uri.parse(loc.uri),
+          new vscode.Range(
+            loc.range.start.line, loc.range.start.character,
+            loc.range.end.line, loc.range.end.character)));
+      },
+    }),
+    // round 266: same-file find-all-references -- the server resolves the cursor
+    // token to a top-level declaration, then returns every matching code token;
+    // comments/strings stay out, while scope shadowing is not disambiguated.
+    vscode.languages.registerReferenceProvider({ language: LANGUAGE_ID }, {
+      provideReferences: async (doc, pos, context) => {
+        if (!ready) return [];
+        const res = await request('textDocument/references', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+          context: { includeDeclaration: context.includeDeclaration },
+        });
+        if (!Array.isArray(res)) return [];
+        return res.map((loc) => new vscode.Location(
+          vscode.Uri.parse(loc.uri),
+          new vscode.Range(
+            loc.range.start.line, loc.range.start.character,
+            loc.range.end.line, loc.range.end.character)));
+      },
+    }),
+    // round 273: same-file symbol highlights -- the server resolves the cursor token
+    // to a top-level declaration and returns every matching code token, marking the
+    // declaration occurrence Write and the rest Read; unresolved words yield [].
+    vscode.languages.registerDocumentHighlightProvider({ language: LANGUAGE_ID }, {
+      provideDocumentHighlights: async (doc, pos) => {
+        if (!ready) return [];
+        const res = await request('textDocument/documentHighlight', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+        });
+        if (!Array.isArray(res)) return [];
+        return res.map((h) => new vscode.DocumentHighlight(
+          new vscode.Range(h.range.start.line, h.range.start.character, h.range.end.line, h.range.end.character),
+          h.kind === 3 ? vscode.DocumentHighlightKind.Write : vscode.DocumentHighlightKind.Read));
+      },
+    }),
+    // round 268: quick fixes for fullwidth punctuation -- the server reuses the
+    // same danger table as the fast diagnostics and returns CodeAction literals
+    // carrying edit.changes{uri:[{range,newText}]}. Only violations with an ASCII
+    // replacement get a lightbulb (zero-width-space deletions stay out of scope),
+    // and the range is honored: selection intersects, cursor includes the right
+    // boundary so a caret just past the char still offers the fix.
+    // round 269: the same provider also serves document-wide source.fixAll (the
+    // server returns one bulk action when context.only asks for it), which makes
+    // editor.codeActionsOnSave: { "source.fixAll": true } fix every fullwidth
+    // punctuation on save without a separate command.
+    vscode.languages.registerCodeActionProvider({ language: LANGUAGE_ID }, {
+      provideCodeActions: async (doc, range, context) => {
+        if (!ready) return [];
+        const res = await request('textDocument/codeAction', {
+          textDocument: { uri: doc.uri.toString() },
+          range: {
+            start: { line: range.start.line, character: range.start.character },
+            end: { line: range.end.line, character: range.end.character },
+          },
+          context: {
+            diagnostics: [],
+            only: codeActionOnly(context.only),
+          },
+        });
+        if (!Array.isArray(res)) return [];
+        return res.map((item) => {
+          const kind = item.kind === 'source.fixAll'
+            ? vscode.CodeActionKind.SourceFixAll
+            : vscode.CodeActionKind.QuickFix;
+          const action = new vscode.CodeAction(item.title, kind);
+          action.edit = new vscode.WorkspaceEdit();
+          const changes = (item.edit && item.edit.changes) || {};
+          for (const uri of Object.keys(changes)) {
+            for (const c of changes[uri]) {
+              action.edit.replace(
+                vscode.Uri.parse(uri),
+                new vscode.Range(
+                  c.range.start.line, c.range.start.character,
+                  c.range.end.line, c.range.end.character),
+                c.newText);
+            }
+          }
+          return action;
+        });
+      },
+    }, {
+      providedCodeActionKinds: [vscode.CodeActionKind.QuickFix, vscode.CodeActionKind.SourceFixAll],
+    }),
+    // round 270: structural folding -- the server pairs `{`/`}` lexer tokens, so
+    // braces inside strings/comments never open a fold; single-line blocks and
+    // unmatched braces are skipped. round 271 adds consecutive own-line comment
+    // blocks (`kind: 'comment'`) mapped to FoldingRangeKind.Comment. `// #region`
+    // markers stay with language-configuration.json (the provider is additive).
+    vscode.languages.registerFoldingRangeProvider({ language: LANGUAGE_ID }, {
+      provideFoldingRanges: async (doc) => {
+        if (!ready) return [];
+        const res = await request('textDocument/foldingRange', {
+          textDocument: { uri: doc.uri.toString() },
+        });
+        if (!Array.isArray(res)) return [];
+        return res.map((r) => new vscode.FoldingRange(r.startLine, r.endLine, r.kind === 'comment' ? vscode.FoldingRangeKind.Comment : undefined));
+      },
+    }),
+    // round 272: rename -- the server renames same-file top-level declarations and
+    // returns a WorkspaceEdit-shaped `changes` map (strings/comments are excluded
+    // by its lexer scan). A null answer means "cannot rename" and applies nothing.
+    // round 274: prepareRename pre-checks the cursor -- non-declaration words and
+    // strings/comments return null, so F2 does not open a dead input box; a hit
+    // returns the word range and the old name as the placeholder.
+    vscode.languages.registerRenameProvider({ language: LANGUAGE_ID }, {
+      prepareRename: async (doc, pos) => {
+        if (!ready) return null;
+        const res = await request('textDocument/prepareRename', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+        });
+        if (!res || !res.range) return null;
+        return {
+          range: new vscode.Range(
+            res.range.start.line, res.range.start.character,
+            res.range.end.line, res.range.end.character),
+          placeholder: res.placeholder,
+        };
+      },
+      provideRenameEdits: async (doc, pos, newName) => {
+        if (!ready) return null;
+        const res = await request('textDocument/rename', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+          newName,
+        });
+        if (!res || !res.changes) return null;
+        const edit = new vscode.WorkspaceEdit();
+        for (const [uri, changes] of Object.entries(res.changes)) {
+          for (const c of changes) {
+            edit.replace(
+              vscode.Uri.parse(uri),
+              new vscode.Range(
+                c.range.start.line, c.range.start.character,
+                c.range.end.line, c.range.end.character),
+              c.newText);
+          }
+        }
+        return edit;
       },
     }),
     // round 162: semantic tokens -- request the server's full stream and hand the

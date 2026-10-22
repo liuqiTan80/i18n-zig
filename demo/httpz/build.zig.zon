@@ -1,0 +1,20 @@
+.{
+    // 第三方库翻译的真依赖验证工程（独立于 zzc 本体：不给编译器加运行时依赖、不动其 fingerprint）。
+    // 用途：把 httpz 作为真实依赖拉入，编译 check_api.zig 逐条坐实拟定翻译条目所指的 httpz API 路径存在。
+    // 承铁律「扩展翻译须经编译器存在性验证」——任一 httpz 路径写错即此处编译红，绝不入库臆造死路径。
+    .name = .zzc_httpz_verify,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.0",
+    .fingerprint = 0xef35ef3a9b860abf, // 本地验证工程专用（zig 为新建包指派的值·不发布、不作对外包标识）
+    .dependencies = .{
+        .httpz = .{
+            .url = "git+https://github.com/karlseguin/http.zig?ref=dev#e8272bfd5727aade0dcee3e2aba6c50f57c374b6",
+            .hash = "httpz-0.0.0-PNVzrNAXCQDHb-rRH2jq07A3Ekv3GS6XOTkiqZJtKeqv",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "check_api.zig",
+    },
+}

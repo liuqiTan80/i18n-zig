@@ -108,6 +108,46 @@ test "registry（R9续②③）：自动发现的繁体叠加层运行时真并�
     try std.testing.expectEqualStrings("fn", pack.keywords.get("函数").?);
 }
 
+test "registry（第三方库翻译叠加包）：外部 [aliases]/[docs] 叠加层运行时并入 zh、后写不伤 B6 契约与 $code" {
+    // 承 `--lang-overlay` 接缝语义的内存测（不依赖网络/httpz）：一份只带 [aliases]/[docs]、不含
+    // $code/$name/关键字的外部叠加层（形同 contrib/packs/httpz-中文.txt）累积并入基包 zh 之后：
+    //   ① 新别名生效；② 基包 B6 契约仍在（叠加层不供契约、validate 由基包撑）；③ $code 未被改写。
+    // httpz 路径真存在性由 demo/httpz 真依赖 `zig build` 编译坐实（独立于本测图）；此处只钉合并语义形制。
+    const Pack = @import("pack.zig").Pack;
+    const gpa = std.testing.allocator;
+    const zh = lookup("zh") orelse return error.TestUnexpectedResult;
+
+    // 基包单独解析：不含拟叠加的第三方别名（证下面命中确来自叠加层、非基包）。
+    {
+        var base = try Pack.parse(gpa, zh.bytes);
+        defer base.deinit();
+        try std.testing.expect(base.aliases.get("网络服务") == null);
+        try std.testing.expect(base.aliases.get("网络服务.请求") == null);
+    }
+
+    // 叠加层字节：形同 contrib 包（[aliases]+[docs]、无 $meta）；docs 键皆同现于 aliases（守 docs⊆alias 不变量）。
+    const overlay =
+        \\[aliases]
+        \\网络服务 = httpz
+        \\网络服务.请求 = httpz.Request
+        \\[docs]
+        \\网络服务 = httpz 服务端库总入口。
+        \\网络服务.请求 = 入站请求对象。
+        \\
+    ;
+    var merged = try Pack.loadWithOverlays(gpa, zh.bytes, &[_][]const u8{overlay});
+    defer merged.deinit();
+    // ① 新别名并入生效。
+    try std.testing.expectEqualStrings("httpz", merged.aliases.get("网络服务").?);
+    try std.testing.expectEqualStrings("httpz.Request", merged.aliases.get("网络服务.请求").?);
+    // docs 同现（形同 contrib 包的 docs⊆alias 约定）。
+    try std.testing.expect(merged.docs.get("网络服务.请求") != null);
+    // ② B6 契约仍由基包供、validate 通过。
+    try merged.validate();
+    // ③ $code 未被叠加层改写（叠加层不含 $code）。
+    try std.testing.expectEqualStrings("zh", merged.code);
+}
+
 // 护栏（第 116 轮证伪落位）：本模块零分配（纯数据+纯查询），D51 逐分配点对账真空闭合；转钉
 // 私有 `nameMatch` 的双向大小写折叠真边界。两个纯防御/正确性面此前经任何公共路径零触达：
 //   · b 侧大写分支（L36）——现行注册 key/alias 全小写或 CJK，输入大写形只走 a 侧分支（lookup("ZH")

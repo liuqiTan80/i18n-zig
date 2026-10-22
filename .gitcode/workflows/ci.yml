@@ -21,7 +21,7 @@ jobs:
       - name: 检出源码
         uses: checkout-action@0.0.1
 
-      - name: 装 Zig 0.17 并跑四绿门禁（fmt / build / test / CI 守卫族）
+      - name: 装 Zig 0.17 并跑全量门禁（fmt / build / test / LSP 长连接 / 跨目标）
         run: |
           set -e
           cd repo_workspace
@@ -33,14 +33,16 @@ jobs:
           export PATH="$PWD/zig-x86_64-linux-0.17.0:$PATH"
           zig version
           # 1) 格式门禁（工作区须 LF：Linux runner 不触发 autocrlf 污染）
-          zig fmt --check src/
+          zig fmt --check src/ build.zig
           # 2) 构建
           zig build
-          # 3) 单元与快照测试（双测试图）
-          zig build test --summary all
-          # 4) 跨侧一致性守卫族（纯 zig 命令、不依赖 PowerShell，故 Linux 可直跑）
-          zig build check-editor-syntax
-          zig build check-editor-snippets
-          zig build check-machine-matcher
-          zig build check-ignore-coverage
-          zig build check-toolchain-baseline
+          # 3) 单元与快照测试（双测试图；5 个跨文件守卫步已挂 test_step，不再重复跑）
+          timeout 900 zig build test --summary all
+          # 4) LSP 长连接 e2e（D128/267/268/270/272/273/274/275/276/277）：保持 stdin 打开，断言 initialize/didOpen/hover/
+          #    documentSymbol/definition/references/overlay-hover/codeAction/source-fixAll/foldingRange(comment)/rename/documentHighlight/prepareRename/workspaceSymbol/signatureHelp/selectionRange/shutdown（overlay 用 contrib/packs/httpz-中文.txt）。
+          #    既有 ps1 e2e 用文件重定向（启动即 EOF），只覆盖批量路径，覆盖不到真实客户端。
+          timeout 30 sh tools/lsp-live-smoke.sh
+          # 5) 优化档与跨目标构建（只验编译，不跑测试；产物落 /tmp，避免污染工作树）
+          zig build -Doptimize=ReleaseSafe --prefix /tmp/zzc-ci-rel
+          zig build -Dtarget=x86_64-windows --prefix /tmp/zzc-ci-win
+          zig build -Dtarget=aarch64-macos --prefix /tmp/zzc-ci-mac
