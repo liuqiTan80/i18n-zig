@@ -1,2 +1,0 @@
-const S = struct { pub fn hello(self: S) void { _ = self; } };
-pub fn main() void { const s = S{}; s.world(); }

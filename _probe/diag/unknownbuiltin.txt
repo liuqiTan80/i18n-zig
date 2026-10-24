@@ -1,3 +1,0 @@
-错误: invalid builtin function: '@不存在的内建'
-  --> src/main.zz:2:27
-  | 公开 函数 主函数() void { 常数 q = @不存在的内建(1); _ = q; }

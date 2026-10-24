@@ -1,3 +1,0 @@
-错误: invalid builtin function: '@importt'
-  --> src/main.zz:1:32
-  | pub fn main() void { const q = @importt("std"); _ = q; }
