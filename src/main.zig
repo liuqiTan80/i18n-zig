@@ -514,20 +514,20 @@ fn describePackError(e: PackParseError) []const u8 {
 /// 存活期约定），gpa_ 为 arena 活到进程退出天然满足；FileNotFound 等可行动错误源头母语。
 // 第 242 轮 D110：loadExternalPack 两处 `$format` 指引文案抽为 comptime 常量、纳入 242 T1 跨面锚。
 // 旧形制此处 token 手抄、printErr 直出不入任何单测捕获（M4 探针：re-inline 旁通单源、fresh 629•629 全绿静默）。
-const fmt_too_new_hint = "外部语言包「{s}」声明的 " ++ Pack.meta_format ++ " 过新（当前 ";
-const pack_syntax_hint = "外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/" ++ Pack.meta_format ++ " 非数等），请按 docs/contributing-lang-pack.md 检查。";
+const fmt_too_new_hint = cli.msg_fmt_too_new; // 第 311 轮 D170：全形模板迁 hub 单源（原半截 hint 形退役）
+const pack_syntax_hint = cli.msg_pack_syntax_hint; // 第 309 轮 D168：模板迁 hub 单源（与守卫对面四十五胶合同源）
 
 fn loadExternalPack(path: []const u8) !Pack {
     const bytes = readWhole(path) catch |e| switch (e) {
         error.FileNotFound => {
-            printErr(zzc.prog_prefix ++ "外部语言包文件不存在：{s}", .{path});
+            printErr(zzc.prog_prefix ++ cli.msg_ext_missing, .{path}); // 第 317 轮 D176：话术入 hub 单源
             return error.Failed;
         },
         else => return e, // 超限/权限等：readWhole 母语前缀或 bail 的 localizeFsErr 双层拦截既有形
     };
     return Pack.parse(gpa_, bytes) catch |e| switch (e) {
         error.PackFormatTooNew => {
-            printErr(zzc.prog_prefix ++ fmt_too_new_hint ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ cli.np_upgrade ++ " " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
+            printErr(zzc.prog_prefix ++ cli.msg_fmt_too_new, .{ path, Pack.supported_format });
             return error.Failed;
         },
         error.InvalidLangPack => {
@@ -545,14 +545,14 @@ fn loadExternalPack(path: []const u8) !Pack {
 fn applyOverlayPack(lang: *Pack, path: []const u8) void {
     const bytes = readWhole(path) catch |e| switch (e) {
         error.FileNotFound => {
-            printErr(zzc.prog_prefix ++ "外部叠加语言包文件不存在：{s}", .{path});
+            printErr(zzc.prog_prefix ++ cli.msg_overlay_missing, .{path}); // 第 309 轮 D168：话术取 hub 单一真值（承 D101 形制）
             bail(error.Failed);
         },
         else => bail(e), // 超限/权限等：bail 的 localizeFsErr 双层拦截既有形
     };
     lang.parseInto(gpa_, bytes) catch |e| switch (e) {
         error.PackFormatTooNew => {
-            printErr(zzc.prog_prefix ++ fmt_too_new_hint ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ cli.np_upgrade ++ " " ++ zzc.prog_name ++ "。", .{ path, Pack.supported_format });
+            printErr(zzc.prog_prefix ++ cli.msg_fmt_too_new, .{ path, Pack.supported_format });
             bail(error.Failed);
         },
         error.InvalidLangPack => {
@@ -582,15 +582,23 @@ fn cmdLangAdd(args: []const []const u8) void {
     // B6 契约硬门：不合格包装进来后只在 `--lang` 选中它时才在流程深处报缺——将“坏包”变成工程内的
     // 定时炸弹，故装前即拒（与第一档加载时 validate 同一判据、同一消息形制）。
     pk.validate() catch |e| {
-        printErr(zzc.prog_prefix ++ "外部语言包「{s}」不完整：{s}", .{ file, describePackError(e) });
+        printErr(zzc.prog_prefix ++ cli.msg_pack_incomplete, .{ file, describePackError(e) }); // 第 317 轮 D176
         werr.flush() catch {};
         bail(error.Failed); // noreturn：退 1、不外泄 error 名与栈帧
     };
     const key = cli.findFlag(args, cli.flag_as) orelse pk.code; // 缺省取包内 $code（与内置注册名同源）
     if (!userpack.keyIsSafe(key)) {
-        printErr(zzc.prog_prefix ++ cli.np_reg_key_open ++ "{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 {d} 字（注册名会直接成为文件名与命令行选择名）。可 --as 另起；展示名仍用包内 $name，不受此限。", .{ key, userpack.max_key_len });
+        printErr(zzc.prog_prefix ++ cli.msg_reg_key_bad, .{key}); // 第 316 轮 D175：全形取 hub 单源（上限数/`--as`/`$name` 皆派生）
         werr.flush() catch {};
         std.process.exit(cli.usage_exit_code);
+    }
+    // 第 319 轮 D178：注册名撞内置表键/别名 → 选用侧 `registry.lookup` 先命中内置，已装包
+    // 永远选不中（探针实锤：整序反转后 `--lang zh` 真值改天换地而三通道全绿）。落盘只成幽灵文件、
+    // 回执「用 --lang … 选用」成假指引，故装前即拒——与内置优先序同床钉死，两侧任一改动皆红。
+    if (registry.lookup(key)) |_| {
+        printErr(zzc.prog_prefix ++ cli.msg_reg_key_shadow, .{key});
+        werr.flush() catch {};
+        std.process.exit(cli.usage_exit_code); // 用法错同码（承 316 形制）：此刻未落盘，无派生状态待清
     }
     // 二次读同一文件：校验用的是 Pack 结构、落位用原字节（包体不得被加工——第一档装载器同样吃它）。
     const bytes = readWhole(file) catch |e| bail(e);
@@ -1283,14 +1291,31 @@ pub fn main(init: std.process.Init) !void {
     const cmd = all_args[1];
     const args = all_args[2..];
 
+    // 第 321 轮 D180：zzc 自有旗标的**近似名**（笔误/破折数不符/截断）装前即拒。活体真值：
+    // `--langx zh`／`--language zh`／`-lang zh`／`--machin` 一律静默吞（RC=0 按默认包跑），
+    // 而错**包名**早在第 314 轮设闸（退 2）——错旗标名比错包名更隐蔽：用户与 AI 皆以为旗标生效。
+    // 判据住 hub `nearZzcFlag`（纯函数、只与 zzc 自有旗标名比近似），此处只扫描＋退出；
+    // `--` 之后属透传区不判（话术已指路该逃生口）。
+    for (args) |a| {
+        if (std.mem.eql(u8, a, "--")) break;
+        if (cli.nearZzcFlag(a)) |suggest| {
+            printErr(zzc.prog_prefix ++ cli.msg_flag_near, .{ a, suggest });
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code); // 尚未解析语言包、无派生状态待清（承 316/319 形制）
+        }
+    }
+
     // 第 154 轮：`--machine` 机读单行化旗标（编辑器/CI 消费）——在场即开、后续统一剔离不透传 zig。
     machine_mode = cli.hasBoolFlag(args, mcon.flag_machine);
 
     // 惯例帮助旗标：`--help`/`-h`/`-?`/`help` 都应打印用法并成功退出（而非当未知子命令报 EXIT=2）。
-    // 放在解析语言包之前：用法文本静态、不依赖 lang。
-    if (std.mem.eql(u8, cmd, "--help") or std.mem.eql(u8, cmd, "-h") or
-        std.mem.eql(u8, cmd, "-?") or std.mem.eql(u8, cmd, "help"))
-    {
+    // 第 302 轮 D161：四枚字面量收编入 hub `cli.help_words` 单一真值——文档面逆向鬼词普查
+    // 与共此合法集，手抄回潮即对面三十八委派针转红。放在解析语言包之前：用法文本静态、不依赖 lang。
+    var help_flag = false;
+    for (cli.help_words) |flag| {
+        if (std.mem.eql(u8, cmd, flag)) help_flag = true;
+    }
+    if (help_flag) {
         printOut("{s}", .{cli.usage_text});
         return;
     }
@@ -1301,7 +1326,7 @@ pub fn main(init: std.process.Init) !void {
     const lang_name = cli.findLangFlag(args);
     const lang_file = cli.findLangFileFlag(args);
     if (lang_name != null and lang_file != null) {
-        printErr(zzc.prog_prefix ++ "--lang 与 --lang-file 互斥：内置选包、外部包文件二选一。", .{});
+        printErr(zzc.prog_prefix ++ cli.msg_lang_mutex, .{}); // 第 310 轮 D169：话术取 hub 单一真值（承 309 形制）
         werr.flush() catch {};
         std.process.exit(cli.usage_exit_code); // 用法错与未知包同码；此刻表未建、无派生状态 待落盘（D46 形安全）
     }
@@ -1366,16 +1391,16 @@ pub fn main(init: std.process.Init) !void {
     // 外部包（R9g）失败则是贡献者缺陷，消息面向包作者携带路径可行动。
     lang.validate() catch |e| {
         if (lang_file) |fp|
-            printErr(zzc.prog_prefix ++ "外部语言包「{s}」不完整：{s}", .{ fp, describePackError(e) })
+            printErr(zzc.prog_prefix ++ cli.msg_pack_incomplete, .{ fp, describePackError(e) }) // 第 317 轮 D176：与 add 硬门同模板
         else if (installed_src) |ip|
-            printErr(zzc.prog_prefix ++ "已装语言包「{s}」不完整（装后又被改坏了？）：{s}", .{ ip, describePackError(e) })
+            printErr(zzc.prog_prefix ++ cli.msg_installed_pack_incomplete, .{ ip, describePackError(e) }) // 第 317 轮 D176
         else
-            printErr(zzc.prog_prefix ++ "语言包不完整：{s}", .{describePackError(e)});
+            printErr(zzc.prog_prefix ++ cli.msg_bare_pack_incomplete, .{describePackError(e)}); // 第 317 轮 D176
         bail(error.Failed); // 静默退 1：不外泄 error 名与栈帧（探针实锤形，第 103 轮）
     };
 
     if (std.mem.eql(u8, cmd, cli.sub_version)) {
-        printOut(zzc.prog_name ++ " {s}（" ++ cli.np_pack_word ++ "：{s}）", .{ version_str, lang.name });
+        printOut(cli.version_line_fmt, .{ version_str, lang.name }); // 第 296 轮 D155：出口行形串委派 hub（README 样例行对拍与真机出口同源·对面三十二）
         return;
     }
     if (std.mem.eql(u8, cmd, cli.sub_lang)) {
@@ -1389,6 +1414,20 @@ pub fn main(init: std.process.Init) !void {
                 lang.name, lang.code, lang.keywords.count(), lang.aliases.count(), lang.diagnostics.items.len,
             });
             for (registry.entries) |p| printOut("{s}({s}) ", .{ p.key, p.display });
+            // 第 315 轮 D174 列播补位：`lang add` 装上的用户包同样列进来——装上即隐形
+            // 令导航输出落后于真实能力（314 在册边界）；内置同键去重（选包链内置优先，
+            // 列双行反增歧义）；枚举失败降级只列内置：列播系只读指引，不该绊死自己。
+            if (userpack.listInstalled(io_, gpa_, userpack.default_dir)) |listed| {
+                defer userpack.freeListed(gpa_, listed);
+                for (listed) |k| {
+                    var dup = false;
+                    for (registry.entries) |p| if (std.mem.eql(u8, p.key, k.key)) {
+                        dup = true;
+                        break;
+                    };
+                    if (!dup) printOut("{s}({s}) ", .{ k.key, k.name });
+                }
+            } else |_| {}
             printOut("\n", .{});
             return;
         }
@@ -1396,7 +1435,7 @@ pub fn main(init: std.process.Init) !void {
             cmdLangAdd(argv[1..]);
             return;
         }
-        printErr(zzc.prog_prefix ++ "lang 只有 add " ++ cli.np_subcmd ++ "：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与" ++ cli.np_reg_packs ++ "）；「{s}」不是有效" ++ cli.np_subcmd ++ "。", .{verb});
+        printErr(zzc.prog_prefix ++ cli.msg_lang_bad_verb, .{verb}); // 第 313 轮 D172：话术取 hub 单一真值（承 311 形制）
         werr.flush() catch {};
         std.process.exit(cli.usage_exit_code); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }

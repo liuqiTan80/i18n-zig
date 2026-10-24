@@ -19,6 +19,8 @@ const lcfg = @import("zzc_core").lsp_cfg; // 第 216 轮 D84：LSP 客户端接�
 const jrpc = @import("zzc_core").lsp_jsonrpc; // 第 217 轮 D85：LSP 基座协议帧族真值与 client_frames.js 对面 needle 清单
 const lsp_srv = @import("zzc_core").lsp_server; // 第 218 轮 D86：LSP 方法名族真值与 extension.js 对面 needle 清单
 const cli_hub = @import("zzc_core").cli; // 第 224 轮 D92：工具链 spawn argv 词族真值与 main.zig 委派形对面清单
+const vsix_hub = @import("zzc_core").vsix; // 第 292 轮 D151：本机 VSIX 产物 ↔ 源树逐员 CRC 对账的读侧判据
+const pack_hub = @import("zzc_core").Pack; // 第 294 轮 D153：对照表 ↔ 内置默认包两段映射的双向判据（eachKwRow/auditKwTable）与两面对 needle
 
 /// 一面（needle 清单）逐字节对账：命中不足即分道退出。判据（needle／后果／应现枚数 `occ`）全在 hub，
 /// 本函数只做「在已读入的对面文本里按枚计数」与退出码——守 203/210/214 轮「判据入 hub、守卫只做 I/O」形制。
@@ -85,6 +87,85 @@ fn unescape(gpa: std.mem.Allocator, raw: []const u8) ![]const u8 {
         i += 2;
     }
     return out.toOwnedSlice(gpa);
+}
+
+/// 扫 `dir` 里是否存在**任何** `.vsix`（含异名旧包）；无目录或不可读一律视作「没有」。
+fn findAnyVsix(gpa: std.mem.Allocator, io: std.Io, dir: []const u8) ?[]const u8 {
+    var rd = std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true }) catch return null;
+    defer rd.close(io);
+    var walker = rd.walk(gpa) catch return null;
+    defer walker.deinit();
+    var found: ?[]const u8 = null;
+    while (walker.next(io) catch null) |e| {
+        if (e.kind != .file) continue;
+        if (std.mem.endsWith(u8, e.basename, vsix_hub.skip_suffix)) {
+            found = gpa.dupe(u8, e.basename) catch found;
+        }
+    }
+    return found;
+}
+
+/// 对面二十八·本机 VSIX 产物对账（第 292 轮 D151）。判据（ZIP 中央目录布局、`extension/` 前缀族、
+/// 成员下限、CRC-32 真值）全在 `src/vsix.zig` 并由 292 T0 以小样钉住；本函数只做 I/O：由已读入的
+/// `package.json` 文本组包名、读包字节、逐员读盘上同名文件比哈希。期望包缺席时：目录里一个包都没有
+/// 即**显式**打一行跳过文案（CI 与新克隆无 python、无包），若另有异名旧包即红（版本已漂而包未重打，
+/// 装进宿主的仍是旧码）。包存在而任一成员与源树 CRC 不等即红——本轮实锤的空转防线：三门禁全绿而
+/// `extension.js` 在包里仍是缺 D149 换算的旧码。
+fn auditVsix(gpa: std.mem.Allocator, io: std.Io, pkg_path: []const u8, pkg: []const u8) void {
+    const name = (jsonStringValue(pkg, "name", 0) orelse
+        fail("FAIL: {s} 里找不到 \"name\"——VSIX 产物面无从组包名。\n", .{pkg_path})).val;
+    const version = (jsonStringValue(pkg, "version", 0) orelse
+        fail("FAIL: {s} 里找不到 \"version\"——VSIX 产物面无从组包名。\n", .{pkg_path})).val;
+    const dir = std.fs.path.dirname(pkg_path) orelse ".";
+    const vname = vsix_hub.vsixNameFor(gpa, name, version) catch
+        fail("FAIL: 组 VSIX 包名失败。\n", .{});
+    const vpath = std.fs.path.join(gpa, &.{ dir, vname }) catch
+        fail("FAIL: 拼 VSIX 包路径失败。\n", .{});
+
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, vpath, gpa, .unlimited) catch {
+        if (findAnyVsix(gpa, io, dir)) |other| {
+            fail(
+                "FAIL: 期望的包 {s} 不存在，而 {s} 里另有旧包「{s}」——版本已漂而包未重打，装进宿主的仍是旧码。\n",
+                .{ vpath, dir, other },
+            );
+        }
+        std.debug.print("NOTE: {s} 未打包——跳过产物对账（需要本机包时跑：python3 tools/build-vsix.py）\n", .{vpath});
+        return;
+    };
+
+    const opened = vsix_hub.Dir.open(bytes) catch |e| fail(
+        "FAIL: {s} 中央目录不可读（{s}）——包体非 zip 或已截断，请重新打包。\n",
+        .{ vpath, @errorName(e) },
+    );
+    var it = opened orelse fail("FAIL: {s} 中央目录零条目——包体空转，请重新打包。\n", .{vpath});
+
+    var checked: usize = 0;
+    var total: usize = 0;
+    while (it.next() catch |e| fail(
+        "FAIL: {s} 逐员解析中断（{s}）——包体结构与 ZIP 布局分道，请重新打包。\n",
+        .{ vpath, @errorName(e) },
+    )) |ent| {
+        total += 1;
+        const rel = ent.diskRel() orelse continue; // 打包器现生成的包根件（盘上无同名源）不核
+        const dpath = std.fs.path.join(gpa, &.{ dir, rel }) catch
+            fail("FAIL: 拼盘上源路径失败。\n", .{});
+        const srcb = std.Io.Dir.cwd().readFileAlloc(io, dpath, gpa, .unlimited) catch |e| fail(
+            "FAIL: 包内成员「{s}」在盘上无同名源（{s}）——文件树与包已分道，请重新打包。\n",
+            .{ rel, @errorName(e) },
+        );
+        const crc = vsix_hub.crcOf(srcb);
+        if (crc != ent.crc or srcb.len != ent.size) fail(
+            "FAIL: 包内「{s}」与盘上源不同步（包内 0x{x}/{d} 字节，盘上 0x{x}/{d} 字节）" ++
+                "——源已漂而包未重打，装进宿主的仍是旧码，请跑 python3 tools/build-vsix.py。\n",
+            .{ rel, ent.crc, ent.size, crc, srcb.len },
+        );
+        checked += 1;
+    }
+    if (checked < vsix_hub.member_floor) fail(
+        "FAIL: {s} 可核成员仅 {d} 枚，低于 hub 下限 {d} 枚（共 {d} 条目）——打包器漏员或前缀族改形。\n",
+        .{ vpath, checked, vsix_hub.member_floor, total },
+    );
+    std.debug.print("OK: {s} 与源树逐字节同源（{d} 枚成员 CRC 对账，hub 下限 {d}）\n", .{ vpath, checked, vsix_hub.member_floor });
 }
 
 fn fail(comptime msg: []const u8, args: anytype) noreturn {
@@ -205,8 +286,8 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(frames);
     checkFace(frames_path, &jrpc.frames_face, frames);
 
-    // —— 对面十一：`extension.js` 的 LSP 方法名族二十二员（第 218 轮 D86）。服务端 dispatch
-    //   二十一臂与写侧 publishDiagnostics 同客户端二十二处发起/消费面此前互不引用，守卫 214–217
+    // —— 对面十一：`extension.js` 的 LSP 方法名族二十三员（第 218 轮 D86，第 279 轮随 completion 增员）。服务端 dispatch
+    //   二十二臂与写侧 publishDiagnostics 同客户端二十三处发起/消费面此前互不引用，守卫 214–217
     //   核过图例/标识/接线/帧形而从未核方法词——t2 探针 P1–P4 四路 js 侧改名 571/571 全绿
     //   静默，真跑 P7 坐实漂形 didSave 不发诊断且零应答：功能级断裂而构建链恒绿。
     //   本片复用对面四已读的 ext（零新增 I/O），按 hub needle 清单逐字节对账。
@@ -284,6 +365,99 @@ pub fn main(init: std.process.Init) !void {
     //   needle 由 hub `usage_exit_code` comptime 派生（承 D94 presence 形制），读同一 ps1_txt 对账。
     checkFace(ps1_path, &cli_hub.exit_code_ps1_face, ps1_txt);
 
+    // —— 对面十八第四清单：`tools/check-demos.ps1` 客户端节对 `extension.js` 的 Contains 针族
+    //   （第 280 轮 D138）。ps1 以 `$extSrc.Contains("<js 书写形>")` 手抄客户端实文第三面（对面
+    //   十一／十二／十三只核 hub 派生 needle，从不反向核脚本自写的 js 形），而该节只在 Windows
+    //   PowerShell 跑——本机 NO_PWSH＋GitCode 不执行 Actions（D17 在册）双盲：第 279 轮人工普查
+    //   坐实两枚针早与 js 分道（D136 拆 spawn 形、signatureHelp 用赋值形），pwsh 下必假红、Linux
+    //   上零信号。判据（抽取/极性/引号折叠）全在 hub，本步复用对面四与十八已读的 ext 与 ps1_txt
+    //   （零新增 I/O），只按非空漂移清单出报告并退码。
+    const pin_audit = cli_hub.jsPinAudit(gpa, ps1_txt, ext) catch |e|
+        fail("FAIL: {s} 客户端针族抽取失败（{s}）——脚本形制超出抽取面，须人工复核。\n", .{ ps1_path, @errorName(e) });
+    var pin_stats: [48]u8 = undefined;
+    const pin_word = std.fmt.bufPrint(&pin_stats, "{d} 枚（{d} 正向／{d} 反向）", .{ pin_audit.total, pin_audit.positive, pin_audit.total - pin_audit.positive }) catch "针族";
+    if (pin_audit.drifts.len != 0) {
+        for (pin_audit.drifts) |p| {
+            std.debug.print(
+                "  [DRIFT] {s}: $extSrc.Contains(\"{s}\")\n",
+                .{ if (p.positive) "正向针落空（js 已不写此形 → ps1 必假红）" else "反向针泄漏（js 已写回此串 → ps1 必假红）", p.raw },
+            );
+        }
+        fail(
+            "FAIL: {s} 客户端节对 {s} 的 Contains 针有 {d} 枚分道——要么把脚本针改回当前 js 书写形，" ++
+                "要么恢复 js 侧写法；两侧同改亦须在此会齐（第 280 轮 D138）。\n",
+            .{ ps1_path, ext_path, pin_audit.drifts.len },
+        );
+    }
+
+    // —— 对面二十三：`tools/lsp-live-smoke.sh` 的帧协议词族与 capability 断言族（第 281 轮 D139）。
+    //   脚本以 JSON 帧字面量向 `zzc lsp` 发起十八方法、并逐枚 `grep -Fq` 断言 initialize 应答的十三枚
+    //   capability 形串——协议词汇的第四处手抄（server.zig 单源／extension.js 客户端面／ps1 内嵌帧皆已收面）。
+    //   脚本本身是运行时防线却不在 `zig build test` 门内，亦非测图 source dep：t2 探针 P1 实锤删掉
+    //   completion 的 capability 断言一行，构建链 17/17 全绿且脚本自身仍 PASS（少一条断言不会失败）——
+    //   覆盖静默消失的双零信号形（D94/D113 空转防线同族）。本步新增第二片脚本实文，按 hub 派生 needle
+    //   逐枚对账：断言被删／被改松／服务端改词，皆当场红。
+    const smoke_path = if (args.len >= 11) args[10] else paths.smoke_sh_path;
+    const smoke_txt = std.Io.Dir.cwd().readFileAlloc(io, smoke_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ smoke_path, @errorName(e) });
+    defer gpa.free(smoke_txt);
+    checkFace(smoke_path, &lsp_srv.smoke_frame_face, smoke_txt);
+    checkFace(smoke_path, &lsp_srv.smoke_cap_face, smoke_txt);
+
+    // —— 对面二十四：客户端 e2e 冒烟 `tools/extension-smoke.js` 的断言条数锚与 capability 键名族
+    //   （第 282 轮 D140／D141）。该套件是 extension.js 在 Linux 上唯一的端到端防线（CI 第 5) 步），
+    //   而它的覆盖面就是「断言条数」本身：第 282 轮探针实锤——从 capability 键名数组删一枚
+    //   'hoverProvider' 再删一条独立断言，`node tools/extension-smoke.js` 照旧报 `PASS：87 项断言全过`
+    //   退 0，且 `zig build test` 17/17 全绿（运行时与构建链双静默，D139 同族）。修形为三道门：
+    //   js 内条数锚声明（数字由 hub 的 smoke_js_floor comptime 派生）＋ 精确等号退坡闸 ＋ 本步跨侧对账；
+    //   另按 cap_* 单源抽取键名段，逐枚钉住 js 的 provider 核验集（服务端改 provider 而 js 少验即红）。
+    const esm_path = if (args.len >= 12) args[11] else paths.esm_js_path;
+    // 第 292 轮 D151：打包器 `tools/build-vsix.py` 的命名面（对面二十九）——包名/包内前缀/排除
+    // 后缀三枚 needle 由 `vsix.zig` hub 派生，跨语言手抄一侧漂形即分道转锚。
+    const pack_py_path = if (args.len >= 13) args[12] else "tools/build-vsix.py";
+    const esm_txt = std.Io.Dir.cwd().readFileAlloc(io, esm_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ esm_path, @errorName(e) });
+    defer gpa.free(esm_txt);
+    checkFace(esm_path, &lsp_srv.smoke_js_cap_face, esm_txt);
+    const js_anchor = cli_hub.jsAnchorOk(esm_txt);
+    //   条数锚只拦「少一条」，此处再拦「断言还在而判据被掏空」（第 283 轮 D142）：`ok(true, …)` 形
+    //   保住条数、不改 label、PASS 行一字不变，覆盖面却已归零——普查上限钉 0，一处即红。
+    const taut_n = cli_hub.jsTautCount(esm_txt);
+    if (taut_n > cli_hub.js_tautology_ceiling) {
+        fail("FAIL: {s} 有 {d} 处恒真谓词「ok(true, …)」——条数锚保住而判据已被掏空，该条覆盖面归零（第 283 轮 D142）。须换成与被测状态同骨的实质表达式。\n", .{ esm_path, taut_n });
+    }
+
+    if (!js_anchor.decl or !js_anchor.guard) {
+        fail("FAIL: {s} 的断言条数锚不完整（声明{s}／退坡闸{s}）——该套件的覆盖面就是断言条数本身，缺锚即可被静默拆条而仍报 PASS 退 0（第 282 轮 D140）。须同时具备「const EXPECT_CHECKS = {d};」与「if (checks !== EXPECT_CHECKS)」两形，且数值与 hub 真值同锚。\n", .{ esm_path, if (js_anchor.decl) "在" else "缺", if (js_anchor.guard) "在" else "缺", cli_hub.smoke_js_floor });
+    }
+
+    // —— 对面二十五：客户端日志文案族的两处手抄（第 284 轮 D143）。`extension.js` 的四条 appendLine
+    //   提示与 `tools/extension-smoke.js` 断言它们的四枚针是同一句话的两份手抄（此前 hub 只锚了写侧
+    //   就绪语一枚，断言侧四枚全无锚），而其中一枚是**反向针**：写侧改名即永真。t2 探针 P1 实锤——
+    //   写侧漂 `帧解析错误`→`帧解码错误`：`node` 照旧 `PASS：89 项断言全过` 退 0 且 `zig build test`
+    //   17/17 全绿（双静默）；第 283 轮的恒真闸只盯 `ok(true,` 形，抓不到这种「针漂致永真」的退化。
+    //   两面文件皆已读过（零新增 I/O），按 hub 的 log_writer_face／log_assert_face 逐枚对账：
+    //   任一侧漂文案、翻极性（删 `!`）、漂正则形（丢 `/g` 或全角改半角）皆当场红。
+    checkFace(ext_path, &lcfg.log_writer_face, ext);
+    checkFace(esm_path, &lcfg.log_assert_face, esm_txt);
+
+    // —— 对面二十六：客户端 e2e 的 provider 注册核验族（第 285 轮 D144）。js 以
+    //   `for (const name of ['hover', …]) ok(!!P[name], …)` 逐枚验客户端十三家 provider——这套短名是
+    //   capability 键名的第二套词汇（对面二十四钉的是 'hoverProvider' 形串，本面钉 'hover' 形），旧无锚。
+    //   两路探针实锤的静默形：P1 把 'completion' 顶替为重复的 'hover' → 条数 89 不变、`node` 退 0 且
+    //   构建链全绿；P2 把判据去下标 `!!P[name]`→`!!P` → 十三枚注册断言全空转而仍逐枚打 `[ok] 已注册 provider：…`
+    //   并 PASS 退 0（D142 的恒真闸只识别 `ok(true,` 形，此形字面上不是恒真）。名针由 cap_* 剥尾段派生，
+    //   加循环头与判据体两枚形针；复用已读的 esm 实文，零新增 I/O。
+    checkFace(esm_path, &lsp_srv.smoke_js_provider_face, esm_txt);
+
+    // —— 对面二十七：客户端 e2e 的 kind 值域断言族（第 290 轮 D149）。LSP 的 SymbolKind／
+    //   CompletionItemKind 以 1 起编而 vscode 同名枚举以 0 起编，两空间之间的换算此前在任何一面
+    //   皆无锚：t2 探针 P1 实锤把大纲 kind 改成 `s.kind + 5` 时守卫与 e2e 一字不变（双静默），
+    //   P2 实锤旧断言 `eq(decl.kind, 3)` 反把正确换算判为失败（断言把 bug 当预期钉住）。
+    //   本面把宿主枚数锁到 hub（sk_*/ck_* 减 lsp_kind_base）并钉三处 provider 断言的落点形；
+    //   客户端侧的换算调用形另由 results_face 三枚 needle 守（复用已读的 ext，零新增 I/O）。
+    checkFace(esm_path, &lsp_srv.kinds_smoke_face, esm_txt);
+
     // —— 对面十九：编辑器注释标记族（第 229 轮 D97）。`language-configuration.json` 的注释声明
     //   （lineComment/blockComment/折叠起止）与 `zz.tmLanguage.json` 的注释高亮正则互为同一词形
     //   的两份手抄，前者既非 source dep 也不在任何对面——t2 探针 P1 实锤改 `//`→`##`、`/*`→`<<`
@@ -325,8 +499,512 @@ pub fn main(init: std.process.Init) !void {
     //   由 `paths.builtin_pack_cwd_rel` 派生，复用本步早先已读的 build（D78 已 addFileArg build.zig·零新增 I/O）。
     checkFace(build_path, &paths.build_pack_face, build);
 
+    // —— 对面二十九：打包器命名面（第 292 轮 D151）——
+    const pack_py = std.Io.Dir.cwd().readFileAlloc(io, pack_py_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ pack_py_path, @errorName(e) });
+    checkFace(pack_py_path, &vsix_hub.pack_face, pack_py);
+
+    // —— 对面三十：`docs/关键字对照表.md` ↔ 内置默认包 `[keywords]`／`[aliases]` 的两侧手抄（第 294 轮 D153）。
+    //   表是包内映射的第二份手抄，而**包自己的报错文案**（`未知标识符` 提示语）正把用户指向该表——
+    //   表若过期，照表核对的人即核对到根本不存在的词。探针 P1 实锤：在真表上同时注入三形
+    //   （值漂 `const`→`konst`、删整行 `如果 / 否则`、凭空加鬼词 `假键`），`zig fmt`／`zig build test`
+    //   （17/17 succeeded）／本守卫三门禁一律零信号、退码皆 0。判据全在 `lang/pack.zig`
+    //   （`eachKwRow` 抽取器＋`auditKwTable` 双向对拍，纯函数、零 I/O，294 T0 以合成小样钉住），
+    //   本步只读两文件、调判据、按返回值退出——表在 `docs/` 越出模块包路径不可 embed（202 轮硬约束），
+    //   故两文件皆须 addFileArg 声明为文件依赖（不声明则改一面不触发本步重跑＝203/210 轮假绿形制）。
+    const kw_doc_path = if (args.len >= 14) args[13] else pack_hub.kwtable_path;
+    const zh_pack_path = if (args.len >= 15) args[14] else paths.builtin_pack_cwd_rel;
+    const kw_doc = std.Io.Dir.cwd().readFileAlloc(io, kw_doc_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ kw_doc_path, @errorName(e) });
+    defer gpa.free(kw_doc);
+    const zh_pack_txt = std.Io.Dir.cwd().readFileAlloc(io, zh_pack_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ zh_pack_path, @errorName(e) });
+    defer gpa.free(zh_pack_txt);
+    // 两面对：①`build.zig` 须按 hub 派生的路径串声明对照表的 addFileArg（改一侧即分道）；
+    // ②包内指路文案须写 hub 词干（文案漂 → 用户被指向不存在的文件；文件改名 → 本步读不到文件）。
+    checkFace(build_path, &pack_hub.kwtable_build_face, build);
+    checkFace(zh_pack_path, &pack_hub.kwtable_pack_face, zh_pack_txt);
+    var zh_pack = pack_hub.parse(gpa, zh_pack_txt) catch |e|
+        fail("FAIL: 解析内置默认包 {s} 失败（{s}）\n", .{ zh_pack_path, @errorName(e) });
+    defer zh_pack.deinit();
+    const aud = pack_hub.auditKwTable(&zh_pack, kw_doc);
+    if (aud.ghost != 0 or aud.wrong != 0 or aud.hidden != 0 or !aud.heading_hit or
+        aud.alias_rows < pack_hub.kwtable_alias_floor or aud.kw_rows < zh_pack.keywords.count())
+    {
+        fail(
+            "FAIL: {s} 与 {s} 的映射面分道——ghost={d}（表有包无，首个「{s}」）／wrong={d}（同名异值，首个「{s}」表={s} 包={s}）／hidden={d}（包有表无，首个「{s}」）；aliases 域抽出 {d} 行（独立手设下限 {d}）／keywords 域抽出 {d} 行（包内 {d} 枚）；域路由标题{s}。后果：母语关键字拼错的报错把用户指向本表核对，表若过期即核对到不存在的词（第 294 轮 D153）。判据见 `lang/pack.zig` 的 `auditKwTable`。\n",
+            .{ kw_doc_path, zh_pack_path, aud.ghost, aud.first_ghost, aud.wrong, aud.first_wrong, aud.first_wrong_doc, aud.first_wrong_pack, aud.hidden, aud.first_hidden, aud.alias_rows, pack_hub.kwtable_alias_floor, aud.kw_rows, zh_pack.keywords.count(), if (aud.heading_hit) "命中" else "缺席" },
+        );
+    }
+
+    // —— 对面三十一：书稿《字典篇》（`docs/母语编写zig-中文版.md`）↔ 内置默认包映射的**第三份手抄**（第 295 轮 D154）。
+    //   该篇头注自称「想知道某个中文词……在这里按主题查」，故它对 `[keywords]` 是全量承诺；探针实测书稿
+    //   只列 86/113 枚、缺 27 枚，而两条尾注点名「不透明类型／对齐／易变…均在词表中」「完整的 @ 族…均在包内
+    //   词表」——被点名的十枚恰一枚都不在表内。实锤 P1：删「如果」整行、`const`→`konst`、凭空加鬼词「假键」
+    //   三形同注，`zig fmt`／`zig build test`（17/17 succeeded）／本守卫三门禁一律零信号、退码皆 0。判据全在
+    //   `lang/pack.zig`（`eachBookRow` 抽取器＋`auditBookDict` 对拍，纯函数、零 I/O，295 T0/T1 以合成小样钉住），
+    //   本步只读书、调判据、按返回值退出；书在 `docs/` 不可 embed（202 轮硬约束），故亦须 addFileArg 声明。
+    const book_arg = if (args.len >= 16) args[15] else pack_hub.book_path;
+    const book_txt = std.Io.Dir.cwd().readFileAlloc(io, book_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ book_arg, @errorName(e) });
+    defer gpa.free(book_txt);
+    checkFace(build_path, &pack_hub.bookdict_build_face, build); // 书稿须经 addFileArg 声明为文件依赖
+    checkFace(book_arg, &pack_hub.bookdict_book_face, book_txt); // 书稿五处指路皆须写 hub 词干
+    const ba = pack_hub.auditBookDict(&zh_pack, book_txt);
+    if (ba.ghost != 0 or ba.wrong != 0 or ba.hidden != 0 or ba.unpaired != 0 or !ba.heading_hit or
+        ba.kw_rows < pack_hub.bookdict_kw_floor or ba.alias_rows < pack_hub.bookdict_alias_floor)
+    {
+        fail(
+            "FAIL: {s} 的《字典篇》与 {s} 的映射面分道——ghost={d}（书有包无，首个「{s}」）／wrong={d}（同名异值，首个「{s}」书={s} 包={s}）／hidden={d}（包有而书查无，首个「{s}」）／unpaired={d}（名值枚数配不出的行）；keywords 域抽出 {d} 行（独立手设下限 {d}）／aliases 域抽出 {d} 行（下限 {d}）；区段起点标记{s}。后果：读者按自己的书查词即查无此词、照抄即编译失败（第 295 轮 D154）。判据见 `lang/pack.zig` 的 `auditBookDict`。\n",
+            .{ book_arg, zh_pack_path, ba.ghost, ba.first_ghost, ba.wrong, ba.first_wrong, ba.first_wrong_doc, ba.first_wrong_pack, ba.hidden, ba.first_hidden, ba.unpaired, ba.kw_rows, pack_hub.bookdict_kw_floor, ba.alias_rows, pack_hub.bookdict_alias_floor, if (ba.heading_hit) "命中" else "缺席" },
+        );
+    }
+
+    // —— 对面二十八：本机 VSIX 产物 ↔ 源树逐员 CRC 对账（第 292 轮 D151）——
+    auditVsix(gpa, io, pkg_path, pkg);
+
+    // —— 对面三十二：`README.md` 版本族（第 296 轮 D155）。用户第一眼读的入口文档以多点位手抄
+    //   产品版本（`zzc_paths.zzc_version`）、工具链版本（`zig_version`/`zig_series`）、`zzc version`
+    //   出口样例行、扩展版号（`package.json` 的 version）与产物全名，而全仓门禁从不读 README——
+    //   落码前探针实锤：五形同注（0.1.0→0.2.0 两处／0.17.0→0.16.0 三处／v0.5.0→v0.4.0 四处）后
+    //   fmt 0／build 0／test 17/17／本守卫 OK 一律零信号，活体 `zzc version` 与文档样例实地分道。
+    //   判据全在 hub：静态七枚由族真值 comptime 派生（`paths.readme_face`）；样例行形串单源
+    //   `cli.version_line_fmt`（main 出口同步委派，守卫渲染含真机同骨全行再要求 README 命中）；
+    //   扩展臂两枚判据入 `src/vsix.zig`（全名构造与 `package.json` 的 name/version 同源）。本步只读文件、
+    //   调判据、按返回值退出；README 非测图 source dep，故 build.zig 须 addFileArg 声明（本面 build 针先验）。
+    const readme_arg = if (args.len >= 17) args[16] else paths.readme_path;
+    const readme = std.Io.Dir.cwd().readFileAlloc(io, readme_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ readme_arg, @errorName(e) });
+    defer gpa.free(readme);
+    checkFace(build_path, &paths.readme_build_face, build); // README 须经 addFileArg 声明为文件依赖
+    checkFace(readme_arg, &paths.readme_face, readme); // 静态版本族七枚 needle
+    checkFace(main_path, &cli_hub.version_main_face, main_txt); // 出口行委派形在位（复用已读 main_txt·零新增 I/O）
+    const rd_name = (jsonStringValue(pkg, "name", 0) orelse
+        fail("FAIL: {s} 里找不到 \"name\"——README 扩展臂无从取包名真值。\n", .{pkg_path})).val;
+    const rd_ver = (jsonStringValue(pkg, "version", 0) orelse
+        fail("FAIL: {s} 里找不到 \"version\"——README 扩展臂无从取版号真值。\n", .{pkg_path})).val;
+    if (!vsix_hub.readmeDeclaresExtVersion(readme, rd_ver)) {
+        fail("FAIL: {s} 未以（`v{s}`）形注记扩展版本——`{s}` 的 version 真值为 {s}，文档手抄已分道：照文档认代即认错（第 296 轮 D155）。\n", .{ readme_arg, rd_ver, pkg_path, rd_ver });
+    }
+    if (!vsix_hub.readmeDeclaresVsixName(readme, rd_name, rd_ver)) {
+        fail("FAIL: {s} 未提到产物全名「{s}-{s}{s}」——安装指引/打包注释的版本面与 {s} 分道，照文档找包即找不存在的名（第 296 轮 D155）。\n", .{ readme_arg, rd_name, rd_ver, vsix_hub.skip_suffix, pkg_path });
+    }
+    const vsample = std.fmt.allocPrint(gpa, cli_hub.version_line_fmt, .{ paths.zzc_version, zh_pack.name }) catch
+        fail("FAIL: 组 `zzc version` 样例行失败。\n", .{});
+    if (std.mem.indexOf(u8, readme, vsample) == null) {
+        fail("FAIL: {s} 未含 `zzc version` 样例行「{s}」——文档样例与真机出口（main 委派 cli.version_line_fmt）分道，照文档认代即对不上真跑输出（第 296 轮 D155）。\n", .{ readme_arg, vsample });
+    }
+
+    // —— 对面三十三：`demo/` 示例编译/运行防线（第 297 轮 D156）。六枚 demo 是用户第一眼照抄面
+    //（书稿 quickstart 同源），而 `tools/check-demos.ps1` 基线因 NO_PWSH＋CI 无 pwsh 步从未被任何
+    // 通道执行——t2 探针实锤 demo 编译坏形（活体 RC=1）后四门禁一律零信号。`tools/demos-smoke.sh`
+    // 落成 bash/CI 常驻防线；本面钉其覆盖面：入口逐枚点名、条数锚与 hub 互锁、盘上双向对账。
+    const smoke_arg = if (args.len >= 18) args[17] else paths.demos_smoke_path;
+    const demos_smoke_txt = std.Io.Dir.cwd().readFileAlloc(io, smoke_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ smoke_arg, @errorName(e) });
+    defer gpa.free(demos_smoke_txt);
+    checkFace(build_path, &paths.demos_build_face, build); // 脚本须经 addFileArg 声明为文件依赖
+    checkFace(smoke_arg, &paths.demos_smoke_face, demos_smoke_txt); // 六枚入口逐枚点名
+    checkFace(smoke_arg, &paths.demos_smoke_count_face, demos_smoke_txt); // EXPECT_CHECKS 锚与 hub 断言下限同源
+    // 对面四十三·纯母语行为面脚本话术对账（第 307 轮 D166）：第七臂手抄的「纯母语」「请改用」
+    // 两词须与 msg_pure_native 模板真值胶合——文案改版漏随脚本即红；复用已读脚本文本零新增 I/O。
+    checkFace(smoke_arg, &cli_hub.pure_native_smoke_face, demos_smoke_txt);
+    // 对面四十四·指定语言行为面 fixture 路径单源（第 308 轮 D167）：第八臂手抄两枚路径须与
+    // hub 同形——fixture 改名而脚本漏随即红；复用已读脚本文本零新增 I/O。
+    checkFace(smoke_arg, &paths.lang_smoke_face, demos_smoke_txt);
+    // 对面四十五·CLI 叠加轴行为面（第 309 轮 D168；311 轮 D170 扩话术；312 轮 D171 选包轴
+    // 标识入面）：手抄七枚（话术五＋映射两）须与 hub 模板/叠加包活线胶合（关系钉在 309/311/
+    // 312 T0）；十一/十二臂共用话术四枚，「选包轴」独指十二臂——皆复用已读脚本面零新增 I/O。
+    checkFace(smoke_arg, &cli_hub.overlay_smoke_face, demos_smoke_txt);
+    // 对面四十六·--lang 内置选包轴行为面（第 310 轮 D169）：第十臂三枚（未知包话术派生自
+    // hub、互斥短形⊂模板、退码数锚派生自 usage_exit_code）与脚本手抄胶合（全等/子串关系钉
+    // 在 310 T0）；复用已读脚本文本零新增 I/O。
+    checkFace(smoke_arg, &cli_hub.lang_axis_face, demos_smoke_txt);
+    // 对面四十七·`zzc lang` 列播轴行为面（第 313 轮 D172；315 轮 D174 收录列播标识入面
+    // 成五枚）：两 header 派生全等、拒绝短形⊂msg_lang_bad_verb、内容针「zh(」对 registry
+    // 交叉在 313 T0、十五臂标识针独指收录形；皆复用已读脚本文本零新增 I/O。
+    checkFace(smoke_arg, &cli_hub.lang_list_face, demos_smoke_txt);
+    // 对面四十八·`zzc lang add` 注册链内容交叉（第 314 轮 D173）：fixture 基包 $code
+    // 活线须命中 lang_add_face 尾针（包改而针不改即红；路径取 hub ja_fixture_pack_path
+    // 单源，D167 在册）；十四臂四形（成功回执/防覆盖退码/新键可用/缺省 $code 同源）
+    // 的脚本侧胶合全五枚另走同一已读脚本文本，零另新增面。
+    const fx_min = std.Io.Dir.cwd().readFileAlloc(io, paths.ja_fixture_pack_path, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）——注册链内容针交叉面消失\n", .{ paths.ja_fixture_pack_path, @errorName(e) });
+    defer gpa.free(fx_min);
+    checkFace("对面四十八", .{.{ .needle = cli_hub.lang_add_face[4].needle, .why = "缺省注册名针必为 fixture 包 $code 活线（`$code = tst-ja` 形）" }}, fx_min);
+    // 对面四十九·注册链面十四枚与脚本十四/十六/十七/十八/十九臂手抄胶合（316 坏名话术成七枚、317 坏
+    // 包词核＋失败退码数锚成十枚、318 疑形提示词＋十八臂标识成十二枚、319 遮蔽词核＋十九臂标识成十四枚；
+    // 同一已读脚本文本，零新增 I/O）。
+    checkFace(smoke_arg, &cli_hub.lang_add_face, demos_smoke_txt);
+    // 盘上↔hub 表双向对账：表有盘无＝hidden（demo 被删而闸不随动），盘有表无＝ghost（新增忘接线）。
+    inline for (paths.demo_entries) |entry| {
+        const r = std.Io.Dir.cwd().readFileAlloc(io, entry, gpa, std.Io.Limit.limited(1));
+        if (r) |b| {
+            gpa.free(b);
+        } else |e| {
+            // 超 1 字节即证文件在（入口非空是既定形）；其余错形皆 demo 被删/改名而闸未随动。
+            if (e != error.StreamTooLong) {
+                fail("FAIL: hub 入口表指向的 {s} 读不到（{s}）——demo 被删/改名而 hub 与冒烟闸未随动（第 297 轮 D156）。\n", .{ entry, @errorName(e) });
+            }
+        }
+    }
+    { // ghost 普查：盘上每枚 */src/main.zz 须被 hub 表点名；同时实计盘上枚数验下限。
+        var dir = std.Io.Dir.cwd().openDir(io, "demo", .{ .iterate = true }) catch |e|
+            fail("FAIL: 打不开 demo/ 目录（{s}）——盘上对账元缺失，ghost/hidden 普查元处落地（第 297 轮 D156）。\n", .{@errorName(e)});
+        defer dir.close(io);
+        var walker = dir.walk(gpa) catch |e| fail("FAIL: 遍历 demo/ 失败（{s}）\n", .{@errorName(e)});
+        defer walker.deinit();
+        var disk_hits: usize = 0;
+        while (walker.next(io) catch |e| fail("FAIL: 读 demo/ 目录项失败（{s}）\n", .{@errorName(e)})) |ent| {
+            if (ent.kind != .file) continue;
+            if (!std.mem.endsWith(u8, ent.path, "/src/main.zz")) continue; // walk 路径相对 demo/，首段即 demo 名
+            disk_hits += 1;
+            const sep = std.mem.indexOfScalar(u8, ent.path, '/') orelse continue;
+            const name = ent.path[0..sep]; // walk 路径首段即 demo 名（形如 "hello/src/main.zz"）
+            var wbuf: [64]u8 = undefined;
+            const want_path = std.fmt.bufPrint(&wbuf, "demo/{s}/src/main.zz", .{name}) catch "demo//src/main.zz";
+            var listed = false;
+            for (paths.demo_entries) |entry| {
+                if (std.mem.eql(u8, entry, want_path)) {
+                    listed = true;
+                    break;
+                }
+            }
+            if (!listed) {
+                // 显式豁免清单（demo/httpz 真依赖工程，hub 单源）按名放行；其余盘上有/表无皆 ghost。
+                for (paths.demo_exempt_dirs) |ex| {
+                    if (std.mem.eql(u8, name, ex)) listed = true;
+                }
+            }
+            if (!listed) {
+                fail("FAIL: 盘上 demo/{s}/src/main.zz 未列入 hub demo_entries/冒烟脚本——新增 demo 静默脱编译防线（第 297 轮 D156）。\n", .{name});
+            }
+        }
+        if (disk_hits < paths.demo_count_floor) {
+            fail("FAIL: 盘上 demo 入口实计 {d} 枚低于独立下限 {d}——demo 被成批删除而防线未知情（第 297 轮 D156）。\n", .{ disk_hits, paths.demo_count_floor });
+        }
+    }
+
+    // —— 对面三十四：CI 调用面与 README 命令词面（第 298 轮 D157）。ci.yml 此前只被 D73 步读（版本族），
+    // matcher 步不读：改脚本名忘改 ci.yml 即本地全绿而 CI 到推即断（lsp-live-smoke.sh 顶注自警在册）；
+    // README 29 处命令样例手抄八枚 sub_* 真值亦零针——t2 探针两形（README `zzc eject→emit`、ci.yml
+    // 脚本路径漂）三门禁零信号实锤。本面三面对账：build 命名针／ci 执行针×3／README 命令针×8。
+    const ci_arg = if (args.len >= 19) args[18] else paths.ci_path;
+    const ci_txt = std.Io.Dir.cwd().readFileAlloc(io, ci_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ ci_arg, @errorName(e) });
+    defer gpa.free(ci_txt);
+    checkFace(build_path, &paths.ci_build_face, build); // ci.yml 须对 matcher 步声明文件依赖（步名限定针）
+    checkFace(ci_arg, &paths.ci_tools_face, ci_txt); // 三枚脚本执行针由 hub 路径派生
+    checkFace(readme_arg, &cli_hub.readme_cmd_face, readme); // 八枚命令词针由 sub_* 派生（复用已读 README·零新增 I/O）
+
+    // —— 对面三十五：书稿图片引用 ↔ `docs/images` 盘上双向普查（第 299 轮 D158）。九枚插图被书稿以
+    // `![题](images/名.svg)` 手抄引用而全仓门禁从不校双向存在——t2 探针双形（引用改漂名／新增孤立
+    // svg）fmt/build/test/matcher 四道零信号实锤。判据全在 hub（抽取器＋声明判定纯函数），本步只做 I/O，
+    // 复用对面三十一已读书稿文本·零新增读文件；svg 文件非测图 source dep 也未逐枚 addFileArg（改名不
+    // 触重跑，盘上增量靠下次他变/CI 全新 cache 全量兼保——册为边界）。
+    const img_stats = blk: {
+        const refs = paths.collectBookImageRefs(book_txt);
+        if (refs.overflow) {
+            fail("FAIL: {s} 图片引用实计越过上限 {d}——异常灌入（抽取形制被改坏即卷入非图链接），禁静默吞尾（第 299 轮 D158）。\n", .{ book_arg, @as(usize, paths.book_images_cap) });
+        }
+        if (refs.count < paths.book_images_floor) {
+            fail("FAIL: {s} 抽出图片引用实计 {d} 枚低于独立手设下限 {d}——引用被整体删除/抽取形改词而防线未知情（第 299 轮 D158）。\n", .{ book_arg, refs.count, @as(usize, paths.book_images_floor) });
+        }
+        // hidden：书稿有引用而盘上无文件——印刷即破图；逐枚 access 验在。
+        var ibuf: [512]u8 = undefined;
+        for (refs.names[0..refs.count]) |name| {
+            const p = std.fmt.bufPrint(&ibuf, "{s}/{s}", .{ paths.book_images_dir, name }) catch
+                fail("FAIL: 图片引用路径超长（>{d} 字节），盘上普查无法进行（第 299 轮 D158）。\n", .{@as(usize, 512)});
+            std.Io.Dir.cwd().access(io, p, .{}) catch |e| {
+                if (e == error.FileNotFound) {
+                    fail("FAIL: 书稿 {s} 引用了 images/{s} 而盘上 {s}/{s} 不存在（hidden 形）——引用漂名/文件删改而门禁不知情，印刷即破图（第 299 轮 D158）。\n", .{ book_arg, name, paths.book_images_dir, name });
+                }
+                fail("FAIL: 盘上访问 {s} 失败（{s}）（第 299 轮 D158）。\n", .{ p, @errorName(e) });
+            };
+        }
+        // ghost：盘上有文件而书稿未声明——孤立图；逐枚声明判据对拍（尾截扩展名取名干）。
+        var img_dir = std.Io.Dir.cwd().openDir(io, paths.book_images_dir, .{ .iterate = true }) catch |e|
+            fail("FAIL: 无法打开盘上图片目录 {s}（{s}）——目录被删/改名而 hub 未随动（第 299 轮 D158）。\n", .{ paths.book_images_dir, @errorName(e) });
+        defer img_dir.close(io);
+        var iwalker = img_dir.walk(gpa) catch |e|
+            fail("FAIL: 无法遍历 {s}（{s}）（第 299 轮 D158）。\n", .{ paths.book_images_dir, @errorName(e) });
+        defer iwalker.deinit();
+        var disk_hits: usize = 0;
+        while (iwalker.next(io) catch |e| fail("FAIL: 遍历 {s} 中断（{s}）（第 299 轮 D158）。\n", .{ paths.book_images_dir, @errorName(e) })) |ent| {
+            if (ent.kind != .file) continue;
+            if (std.mem.indexOfScalar(u8, ent.path, '/') != null) continue; // 只普查目录顶层（嵌套子目录非插图面）
+            if (!std.mem.endsWith(u8, ent.path, paths.book_images_suffix)) continue;
+            disk_hits += 1;
+            const stem = ent.path[0 .. ent.path.len - paths.book_images_suffix.len];
+            if (!paths.bookDeclaresImage(book_txt, stem)) {
+                fail("FAIL: 盘上 {s}/{s} 未被书稿 {s} 任何引用声明（ghost 形）——新增插图忘入书稿/废弃图未清，盘上网页与印书面静默分道（第 299 轮 D158）。\n", .{ paths.book_images_dir, ent.path, book_arg });
+            }
+        }
+        if (disk_hits < paths.book_images_floor) {
+            fail("FAIL: 盘上 {s} 实计 svg {d} 枚低于独立下限 {d}——图被成批删除而防线未知情（第 299 轮 D158）。\n", .{ paths.book_images_dir, disk_hits, @as(usize, paths.book_images_floor) });
+        }
+        break :blk .{ refs.count, disk_hits };
+    };
+
+    // —— 对面三十六：书稿 demo 引用面（第 300 轮 D159）。书稿附录以反引号点名六枚 demo 目录（hub 表与
+    // 冒烟脚本外的第三份手抄），快跑道又逐字节引 hello 源码体与输出串——t2 探针两形（输出改「十一」＋
+    // synta 鬼名）五通道零信号实锤。判据全在 hub（抽取器/去首行/期望抽取皆纯函数），本步只做 I/O：
+    // 正向六枚点名针 checkFace＋逆向抽取器防鬼名＋hello 源体全文对拍（新读·须 addFileArg 第 19 片）＋
+    // 冒烟期望串在场（复用对面三十三已读脚本）。
+    checkFace(book_arg, &paths.book_demo_face, book_txt); // 六枚反引号点名针由 hub 表派生
+    checkFace(build_path, &paths.bookdemo_build_face, build); // hello 源须对 matcher 步声明文件依赖
+    {
+        const brefs = paths.collectBookDemoRefs(book_txt);
+        if (brefs.overflow) {
+            fail("FAIL: {s} 的 `demo/<名>` 抽取实计越过上限 {d}——异常灌入，禁静默吞尾（第 300 轮 D159）。\n", .{ book_arg, @as(usize, paths.book_demo_cap) });
+        }
+        outer: for (brefs.names[0..brefs.count]) |name| {
+            for (paths.demo_entries) |e| {
+                const first = std.mem.indexOfScalar(u8, e, '/') orelse continue;
+                const second = std.mem.indexOfScalar(u8, e[first + 1 ..], '/') orelse continue;
+                // 抽取器集的是去掉「demo/」前缀的名段（切点在 prefix 之后），故比 entry 的第二段。
+                if (std.mem.eql(u8, e[first + 1 .. first + 1 + second], name)) continue :outer;
+            }
+            fail("FAIL: 书稿 {s} 点名了 `demo/{s}` 而 hub 入口表无此目录（ghost 形）——书稿自增/独改目录名而盘上与表皆不知情，读者照抄报即扑空（第 300 轮 D159）。\n", .{ book_arg, name });
+        }
+        // hello 引用体逐字节对拍：源去首行（首行注释书稿缩短形为有意差异）后须整段现于书稿。
+        const hello_src = std.Io.Dir.cwd().readFileAlloc(io, paths.demo_entries[0], gpa, .unlimited) catch |e|
+            fail("FAIL: 无法读取 {s}（{s}）（第 300 轮 D159）。\n", .{ paths.demo_entries[0], @errorName(e) });
+        defer gpa.free(hello_src);
+        const hello_body = paths.stripFirstLine(hello_src) orelse
+            fail("FAIL: {s} 无换行符（整文件一行）——引用体对拍无法进行（第 300 轮 D159）。\n", .{paths.demo_entries[0]});
+        if (std.mem.indexOf(u8, book_txt, hello_body) == null) {
+            fail("FAIL: 书稿 {s} 未逐字含 {s} 的源体（去首行注释）——demo 源或书稿引文一侧漂，印刷即变谎（第 300 轮 D159）。\n", .{ book_arg, paths.demo_entries[0] });
+        }
+        // 输出串对拍：冒烟期望表（297 轮独立手抄单源）的 hello 期望须整串现于书稿——盘上实跑与读者书面结构上同源。
+        const exp = paths.smokeExpectFor(demos_smoke_txt, paths.demo_entries[0]) orelse
+            fail("FAIL: 冒烟脚本 {s} 抽不到 demo/hello 的期望行——脚本形制被改坏（第 300 轮 D159）。\n", .{smoke_arg});
+        if (std.mem.indexOf(u8, book_txt, exp) == null) {
+            fail("FAIL: 书稿 {s} 不含冒烟期望串「{s}」——demo 输出漂而书稿旧文未随动，读者看到的样例输出即谎（第 300 轮 D159）。\n", .{ book_arg, exp });
+        }
+    }
+
+    // —— 对面三十七：书稿命令词面（第 301 轮 D160）。书稿 24 处命令样例手抄五枚 sub_* 真值而 298 轮
+    // 只钉 README 面——t2 探针两形（eject→emit、build→bild 全量 12 行）五通道零信号实锤。本面复用
+    // 对面三十一已读书稿·零新增 I/O：正向五枚派生针 checkFace＋逆向抽取器以 subcommands 全集防鬼词。
+    checkFace(book_arg, &cli_hub.book_cmd_face, book_txt); // 五枚教学主线词针由 sub_* 派生（子集独立手设）
+    {
+        const wsz = cli_hub.collectWordsAfter(book_txt, paths.prog_name ++ " ");
+        if (wsz.overflow) {
+            fail("FAIL: 书稿 {s} 的「{s}<词>」抽取实计越过上限 {d}——异常灌入，禁静默吞尾（第 301 轮 D160）。\n", .{ book_arg, paths.prog_name, @as(usize, cli_hub.book_zzc_word_cap) });
+        }
+        outer2: for (wsz.words[0..wsz.count]) |w| {
+            if (cli_hub.isDocWordLegal(w)) continue :outer2; // 合法集判据单源（九子命令∪help 旗标族，第 302 轮 D161 收编）
+            fail("FAIL: 书稿 {s} 出现「{s} {s}」而合法词集无此词（ghost 形）——书稿自增/独改命令词，读者照敲即 UnknownSubcommand（第 301 轮 D160）。\n", .{ book_arg, paths.prog_name, w });
+        }
+    }
+
+    // —— 对面三十八：文档命令词面逆向全覆盖＋help 旗标族收编（第 302 轮 D161）。方案书 11 处与
+    // contributing 12 处命令样例从无针入任何通道，README 又处逆向盲区——t2 探针（方案书 `zzc eject→
+    // emit` 全量＋README 添 `zzc wizard`）五通道零信号实锤。main 帮助兜底的四枚裸字面量同步收编
+    // `cli.help_words` 单源：文档面合法集与运行期兜底从此共源，手抄回潮即委派针转红。
+    // CHANGELOG/台账自身不挂此面：历史演漂记录含 `zzc runn`/`zzc foobar` 引文形，挂面即误报（册边界）。
+    // 注意位序：第 19 片 demo/hello/src/main.zz 已占 args[19]（对面三十六走 cwd 直读未取 argv，
+    // 但 argv 仍含之）——两面新读依次落 args[20]/[21]，索引错位即把 demo 源当方案书对账。
+    const plan_arg = if (args.len >= 21) args[20] else paths.plan_doc_path;
+    const contrib_arg = if (args.len >= 22) args[21] else paths.contrib_doc_path;
+    // 对面四十一·扩展 README（第 305 轮 D164）：全仓守卫从不读本文件——包线只锁「包↔盘」同形，
+    // t2 探针两面漂（`zzc Ips`/`zzc.lng`）重打 vsix 后六道零信号实锤。配置键三针正向＋并入命令/旗标
+    // 两面逆向第五面；其自身亦须 addFileArg 声明（doc41 针）。argv 位序：第 22 片落 args[22]。
+    const ext_readme_arg = if (args.len >= 23) args[22] else paths.ext_readme_path;
+    const ext_readme_txt = std.Io.Dir.cwd().readFileAlloc(io, ext_readme_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ ext_readme_arg, @errorName(e) });
+    defer gpa.free(ext_readme_txt);
+    checkFace(build_path, &paths.doc41_build_face, build); // 扩展 README 须声明为守卫步文件依赖
+    checkFace(ext_readme_arg, &lcfg.ext_readme_cfg_face, ext_readme_txt); // 配置键反引号三面形
+    // 对面四十二·AGENTS.md（AI 编码操作手册，第 306 轮 D165）：读者是自动化工具——命令词/旗标
+    // 静默漂的代价是 AI 照手册敲错命令产出不可编译代码；t2 探针（`zzc bild`＋`--machinX`）五通道
+    // 零信号实锤。两面正向九+五枚针（子集独立手设）＋并入命令/旗标两面逆向第六面；argv 位序第 23 片落 args[23]。
+    const agents_arg = if (args.len >= 24) args[23] else paths.agents_doc_path;
+    const agents_txt = std.Io.Dir.cwd().readFileAlloc(io, agents_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ agents_arg, @errorName(e) });
+    defer gpa.free(agents_txt);
+    checkFace(build_path, &paths.doc42_build_face, build); // AGENTS.md 须声明为守卫步文件依赖
+    checkFace(agents_arg, &cli_hub.agents_cmd_face, agents_txt); // 九子命令全集真值针
+    checkFace(agents_arg, &cli_hub.agents_flag_face, agents_txt); // 五旗标全集真值针
+    // 对面四十五·CLI 叠加轴行为面（第 309 轮 D168）：第九臂手抄话术两枚对脚本文（上方胶合）＋
+    // 映射两枚对叠加包活线（第 24 片新读 args[24]，@embedFile 不可越包路径改 run 时读）；
+    // 探针实锤：拆缺包报错臂静默回退基包后五通道全绿而 RC 1→0——失败形入行为防线的同时，
+    // 包改版（映射漂字）而第九臂/话术面不随亦双红。包文本不入文档逆向面（运行期资产非手册）。
+    const ov_pack_arg = if (args.len >= 25) args[24] else paths.overlay_pack_path;
+    const ov_pack_txt = std.Io.Dir.cwd().readFileAlloc(io, ov_pack_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ ov_pack_arg, @errorName(e) });
+    defer gpa.free(ov_pack_txt);
+    checkFace(build_path, &paths.doc45_build_face, build); // 叠加包须声明为守卫步文件依赖
+    checkFace(ov_pack_arg, &cli_hub.overlay_pack_face, ov_pack_txt); // 映射键/值形对包活线
+    const plan_txt = std.Io.Dir.cwd().readFileAlloc(io, plan_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ plan_arg, @errorName(e) });
+    defer gpa.free(plan_txt);
+    const contrib_txt = std.Io.Dir.cwd().readFileAlloc(io, contrib_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ contrib_arg, @errorName(e) });
+    defer gpa.free(contrib_txt);
+    checkFace(build_path, &paths.doc38_build_face, build); // 两面须 addFileArg 声明为守卫步文件依赖
+    checkFace(main_path, &cli_hub.help_main_face, main_txt); // main 帮助兜底须表驱动读 hub
+    const doc_faces = .{ // 六面逆向鬼词普查：三面复用已读，三面新读皆 argv 传入
+        .{ readme_arg, readme },
+        .{ book_arg, book_txt },
+        .{ plan_arg, plan_txt },
+        .{ contrib_arg, contrib_txt },
+        .{ ext_readme_arg, ext_readme_txt },
+        .{ agents_arg, agents_txt },
+    };
+    inline for (doc_faces) |face| {
+        const wsz2 = cli_hub.collectWordsAfter(face[1], paths.prog_name ++ " ");
+        if (wsz2.overflow) {
+            fail("FAIL: {s} 的「{s}<词>」抽取实计越过上限 {d}——异常灌入，禁静默吞尾（第 302 轮 D161）。\n", .{ face[0], paths.prog_name, @as(usize, cli_hub.book_zzc_word_cap) });
+        }
+        for (wsz2.words[0..wsz2.count]) |w| {
+            if (cli_hub.isDocWordLegal(w)) continue;
+            fail("FAIL: {s} 出现「{s} {s}」而合法词集（九子命令∪help 旗标族）无此词（ghost 形）——文档自增/独改命令词，读者照敲即 EXIT=2（第 302 轮 D161）。\n", .{ face[0], paths.prog_name, w });
+        }
+    }
+
+    // —— 对面三十九：文档旗标词面（第 303 轮 D162）。三面 36 处旗标手抄 `zzc_flags` 真值从无针入
+    // 任何通道——t2 探针形B（README `--machine→--mchine`＋`--lang-overlay→--lng-overlay` 共 9 行）
+    // 五通道零信号实锤。三面文本对面三十二/三十八均已读——零新增 I/O·零新增片；子集划分判据在 hub。
+    checkFace(readme_arg, &cli_hub.readme_flag_face, readme); // 五枚全在
+    checkFace(plan_arg, &cli_hub.plan_flag_face, plan_txt); // 方案书一枚
+    checkFace(contrib_arg, &cli_hub.contrib_flag_face, contrib_txt); // contributing 三枚
+
+    // —— 对面四十：文档旗标逆向鬼词面（第 304 轮 D163）。303 正向只拦「该在的不在」，文档自增新
+    // 旗标无从捕——t2 探针（README 添 `--verbose`、书稿添 `--zzcghost`）五通道零信号实锤。四面文本
+    // 均已读——零新增 I/O·零新增片；合法集与外部豁免表判据全在 hub（isDocFlagLegal）。
+    const flag_faces = .{ // 六面逆向普查：抽取器只认 `--` 双破折头，单短旗形入册边界（顶注）
+        .{ readme_arg, readme },
+        .{ book_arg, book_txt },
+        .{ plan_arg, plan_txt },
+        .{ contrib_arg, contrib_txt },
+        .{ ext_readme_arg, ext_readme_txt },
+        .{ agents_arg, agents_txt },
+    };
+    inline for (flag_faces) |face| {
+        const cfg = cli_hub.collectDocFlagWords(face[1]);
+        if (cfg.overflow) {
+            fail("FAIL: {s} 的旗标抽取实计越过上限 {d}——异常灌入，禁静默吞尾（第 304 轮 D163）。\n", .{ face[0], @as(usize, cli_hub.book_zzc_word_cap) });
+        }
+        for (cfg.words[0..cfg.count]) |f| {
+            if (cli_hub.isDocFlagLegal(f)) continue;
+            fail("FAIL: {s} 出现旗标「{s}」而合法集（zzc 五旗标∪--help∪外部豁免四枚）无此词（ghost 形）——文档自增/误改旗标，读者照敲即未知旗标（第 304 轮 D163）。\n", .{ face[0], f });
+        }
+    }
+
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族十一/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/十四 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族二十二 枚 needle 在客户端面命中、消息本体键族十三 枚 needle 在客户端面命中、结果字段族十八 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族十三 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源\n",
-        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path, ps1_path },
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族十一/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/十四 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族二十三 枚 needle 在客户端面命中、消息本体键族十三 枚 needle 在客户端面命中、结果字段族廿七 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族十四 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、ps1 客户端节 Contains 针族{s} 在 ps1 与客户端两面逐枚对账命中、冒烟脚本 {s} 的帧协议词族{d} 枚与 capability 断言族{d} 枚逐枚对账命中、客户端 e2e {s} 的断言条数锚（{d} 条）与 capability 键名族{d} 枚命中、恒真谓词 {d} 处（上限 {d}）、客户端日志文案族写侧{d} 枚与断言侧{d} 枚双侧逐枚对账命中、provider 注册核验族{d} 枚 needle 在客户端 e2e 面命中、kind 值域断言族{d} 枚 needle 在客户端 e2e 面命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源、对照表 {s} 与内置默认包 {s} 双向零漂（aliases 域抽出 {d} 枚 ≥ 独立下限 {d}／keywords 域抽出 {d} 枚 ≥ 包内 {d} 枚，ghost/wrong/hidden 皆 0）",
+        .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path, ps1_path, pin_word, smoke_path, @as(usize, lsp_srv.smoke_frame_face.len), @as(usize, lsp_srv.smoke_cap_face.len), esm_path, cli_hub.smoke_js_floor, @as(usize, lsp_srv.smoke_js_cap_face.len), taut_n, cli_hub.js_tautology_ceiling, @as(usize, lcfg.log_writer_face.len), @as(usize, lcfg.log_assert_face.len), @as(usize, lsp_srv.smoke_js_provider_face.len), @as(usize, lsp_srv.kinds_smoke_face.len), kw_doc_path, zh_pack_path, aud.alias_rows, pack_hub.kwtable_alias_floor, aud.kw_rows, zh_pack.keywords.count() },
+    );
+    // 书稿与 README 回执另式：单次 format call 逾 32 枚实参即 compileError，故拆续式接力同一行。
+    std.debug.print(
+        "、书稿 {s} 的《字典篇》与内置默认包全量零漂（keywords 域抽出 {d} 枚 ≥ 独立下限 {d}／aliases 域抽出 {d} 枚 ≥ 下限 {d}，ghost/wrong/hidden/unpaired 皆 0，区段与四形皆对账）",
+        .{ book_arg, ba.kw_rows, pack_hub.bookdict_kw_floor, ba.alias_rows, pack_hub.bookdict_alias_floor },
+    );
+    std.debug.print(
+        "、README {s} 版本族七枚 needle 与产品/工具链版本真值同源，扩展版号与产物全名（{s}-{s}{s}）同于 {s}，`zzc version` 样例行「{s}」在位且 main 出口委派形同源",
+        .{ readme_arg, rd_name, rd_ver, vsix_hub.skip_suffix, pkg_path, vsample },
+    );
+    std.debug.print(
+        "、demo 冒烟防线 {s} 六枚入口 needle 逐枚点名且与 hub 表同源、条数锚 EXPECT_CHECKS={d} 同骨、盘上 demo/ 双向零漂（ghost=0／hub 表 {d} 枚皆验在）、{s} 已经 addFileArg 声明为守卫步文件依赖",
+        .{ smoke_arg, @as(usize, paths.demo_entries.len), @as(usize, paths.demo_entries.len), paths.demos_smoke_path },
+    );
+    std.debug.print(
+        "、CI 调用面 {s} 三枚脚本执行针（sh／node／bash）与 hub 路径同源且其对 matcher 步 addFileArg 在位，README {s} 八枚命令词针与 cli.sub_* 真值同源",
+        .{ ci_arg, readme_arg },
+    );
+    std.debug.print(
+        "、书稿图片面 {s} 引用实计 {d} 枚与盘上 {s} svg {d} 枚双向零漂（hidden=ghost=0，独立手设下限 {d}，未逐枚 addFileArg 则盘上增量靠下次他变/CI 全新 cache 兼保）",
+        .{ book_arg, img_stats[0], paths.book_images_dir, img_stats[1], @as(usize, paths.book_images_floor) },
+    );
+    std.debug.print(
+        "、书稿 demo 引用面六枚反引号点名针与 hub 表同源、抽取器鬼名零、hello 源体（去首行）与冒烟期望串皆逐字在场且 {s} 已经 addFileArg 声明为守卫步文件依赖",
+        .{paths.demo_entries[0]},
+    );
+    std.debug.print(
+        "、书稿命令词面五枚教学主线针与 cli.sub_* 真值同源（子集独立手设非抽取），逆向抽取器以子命令全集普查鬼词零（{s} 面零新增 I/O）",
+        .{book_arg},
+    );
+    std.debug.print("、文档命令词面逆向四面普查（README/书稿/方案书/contributing）鬼词零，help 旗标族四枚收编 cli.help_words 单源且 main 表驱动委派针在位", .{});
+    std.debug.print(
+        "、文档旗标词面三面对账（README 五枚／方案书一枚／contributing 三枚）全由 cli.zzc_flags 真值 comptime 派生，子集独立手设非抽取，三面复用已读文本零新增 I/O",
+        .{},
+    );
+    std.debug.print(
+        "、文档旗标逆向四面普查（README/书稿/方案书/contributing）鬼旗标零，外部豁免四枚（zig 三／code 一）独立手设非抽取",
+        .{},
+    );
+    std.debug.print(
+        "、扩展 README 三面挂针（第 22 片新读）：配置键反引号三面对 lcfg 真值、命令/旗标两面皆入第五面逆向普查——包线只锁「包↔盘」不锁语义之缺（D164）",
+        .{},
+    );
+    std.debug.print(
+        "、AGENTS.md（AI 编码手册·第 23 片新读）两面九+五枚正向针由 hub 真值派生且入命令/旗标两面逆向第六面——读者是自动化工具，静默漂即 AI 产出不可编译代码（D165）",
+        .{},
+    );
+    std.debug.print(
+        "、纯母语行为面脚本话术两枚（纯母语/请改用）与 msg_pure_native 模板真值胶合，第七臂条数锚落 hub smoke_assert_floor（D166）",
+        .{},
+    );
+    std.debug.print(
+        "、指定语言行为面 fixture 两枚路径（proj-ja 源/external-min 包）落 hub 单源与第八臂手抄胶合，条数锚随动（D167）",
+        .{},
+    );
+    std.debug.print(
+        "、CLI 叠加轴行为面：话术两枚与 hub 模板胶合、映射两枚对第 24 片新读叠加包活线（@embedFile 不可越包路径改 run 时读），路径第三枚入面，条数锚随动（D168）",
+        .{},
+    );
+    std.debug.print(
+        "、--lang 选包轴行为面：三枚胶合（未知名话术全等派生、互斥短形⊂模板、退码数锚随 usage_exit_code）入对面四十六，复用已读脚本零新增 I/O（D169）",
+        .{},
+    );
+    std.debug.print(
+        "、叠加轴版本闸行为面：全形模板迁 hub msg_fmt_too_new（输出字节全等迁移无损），话术面扩两枚（过新⊂模板、请升级全等派生），第十一臂极性三断入烟，条数锚随臂（D170）",
+        .{},
+    );
+    std.debug.print(
+        "、选包文件轴版本闸行为面：第十二臂极性三断入烟（RC 不变形、话术分流唯一捕手），「选包轴」标识针入对面四十五，条数锚随臂（D171）",
+        .{},
+    );
+    std.debug.print(
+        "、lang 列播轴行为面：拒绝模板迁 hub msg_lang_bad_verb（输出字节全等无损），四枚入对面四十七（两 header 派生＋⊂模板＋zh( 内容针对 registry 交叉），第十三臂三形入烟，条数锚随臂（D172）",
+        .{},
+    );
+    std.debug.print(
+        "、lang add 注册链行为面：对面四十八 fixture 内容交叉（新读一路径取 hub）＋对面四十九五枚脚本胶合，第十四臂四形闭环入烟（userpack 先查分支真跑首次入线），条数锚随臂（D173）",
+        .{},
+    );
+    std.debug.print(
+        "、已装用户包收录列播（消缺）：列播并轴 userpack.listInstalled 内核入测试图（五形 unit＋裸泄检），十五臂前后对照/同名去重入烟，标识针入对面四十七，条数锚随臂（D174）",
+        .{},
+    );
+    std.debug.print(
+        "、坏注册名拦截行为面：话术迁 hub msg_reg_key_bad（stderr 字节全等迁移无损，`--as`/`$name`/上限数三处改派生），两枚入对面四十九成七枚，十六臂三形＋越界零写盘入烟（探针实锤摘臂即 panic 134 而本地唯静态退码计数红），条数锚随臂（D175）",
+        .{},
+    );
+    std.debug.print(
+        "、坏包族零落盘行为面：「不完整」词核立 np_incomplete 单源、四模板派生收编 main 五址内联手抄（三形 stderr 字节全等无损），三枚（词核＋EXPECT_FAIL_RC 数锚＋臂标识）入对面四十九成十枚，十七臂四形退码/话术/零落盘入烟（探针实锤摘契约硬门即坏包装成功而三通道全绿），条数锚随臂（D176）",
+        .{},
+    );
+    std.debug.print(
+        "、已装坏包点名路径行为面：疑形提示词立 np_corrupt_hint 单源（三形分工不重叠入 T0），两枚（提示词派生＋臂标识）入对面四十九成十二枚，十八臂三步链（装好→手工改坏→再选用）断退码/疑形/路径点名入烟（探针实锤 |/ip|→|_| 退化裸形而三通道全绿），条数锚随臂（D177）",
+        .{},
+    );
+    std.debug.print(
+        "、同名遮蔽真相行为面：装前即拒撞内置注册名（承坏名/坏包失能态同策略）＋话术立 np_shadow/msg_reg_key_shadow 单源，两枚（遮蔽词核派生＋臂标识）入对面四十九成十六枚，十九臂两形（装前拒＋零落盘／手工同名态下内置优先序正断＋反客为主反断）入烟（探针实锤选包序整个反转而三通道全绿），十五臂去重被测物随动改手工造态防空转伪锚，条数锚随臂（D178）",
+        .{},
+    );
+    std.debug.print(
+        "、选包调用序静态面：十九臂形二系输出文本代理判据，探针「序改而输出不变」（预查已装仍回内置）三通道全绿现其盲区；320 T0 以 @embedFile main 取选包段窗口钉首现序＋出现次数＋兜底归位同源＋装前拦臂同 lookup 真相源＋反预查反形，把代理判据升级为序判据（本轮零新增 I/O、零添臂，floor 仍 19，D179）\n",
+        .{},
+    );
+    std.debug.print(
+        "、旗标笔误行为面：真值实测 `--langx`/`--language`/`-lang`/`--machin` 一律静默吞（RC=0 走默认包、而错包名有 314 轮闸），判据立 hub nearZzcFlag（三形近似＋最近匹配打分＋等号形取左核＋合法集全等早退）纯函数零 I/O，话术 msg_flag_near 携派生清单 flag_list_text，两枚（笔误词核派生＋臂标识）入对面四十九成十六枚，二十臂真跑（正形两桩退码＋点名最近名／反形六桩透传不误拦）入烟，floor 随臂 19→20、236 静态计数 8→9（D180）",
+        .{},
+    );
+    std.debug.print(
+        "、面针名实相符面：五枚自称双址的臂标识针按实测址数收紧（3/4/4/3/2），322 T0 立元判据——由 `.why` 文字声明解析址数与 occ 等值对拍（双向：声明几址就几址、已收紧必声明），并钉元判据清单枚数与各表基数（清单漏表即整表失守）；`BuildFace` 第 321 轮补 occ 与四面族对齐，本轮补「名实」闸（D181）\n",
+        .{},
     );
 }

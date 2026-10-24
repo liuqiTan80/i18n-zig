@@ -16,3 +16,6 @@ logs/
 
 # zig fetch 抓取的第三方依赖缓存（demo/httpz 真依赖验证工程，可由 build.zig.zon 的 URL+hash 复现，不入库）
 **/zig-pkg/
+
+# 本地打包的 VS Code 扩展（可由 tools/build-vsix.py 再生）
+*.vsix

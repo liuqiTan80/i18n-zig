@@ -974,7 +974,7 @@ if ($msgs.Count -ne 5) { Write-Output ("  [FAIL] lsp: expected exactly 5 framed 
 if ($lspOk) {
     $N_cifa = Native 0x8BCD,0x6CD5        # ci-fa (lexical diagnostics kind)
     $N_gjz  = Native 0x5173,0x952E,0x5B57 # guan-jian-zi (hover group label)
-    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true') -and $msgs[0].Contains('"semanticTokensProvider"') -and $msgs[0].Contains('"documentSymbolProvider":true') -and $msgs[0].Contains('"definitionProvider":true') -and $msgs[0].Contains('"referencesProvider":true') -and $msgs[0].Contains('"documentHighlightProvider":true') -and $msgs[0].Contains('"codeActionProvider":true') -and $msgs[0].Contains('"foldingRangeProvider":true') -and $msgs[0].Contains('"renameProvider":{"prepareProvider":true}') -and $msgs[0].Contains('"workspaceSymbolProvider":true') -and $msgs[0].Contains('"signatureHelpProvider":{"triggerCharacters":["(",","]}') -and $msgs[0].Contains('"selectionRangeProvider":true'))) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form / semanticTokensProvider / documentSymbolProvider / definitionProvider / referencesProvider / documentHighlightProvider / codeActionProvider / foldingRangeProvider / renameProvider{prepareProvider} / workspaceSymbolProvider / signatureHelpProvider / selectionRangeProvider)"; $lspOk = $false }
+    if (-not ($msgs[0].Contains('"id":1') -and $msgs[0].Contains('"textDocumentSync":{"openClose":true,"change":1,"save":{"includeText":false}}') -and $msgs[0].Contains('"hoverProvider":true') -and $msgs[0].Contains('"semanticTokensProvider"') -and $msgs[0].Contains('"documentSymbolProvider":true') -and $msgs[0].Contains('"definitionProvider":true') -and $msgs[0].Contains('"referencesProvider":true') -and $msgs[0].Contains('"documentHighlightProvider":true') -and $msgs[0].Contains('"codeActionProvider":true') -and $msgs[0].Contains('"foldingRangeProvider":true') -and $msgs[0].Contains('"renameProvider":{"prepareProvider":true}') -and $msgs[0].Contains('"workspaceSymbolProvider":true') -and $msgs[0].Contains('"signatureHelpProvider":{"triggerCharacters":["(",","]}') -and $msgs[0].Contains('"selectionRangeProvider":true') -and $msgs[0].Contains('"completionProvider":{"triggerCharacters":["."]}')) { Write-Output "  [FAIL] lsp: initialize reply lost id/capabilities (save-object sync form / semanticTokensProvider / documentSymbolProvider / definitionProvider / referencesProvider / documentHighlightProvider / codeActionProvider / foldingRangeProvider / renameProvider{prepareProvider} / workspaceSymbolProvider / signatureHelpProvider / selectionRangeProvider / completionProvider)"; $lspOk = $false }
     if (-not ($msgs[1].Contains('publishDiagnostics') -and $msgs[1].Contains('file:///g156.zz') -and $msgs[1].Contains($N_cifa))) { Write-Output "  [FAIL] lsp: didOpen did not publish native-lexical diagnostics for the fullwidth comma"; $lspOk = $false }
     if (-not ($msgs[2].Contains('"id":2') -and $msgs[2].Contains('const') -and $msgs[2].Contains($N_gjz))) { Write-Output "  [FAIL] lsp: hover on chang-shu did not resolve to const/keyword-group"; $lspOk = $false }
     if (-not ($msgs[3].Contains('"id":4') -and $msgs[3].Contains('"data":[0,0,2,0,0') -and -not $msgs[3].Contains('"data":[]'))) { Write-Output "  [FAIL] lsp: semanticTokens/full did not return the chang-shu keyword tuple [0,0,2,0,0]"; $lspOk = $false }
@@ -1079,8 +1079,8 @@ else { $fail = $fail + 1 }
 # (B) node behavior test of the framing layer written to a temp file (never an
 # inline -e string: PS 5.1 quote mangling is itself a known false-green trap),
 # (C) client<->server shared-truthsource byte asserts (10MB cap spelled alike,
-# case-insensitive Content-Length, no completion provider registered -- the
-# README claims completions stay declarative). Pure ASCII, forward slashes
+# case-insensitive Content-Length, LSP completion provider registered and
+# driven by the server completionProvider capability, round 279). Pure ASCII, forward slashes
 # (D52). [SKIP] when node is absent -- skip is loud, silent idle is the real
 # enemy (round-103 lesson). Round 158 adds a native-UI contract: the client's
 # own user-facing strings (error popup, framing errors, zzc.lspPath settings
@@ -1100,7 +1100,13 @@ if (-not $pkg.contributes.configuration.properties."zzc.lspPath") { Write-Output
 $extSrc = Get-Content -Raw (Join-Path $extDir "extension.js") -Encoding UTF8
 if (-not $extSrc.Contains("const LANGUAGE_ID = 'zig-dialect'")) { Write-Output "  [FAIL] client: LANGUAGE_ID constant no longer matches manifest language id"; $lcOk = $false }
 if (-not $extSrc.Contains("'lsp'")) { Write-Output "  [FAIL] client: extension no longer spawns the lsp subcommand"; $lcOk = $false }
-if ($extSrc.Contains("registerCompletionItemProvider")) { Write-Output "  [FAIL] client: completion registered via LSP although README keeps it declarative"; $lcOk = $false }
+# client completion wiring (round 279): the provider must be registered with the
+# `.` trigger char, send the server's exact method word, rebuild CompletionList /
+# CompletionItem bodies and carry TextEdit so a dotted chain replaces its prefix.
+if (-not $extSrc.Contains("registerCompletionItemProvider")) { Write-Output "  [FAIL] client: completion provider not registered (server candidates never reach the editor)"; $lcOk = $false }
+if (-not $extSrc.Contains("request('textDocument/completion'")) { Write-Output "  [FAIL] client: textDocument/completion request never issued"; $lcOk = $false }
+if (-not $extSrc.Contains("new vscode.CompletionList")) { Write-Output "  [FAIL] client: completion result not rebuilt as CompletionList (isIncomplete lost)"; $lcOk = $false }
+if (-not $extSrc.Contains("new vscode.TextEdit")) { Write-Output "  [FAIL] client: dotted-chain TextEdit range lost (insert would duplicate the typed prefix)"; $lcOk = $false }
 # client didSave wiring (round 160): the client must flip the didSave capability,
 # register a save handler, and emit a uri-only textDocument/didSave (server declares
 # save{includeText:false}). The raw-JSON-RPC on-save guard (round 159) already proves
@@ -1141,7 +1147,7 @@ if (-not $pkg.contributes.configuration.properties."zzc.lang") { Write-Output " 
 $langDesc = [string]$pkg.contributes.configuration.properties."zzc.lang".description
 if (-not ($langDesc -match '[\u4e00-\u9fff]')) { Write-Output "  [FAIL] client: zzc.lang settings description not native"; $lcOk = $false }
 if (-not ($extSrc.Contains("function lspSpawnArgs") -and $extSrc.Contains("args.push('--lang', l)"))) { Write-Output "  [FAIL] client: zzc.lang not threaded into the lsp spawn as --lang"; $lcOk = $false }
-if (-not $extSrc.Contains("cp.spawn(zzcBinary(), lspSpawnArgs()")) { Write-Output "  [FAIL] client: lsp spawn does not use lspSpawnArgs (dialect --lang never reaches the server)"; $lcOk = $false }
+if (-not ($extSrc.Contains("const bin = zzcBinary()") -and $extSrc.Contains("const args = lspSpawnArgs()") -and $extSrc.Contains("cp.spawn(bin, args"))) { Write-Output "  [FAIL] client: lsp spawn does not resolve zzcBinary()/lspSpawnArgs() (dialect --lang never reaches the server)"; $lcOk = $false }
 if (-not ($extSrc.Contains("onDidChangeConfiguration") -and $extSrc.Contains("affectsConfiguration('zzc.lang')") -and $extSrc.Contains("restartServer"))) { Write-Output "  [FAIL] client: no onDidChangeConfiguration -> restartServer wiring (dialect switch never takes effect)"; $lcOk = $false }
 # client overlay-pack wiring (round 267): zzc.langOverlay is threaded into the same
 # `zzc lsp` spawn as `--lang-overlay <file>`, so runtime third-party overlay packs
@@ -1197,7 +1203,7 @@ if (-not ($extSrc.Contains("registerWorkspaceSymbolProvider") -and $extSrc.Conta
 # client signature-help wiring (round 276): typing inside a call paren must trigger
 # textDocument/signatureHelp and rebuild vscode.SignatureHelp (signatures, parameter
 # labels, activeParameter); otherwise the popup never opens or loses the parameter list.
-if (-not ($extSrc.Contains("registerSignatureHelpProvider") -and $extSrc.Contains("textDocument/signatureHelp") -and $extSrc.Contains("new vscode.SignatureInformation(") -and $extSrc.Contains("new vscode.ParameterInformation(") -and $extSrc.Contains("activeParameter: res.activeParameter"))) { Write-Output "  [FAIL] client: signatureHelp request or SignatureInformation/ParameterInformation mapping missing (call-paren popup never shows the declaration parameter list or active parameter)"; $lcOk = $false }
+if (-not ($extSrc.Contains("registerSignatureHelpProvider") -and $extSrc.Contains("textDocument/signatureHelp") -and $extSrc.Contains("new vscode.SignatureInformation(") -and $extSrc.Contains("new vscode.ParameterInformation(") -and $extSrc.Contains("help.activeParameter = res.activeParameter"))) { Write-Output "  [FAIL] client: signatureHelp request or SignatureInformation/ParameterInformation mapping missing (call-paren popup never shows the declaration parameter list or active parameter)"; $lcOk = $false }
 # client selection-range wiring (round 277): Expand Selection must request
 # textDocument/selectionRange with every cursor position and rebuild the returned
 # range/parent chain as vscode.SelectionRange; otherwise it stops at the word/line.
@@ -1252,7 +1258,7 @@ if (-not $node) {
     & node --check (Join-Path $extDir "extension.js") 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Output "  [FAIL] client: extension.js does not parse under node --check"; $lcOk = $false }
 }
-if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, declarative-completions invariant, native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit), client semanticTokens rendering (provider registered, full capability, /full request, legend order pinned to server), client dialect selection (zzc.lang property + native description, --lang threaded into lspSpawnArgs spawn, onDidChangeConfiguration -> restartServer)" }
+if ($lcOk) { Write-Output "  [PASS] client guard: manifest main/activation/id/config contracts, framing behavior (byte-counted CJK, glued/partial/malformed/oversize/case-insensitive), shared 10MB cap, LSP completion wiring (provider registered, dot trigger, request word, CompletionList/TextEdit rebuild), native-UI contract (CJK popup/framing/settings, round-157 English gone), client didSave wiring (capability flipped, save handler, uri-only didSave emit), client semanticTokens rendering (provider registered, full capability, /full request, legend order pinned to server), client dialect selection (zzc.lang property + native description, --lang threaded into lspSpawnArgs spawn, onDidChangeConfiguration -> restartServer)" }
 else { $fail = $fail + 1 }
 
 if ($fail -gt 0) { throw ("$fail demo(s)/guard(s) failed the baseline check") }

@@ -25,8 +25,11 @@
 // Expand Selection walks token -> line -> enclosing brace blocks (inner to
 // outer) -> whole document; the server returns the full range/parent chain and
 // the client rebuilds it recursively as vscode.SelectionRange.
-// Completions and highlighting stay declarative (rounds 154/155), so this
-// file deliberately registers NO completion provider.
+// Round 279: CompletionItemProvider answers textDocument/completion with four
+// server-side candidate sources (same-file declarations, keywords/types, stdlib
+// alias roots, dotted chains); dotted candidates carry a TextEdit replacing the
+// whole chain prefix. Snippets stay the declarative baseline -- completion is
+// additive, not a replacement. Highlighting remains declarative too (round 155).
 // Round 160: the client now declares didSave and fires textDocument/didSave on
 // editor save, which drives the round-159 server-side on-save semantic
 // diagnostics end-to-end (previously reachable only via the declarative
@@ -84,7 +87,8 @@ function zzcBinary() {
 
 // Round 163: dialect selection -> `--lang` on the lsp spawn. Empty means the
 // built-in default pack; any other value is passed straight to `zzc lsp --lang`
-// (registry key/alias, e.g. 繁体). Invalid values are handled server-side (the
+// (registry key/alias, e.g. zh; 繁体.txt is an overlay merged into zh, not a
+// selectable pack). Invalid values are handled server-side (the
 // existing stderr -> output channel path), so the client does not re-validate.
 function zzLang() {
   const cfg = vscode.workspace.getConfiguration('zzc');
@@ -111,25 +115,42 @@ function lspSpawnArgs() {
 }
 
 function startServer() {
-  child = cp.spawn(zzcBinary(), lspSpawnArgs(), { stdio: ['pipe', 'pipe', 'pipe'] });
+  const bin = zzcBinary();
+  const args = lspSpawnArgs();
+  // Round 278: a spawn failure or an immediate exit used to leave the "zzc lsp"
+  // channel empty (only a transient popup), making a real client impossible to
+  // diagnose. Announce the command line and every failure on the channel.
+  channel.appendLine('启动语言服务器：' + bin + ' ' + args.join(' '));
+  child = cp.spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
   child.on('error', (err) => {
     ready = false;
+    channel.appendLine('启动失败：' + err.message);
     vscode.window.showErrorMessage(
       'zzc 语言服务器启动失败（' + err.message + '）。请把 zzc 装入 PATH，或将 zzc.lspPath 设置为其可执行文件路径。');
   });
-  child.on('exit', () => { ready = false; });
+  child.on('exit', (code, signal) => {
+    ready = false;
+    channel.appendLine('语言服务器退出（code=' + code + '，signal=' + signal + '）');
+  });
   if (child.stderr) {
     child.stderr.on('data', (b) => { channel.append(Buffer.from(b).toString('utf8')); });
   }
-  decoder = new FrameDecoder();
+  // Round 278: capture this generation's decoder locally. deactivate() nulls the
+  // module-level `decoder` while the killed pipe may still deliver buffered bytes
+  // (crash: null.append), and a restart installs a fresh decoder that stale bytes
+  // from the previous child would corrupt (frame desync).
+  const dec = new FrameDecoder();
+  decoder = dec;
   child.stdout.on('data', (chunk) => {
-    decoder.append(Buffer.from(chunk));
+    if (decoder !== dec) return;
+    dec.append(Buffer.from(chunk));
     for (;;) {
       let frame;
       try {
-        frame = decoder.take();
+        frame = dec.take();
       } catch (e) {
         channel.appendLine('lsp 帧解析错误：' + e.message);
+        channel.appendLine('残留缓冲（前 200 字节）：' + JSON.stringify(dec.buf.subarray(0, 200).toString('utf8')));
         break;
       }
       if (frame === null) break;
@@ -139,6 +160,29 @@ function startServer() {
 }
 
 const channel = vscode.window.createOutputChannel(OUTPUT_CHANNEL);
+
+// Round 278: QoderCN's extension host exposes the code-action registration as
+// `registerCodeActionsProvider` (plural) while stock VS Code uses the singular
+// name. A host missing any provider API must not abort activation wholesale --
+// it did: one TypeError here left every provider and the LSP itself dead, with
+// only a stack trace in the extension-host log. Register defensively instead.
+function registerOptional(name, ...args) {
+  const langs = vscode.languages;
+  let fn = langs[name];
+  if (typeof fn !== 'function' && name === 'registerCodeActionProvider') {
+    fn = langs.registerCodeActionsProvider;
+  }
+  if (typeof fn !== 'function') {
+    channel.appendLine('当前扩展宿主不支持 ' + name + '，该功能已跳过');
+    return { dispose() {} };
+  }
+  try {
+    return fn.apply(langs, args);
+  } catch (e) {
+    channel.appendLine('注册 ' + name + ' 失败：' + e.message);
+    return { dispose() {} };
+  }
+}
 
 function send(msg) {
   if (child && child.stdin && child.stdin.writable) {
@@ -153,17 +197,13 @@ function request(method, params) {
 }
 
 function dispatch(msg) {
-  if (msg.method && (msg.id !== undefined || pending.has(msg.id))) {
-    if (msg.method === 'textDocument/publishDiagnostics') {
-      applyDiagnostics(msg.params);
-      return;
-    }
-    if (msg.id !== undefined && pending.has(msg.id)) {
-      const resolve = pending.get(msg.id);
-      pending.delete(msg.id);
-      resolve(msg.result === undefined ? null : msg.result);
-      return;
-    }
+  // Round 278: notifications carry no id. The old entry guard
+  // `msg.method && (msg.id !== undefined || pending.has(msg.id))` therefore
+  // dropped textDocument/publishDiagnostics wholesale -- the diagnostics panel
+  // stayed empty in a real client. Handle the notification before the id test.
+  if (msg.method === 'textDocument/publishDiagnostics') {
+    applyDiagnostics(msg.params);
+    return;
   }
   if (msg.id !== undefined && !msg.method && pending.has(msg.id)) {
     const resolve = pending.get(msg.id);
@@ -197,6 +237,16 @@ function applyDiagnostics(params) {
   diags.set(vscode.Uri.parse(params.uri), list);
 }
 
+// Round 290 (D149): LSP enumerates CompletionItemKind/SymbolKind from 1 (Text/File = 1) while
+// the vscode enums of the same names start from 0 (vscode.d.ts: SymbolKind.Function = 11,
+// CompletionItemKind.Function = 2). The server speaks LSP numbers, so handing them straight to
+// `new vscode.DocumentSymbol(...)`/`new vscode.CompletionItem(...)` shifts every icon one slot
+// (functions render as variables/constructors, constants as strings, keywords as snippets).
+// sev() and the DocumentHighlightKind mapping in this file already do that conversion; the kind
+// family was the hole. Values come from the shared hub contract (src/lsp/server.zig lsp_kind_base).
+function toVscodeKind(k) { return Math.max(k - 1, 0); }
+function toVscodeSymbolKind(k) { return k ? toVscodeKind(k) : vscode.SymbolKind.Variable; }
+
 // Round 263: document symbols -> outline/breadcrumbs. The server returns plain
 // LSP DocumentSymbol objects (kind/range/selectionRange); map them straight to
 // vscode.DocumentSymbol so nested children keep working if the server adds them.
@@ -206,7 +256,7 @@ function toDocumentSymbol(s) {
   const sym = new vscode.DocumentSymbol(
     s.name || '',
     s.detail || '',
-    s.kind || vscode.SymbolKind.Variable,
+    toVscodeSymbolKind(s.kind),
     new vscode.Range(r.start.line, r.start.character, r.end.line, r.end.character),
     new vscode.Range(sr.start.line, sr.start.character, sr.end.line, sr.end.character));
   if (s.children && s.children.length) sym.children = s.children.map(toDocumentSymbol);
@@ -303,6 +353,11 @@ function boot() {
 function activate(context) {
   diags = vscode.languages.createDiagnosticCollection('zzc');
   context.subscriptions.push(diags, channel);
+  // Round 278: identify the loaded build in the output channel -- a stale
+  // installed copy used to be indistinguishable from a fresh one.
+  const version = context.extension && context.extension.packageJSON
+    ? context.extension.packageJSON.version : '未知';
+  channel.appendLine('zzc 扩展已激活（v' + version + '）');
   boot();
 
   context.subscriptions.push(
@@ -320,7 +375,38 @@ function activate(context) {
       // includeText:false -> uri only; server reads its own doc table (kept current by didChange).
       send({ jsonrpc: '2.0', method: 'textDocument/didSave', params: { textDocument: { uri: doc.uri.toString() } } });
     }),
-    vscode.languages.registerHoverProvider({ language: LANGUAGE_ID }, {
+    // Round 279: context completion -- the server returns four candidate sources for
+    // the prefix before the cursor (same-file top-level declarations, keywords/types,
+    // stdlib alias roots, dotted chains). Dotted-chain items carry a textEdit: VS Code
+    // only replaces the word under the cursor by default, which would paste the whole
+    // chain in front of the last segment (`标准库.调` -> `标准库.标准库.调试.打印`).
+    registerOptional('registerCompletionItemProvider', { language: LANGUAGE_ID }, {
+      provideCompletionItems: async (doc, pos) => {
+        if (!ready) return null;
+        const res = await request('textDocument/completion', {
+          textDocument: { uri: doc.uri.toString() },
+          position: { line: pos.line, character: pos.character },
+        });
+        if (!res || !Array.isArray(res.items)) return null;
+        const list = new vscode.CompletionList();
+        list.isIncomplete = !!res.isIncomplete;
+        list.items = res.items.map((c) => {
+          const item = new vscode.CompletionItem(String(c.label === undefined ? '' : c.label), toVscodeKind(c.kind || 1));
+          if (c.detail) item.detail = String(c.detail);
+          if (c.documentation) item.documentation = String(c.documentation);
+          const te = c.textEdit;
+          if (te && te.range && te.range.start && te.range.end) {
+            item.textEdit = new vscode.TextEdit(
+              new vscode.Range(te.range.start.line, te.range.start.character, te.range.end.line, te.range.end.character),
+              String(te.newText === undefined ? '' : te.newText),
+            );
+          }
+          return item;
+        });
+        return list;
+      },
+    }, '.'),
+    registerOptional('registerHoverProvider', { language: LANGUAGE_ID }, {
       provideHover: async (doc, pos) => {
         if (!ready) return null;
         const res = await request('textDocument/hover', {
@@ -335,7 +421,7 @@ function activate(context) {
     // callee to a same-file top-level function declaration and returns its
     // parameter labels plus the active parameter; anything else yields null so
     // the popup stays closed instead of guessing.
-    vscode.languages.registerSignatureHelpProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerSignatureHelpProvider', { language: LANGUAGE_ID }, {
       provideSignatureHelp: async (doc, pos) => {
         if (!ready) return null;
         const res = await request('textDocument/signatureHelp', {
@@ -356,7 +442,7 @@ function activate(context) {
     // round 277: selection ranges -- the server walks token -> line -> enclosing
     // brace block (inner to outer) -> whole document and returns one chain per
     // requested position; map every chain recursively into vscode.SelectionRange.
-    vscode.languages.registerSelectionRangeProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerSelectionRangeProvider', { language: LANGUAGE_ID }, {
       provideSelectionRanges: async (doc, positions) => {
         if (!ready) return [];
         const res = await request('textDocument/selectionRange', {
@@ -369,7 +455,7 @@ function activate(context) {
     }),
     // round 263: outline/breadcrumb surface -- the server scans top-level dialect
     // declarations through the active pack's keyword map (no hardcoded dialect words).
-    vscode.languages.registerDocumentSymbolProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerDocumentSymbolProvider', { language: LANGUAGE_ID }, {
       provideDocumentSymbols: async (doc) => {
         if (!ready) return [];
         const res = await request('textDocument/documentSymbol', {
@@ -381,13 +467,13 @@ function activate(context) {
     // round 275: workspace symbols -- the server filters top-level declarations
     // across every document it currently holds (no disk scan), so "Go to Symbol
     // in Workspace" and quick-open work across the open .zz files.
-    vscode.languages.registerWorkspaceSymbolProvider({
+    registerOptional('registerWorkspaceSymbolProvider', {
       provideWorkspaceSymbols: async (query) => {
         if (!ready) return [];
         const res = await request('workspace/symbol', { query });
         return Array.isArray(res) ? res.map((s) => new vscode.SymbolInformation(
           s.name || '',
-          s.kind || vscode.SymbolKind.Variable,
+          toVscodeSymbolKind(s.kind),
           '',
           new vscode.Location(vscode.Uri.parse(s.location.uri), new vscode.Range(s.location.range.start.line, s.location.range.start.character, s.location.range.end.line, s.location.range.end.character)))) : [];
       },
@@ -395,7 +481,7 @@ function activate(context) {
     // round 264: same-file go-to-definition -- the server resolves the token under
     // the cursor against top-level declaration names; lexer token kinds keep
     // comments and strings out, and no scope/cross-file resolution is claimed.
-    vscode.languages.registerDefinitionProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerDefinitionProvider', { language: LANGUAGE_ID }, {
       provideDefinition: async (doc, pos) => {
         if (!ready) return null;
         const res = await request('textDocument/definition', {
@@ -414,7 +500,7 @@ function activate(context) {
     // round 266: same-file find-all-references -- the server resolves the cursor
     // token to a top-level declaration, then returns every matching code token;
     // comments/strings stay out, while scope shadowing is not disambiguated.
-    vscode.languages.registerReferenceProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerReferenceProvider', { language: LANGUAGE_ID }, {
       provideReferences: async (doc, pos, context) => {
         if (!ready) return [];
         const res = await request('textDocument/references', {
@@ -433,7 +519,7 @@ function activate(context) {
     // round 273: same-file symbol highlights -- the server resolves the cursor token
     // to a top-level declaration and returns every matching code token, marking the
     // declaration occurrence Write and the rest Read; unresolved words yield [].
-    vscode.languages.registerDocumentHighlightProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerDocumentHighlightProvider', { language: LANGUAGE_ID }, {
       provideDocumentHighlights: async (doc, pos) => {
         if (!ready) return [];
         const res = await request('textDocument/documentHighlight', {
@@ -456,7 +542,7 @@ function activate(context) {
     // server returns one bulk action when context.only asks for it), which makes
     // editor.codeActionsOnSave: { "source.fixAll": true } fix every fullwidth
     // punctuation on save without a separate command.
-    vscode.languages.registerCodeActionProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerCodeActionProvider', { language: LANGUAGE_ID }, {
       provideCodeActions: async (doc, range, context) => {
         if (!ready) return [];
         const res = await request('textDocument/codeAction', {
@@ -499,7 +585,7 @@ function activate(context) {
     // unmatched braces are skipped. round 271 adds consecutive own-line comment
     // blocks (`kind: 'comment'`) mapped to FoldingRangeKind.Comment. `// #region`
     // markers stay with language-configuration.json (the provider is additive).
-    vscode.languages.registerFoldingRangeProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerFoldingRangeProvider', { language: LANGUAGE_ID }, {
       provideFoldingRanges: async (doc) => {
         if (!ready) return [];
         const res = await request('textDocument/foldingRange', {
@@ -515,7 +601,7 @@ function activate(context) {
     // round 274: prepareRename pre-checks the cursor -- non-declaration words and
     // strings/comments return null, so F2 does not open a dead input box; a hit
     // returns the word range and the old name as the placeholder.
-    vscode.languages.registerRenameProvider({ language: LANGUAGE_ID }, {
+    registerOptional('registerRenameProvider', { language: LANGUAGE_ID }, {
       prepareRename: async (doc, pos) => {
         if (!ready) return null;
         const res = await request('textDocument/prepareRename', {
@@ -555,7 +641,7 @@ function activate(context) {
     // round 162: semantic tokens -- request the server's full stream and hand the
     // relative 5-tuples straight to vscode.SemanticTokens (server data is already
     // [deltaLine, deltaStart, length, type, modifiers] over the shared legend).
-    vscode.languages.registerDocumentSemanticTokensProvider(
+    registerOptional('registerDocumentSemanticTokensProvider',
       { language: LANGUAGE_ID },
       {
         provideDocumentSemanticTokens: async (doc) => {

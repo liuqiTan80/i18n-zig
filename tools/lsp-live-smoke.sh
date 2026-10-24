@@ -95,6 +95,7 @@ grep -Fq '"renameProvider":{"prepareProvider":true}' "$out" || fail "initialize 
 grep -Fq '"workspaceSymbolProvider":true' "$out" || fail "initialize 应答缺少 workspaceSymbolProvider"
 grep -Fq '"signatureHelpProvider":{"triggerCharacters":["(",","]}' "$out" || fail "initialize 应答缺少 signatureHelpProvider 触发字符形"
 grep -Fq '"selectionRangeProvider":true' "$out" || fail "initialize 应答缺少 selectionRangeProvider"
+grep -Fq '"completionProvider":{"triggerCharacters":["."]}' "$out" || fail "initialize 应答缺少 completionProvider 触发字符形"
 
 send '{"jsonrpc":"2.0","method":"initialized","params":{}}'
 
@@ -199,7 +200,20 @@ send '{"jsonrpc":"2.0","id":18,"method":"textDocument/selectionRange","params":{
 wait_for '"id":18' || fail "selectionRange 在 3s 内无应答"
 grep -Fq '"id":18,"result":[{"range":{"start":{"line":4,"character":7},"end":{"line":4,"character":10}},"parent":{"range":{"start":{"line":4,"character":0},"end":{"line":4,"character":21}},"parent":{"range":{"start":{"line":3,"character":12},"end":{"line":5,"character":1}},"parent":{"range":{"start":{"line":0,"character":0},"end":{"line":6,"character":0}}}}}}]' "$out" || fail "selectionRange 未返回 词元→整行→块→整文档 的嵌套链"
 
-# 18) shutdown/exit：正常收束，退出码 0。
+# 18) completion：上下文补全三形（第 279 轮）——点链候选带整链 textEdit（缺它则
+#     VS Code 只替换末段词，`标准库.调` 插成 `标准库.标准库.调试.打印`）、本文件顶层
+#     声明作为候选带 kind/detail、光标前无前缀即空表（字面量与空白处不灌候选）。
+send '{"jsonrpc":"2.0","id":20,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/zzc-lsp-live.zz"},"position":{"line":2,"character":9}}}'
+wait_for '"id":20' || fail "completion（点链前缀）在 3s 内无应答"
+grep -Fq '"textEdit":{"range":{"start":{"line":2,"character":4},"end":{"line":2,"character":9}},"newText":"标准库.调试.打印"}' "$out" || fail "completion 点链候选缺整链 textEdit（替换区间未覆盖 `标准库.调`）"
+send '{"jsonrpc":"2.0","id":21,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/zzc-lsp-live.zz"},"position":{"line":2,"character":7}}}'
+wait_for '"id":21' || fail "completion（声明前缀）在 3s 内无应答"
+grep -Fq '"label":"标准库","kind":21,"detail":"本文件声明"' "$out" || fail "completion 未把本文件顶层常数列为候选（kind 21=Constant）"
+send '{"jsonrpc":"2.0","id":22,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/zzc-lsp-live.zz"},"position":{"line":2,"character":0}}}'
+wait_for '"id":22' || fail "completion（无前缀）在 3s 内无应答"
+grep -Fq '"id":22,"result":{"isIncomplete":false,"items":[]}' "$out" || fail "completion 光标前无前缀时应返回空表"
+
+# 19) shutdown/exit：正常收束，退出码 0。
 send '{"jsonrpc":"2.0","id":19,"method":"shutdown","params":null}'
 wait_for '"id":19' || fail "shutdown 在 3s 内无应答"
 send '{"jsonrpc":"2.0","method":"exit","params":{}}'
@@ -208,4 +222,4 @@ wait "$pid" || fail "exit 后进程退出码非 0"
 pid=""
 [ -s "$err" ] && fail "stderr 有非协议输出"
 
-echo "[PASS] lsp-live: 长连接 initialize/didOpen-diagnostics/hover/documentSymbol/definition/references/overlay-hover/codeAction/source-fixAll/foldingRange(comment)/rename/documentHighlight/prepareRename/workspaceSymbol/signatureHelp/selectionRange/shutdown/exit 全通过"
+echo "[PASS] lsp-live: 长连接 initialize/didOpen-diagnostics/hover/documentSymbol/definition/references/overlay-hover/codeAction/source-fixAll/foldingRange(comment)/rename/documentHighlight/prepareRename/workspaceSymbol/signatureHelp/selectionRange/completion/shutdown/exit 全通过"

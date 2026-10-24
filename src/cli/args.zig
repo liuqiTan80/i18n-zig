@@ -4,6 +4,7 @@ const std = @import("std");
 const Pack = @import("../lang/pack.zig").Pack; // 第 142 轮：模板生成器按包组词需 Pack 反查面
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：.zzc 内部路径族改由该模块持唯一真值
 const mcon = @import("../machine_contract.zig"); // 第 203 轮 D71：机读旗标名与单行形制的契约 hub
+const userpack = @import("../lang/userpack.zig"); // 第 316 轮 D175：注册名长度上限取该模块真值，话术零手数
 const kdiag = @import("../diag/kind.zig"); // 第 227 轮 D95：ps1 码点断言 needle 由 kind 词汇真值派生（错误）
 const snippets_hub = @import("../editor/snippets.zig"); // 第 227 轮 D95：hover 词类标签真值派生（关键字）
 
@@ -587,6 +588,88 @@ pub fn isKnownSubcommand(cmd: []const u8) bool {
     return false;
 }
 
+/// 惯例帮助旗标族单一真值（第 302 轮 D161）：main 的帮助兜底此前以四枚裸字面量手抄
+/// （`--help`/`-h`/`-?`/`help`），而文档面（README/书稿/方案书/contributing）的命令样例同样
+/// 手抄这些词——297/301 轮在册的「受支持词全集」判据缺此四员，文档逆向鬼词普查把合法的
+/// `zzc help` 误报即须豁免手抄，双源互踩。自此 main 读表驱动、守卫合法集同源派生。
+pub const help_words = [_][]const u8{ "--help", "-h", "-?", "help" };
+
+/// 对面三十八·`src/main.zig` 委派形针：main 须以 `cli.help_words` 表驱动而非回退四枚手抄字面
+///（承 224 轮 `tl_face` 委派形形制）——改回手抄即文档面合法集与运行期兜底分道的起点。
+pub const help_main_face = [_]zzc.BuildFace{
+    .{ .needle = "for (cli.help_words)", .why = "main 帮助兜底须读 hub 表驱动——手抄回潮即两源分道（第 302 轮 D161）" },
+};
+
+/// 文档命令词的合法集判据（第 302 轮 D161）：`subcommands` 九枚 ∪ `help_words` 四枚——
+/// 文档面（README/书稿/方案书/contributing）出现的 `zzc <词>` 必须落在此集，否则读者照敲
+/// 即 UnknownSubcommand EXIT=2。抽取器只收连续小写段，`--help`/`-h`/`-?` 非小写段不入集，
+/// 故实际参集的文档面合法词为九子命令＋`help`。
+pub fn isDocWordLegal(word: []const u8) bool {
+    if (isKnownSubcommand(word)) return true;
+    for (help_words) |w| {
+        if (std.mem.eql(u8, w, word)) return true;
+    }
+    return false;
+}
+
+// —— 对面四十·文档旗标逆向鬼词面（第 304 轮 D163）——
+//
+// 303 轮正向五针只拦「该在的不在」，文档自增/误改出新旗标（`--verbose`/`--zzcghost` 形）仍
+// 无从捕——t2 探针两面添鬼词五通道零信号实锤。合法集 = `zzc_flags` 五枚 ∪ `--help` ∪ 外部工具
+// 豁免四枚；豁免表为**独立手设**（现盘上四面全普查实测归类：zig 原生 `--check`/`--fuzz`/`--save`
+// 与 code CLI `--install-extension`；禁自动抽取定集——新文档引新外部旗标须先审豁免表面，故意摩擦）。
+// 册边界：单破折短旗（`-h`/`-p`/`-Doptimize`/`-ffuzz`）不入抽取器词法（规则只认 `--` 双破折头）——
+// 假阳面宽于收益，挂面入候选；CHANGELOG/台账不挂（承 302 演漂引文形册边界）。
+
+/// 外部工具旗标豁免全表（zig 官方与 VS Code CLI 真值，非 zzc 消费面）：逐枚带出处。
+pub const doc_flag_exempt = [_][]const u8{
+    "--check", // `zig fmt --check`（方案书/contributing 实见）
+    "--fuzz", // `zig build --fuzz`（书稿测试章实见）
+    "--save", // `zig fetch --save`（contributing 实见）
+    "--install-extension", // `code` CLI 装扩展（README 实见）
+    "--summary", // `zig build test --summary all`（AGENTS.md 门禁章实见，第 306 轮 D165）
+};
+
+/// 旗标全形合法集判据：`zzc_flags` 五枚 ∪ `--help` ∪ `doc_flag_exempt` 全表（逐轮添枚带出处）。
+pub fn isDocFlagLegal(flag: []const u8) bool {
+    if (isZzcFlag(flag)) return true;
+    if (std.mem.eql(u8, flag, "--help")) return true; // help_words 唯 `--` 双破折头形参与本面
+    for (doc_flag_exempt) |f| {
+        if (std.mem.eql(u8, f, flag)) return true;
+    }
+    return false;
+}
+
+/// 从文本逐处抽「`--`＋以 ASCII 小写开头的 [a-z0-9-]* 段」的旗标全形（含尾 `-` 剔除；纯函数零 I/O，
+/// 第 304 轮 D163）。空段/非小写头（`---` 分隔形/`-D` 短旗/中文破折）不入集只推进一位；
+/// 处理后扫描起点推至段尾之后（确定性推进承 299 抽取器教训）。上限共用 `book_zzc_word_cap`。
+pub fn collectDocFlagWords(text: []const u8) BookZzcWords {
+    var out = BookZzcWords{};
+    var pos: usize = 0;
+    while (pos + 1 < text.len) {
+        if (text[pos] != '-' or text[pos + 1] != '-') {
+            pos += 1;
+            continue;
+        }
+        // `--` 命中：段头须小写才成旗标词形。
+        var end = pos + 2;
+        while (end < text.len and ((text[end] >= 'a' and text[end] <= 'z') or (text[end] >= '0' and text[end] <= '9') or text[end] == '-')) : (end += 1) {}
+        var seg_end = end;
+        while (seg_end > pos + 2 and text[seg_end - 1] == '-') : (seg_end -= 1) {} // 剔尾破折
+        const head_ok = end > pos + 2 and text[pos + 2] >= 'a' and text[pos + 2] <= 'z';
+        if (head_ok and seg_end > pos + 2) {
+            if (out.count < book_zzc_word_cap) {
+                out.words[out.count] = text[pos..seg_end];
+                out.count += 1;
+            } else {
+                out.overflow = true;
+            }
+        }
+        pos = if (end > pos + 1) end else pos + 2; // 确定性推进：段尾优前；空段跨过双破折
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // CLI 旗标名单一真值（第 207 轮 · D75）：zzc 层消费的旗标此前散成多副本——`--machine`
 // 独归 mcon.flag_machine，`--lang`/`--lang-file` 在 args 的 find 站与 strip 站各存裸字面量
@@ -617,6 +700,275 @@ pub fn isZzcFlag(name: []const u8) bool {
     }
     return false;
 }
+
+// —— 第 321 轮·自家旗标近似名（笔误）判据面（D180）——
+//
+// 活体真值：`--langx zh`／`--language zh`／`-lang zh`／`--lang-filex a.txt`／`--machin` 一律
+// **静默吞**（RC=0、按默认包跑），用户与 AI 皆以为旗标生效——错包名有第 314 轮闸（退 2），错
+// **旗标名**却零反馈。unit 层早已钉住 `findFlag` 匹配严格性（25/26/42/207 轮四枚测；本轮吞并探针
+// 即被它们×双图拦红），缺的是真跑层的拦阻与话术。判据入 hub（纯函数零 I/O）、main 只做扫描与退出。
+// 册边界：只与 zzc 自有旗标名比近似，余者照旧原样透传 zig——假阳面以 321 T0 的反形钉住。
+
+/// zzc 自有旗标＋帮助旗标的合法全形集（近似判据的比对域；`help_words` 含 `--help`/`-h`/`-?`/`help`）。
+pub const legal_flag_words = zzc_flags ++ help_words;
+
+/// 合法旗标名清单话术（由 `zzc_flags` comptime 派生、顿号相连——改名/添枚即随话术走，不手抄）。
+pub const flag_list_text = blk: {
+    var buf: [256]u8 = undefined;
+    var n: usize = 0;
+    for (zzc_flags, 0..) |f, i| {
+        if (i > 0) {
+            const sep = "、";
+            if (n + sep.len + f.len > buf.len) @compileError("flag_list_text 缓冲不足：扩旗标须随动 buf");
+            @memcpy(buf[n..][0..sep.len], sep);
+            n += sep.len;
+        }
+        if (n + f.len > buf.len) @compileError("flag_list_text 缓冲不足：扩旗标须随动 buf");
+        @memcpy(buf[n..][0..f.len], f);
+        n += f.len;
+    }
+    break :blk buf[0..n] ++ "";
+};
+
+/// 词核：旗标名笔误面（话术模板、face 针、烟测臂三处共用，单源闸）。
+pub const np_flag_typo = "笔误";
+
+/// 近似旗标话术：点名错形＋最近合法名＋合法全集（派生）＋透传逃生口（`--` 之后）。
+pub const msg_flag_near: []const u8 = "旗标「{s}」疑似「{s}」" ++ np_flag_typo ++
+    "。zzc 自有旗标只有：" ++ flag_list_text ++
+    "；其余旗标原样透传 zig，确要透传请置于 -- 之后。";
+
+/// 去前导破折取旗标核（`--lang`/`-lang`/`lang` 同核；纯破折形得空核）。
+fn flagCore(name: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < name.len and name[i] == '-') i += 1;
+    return name[i..];
+}
+
+/// arg 是否为 zzc 自有旗标的近似名？是则返回那个合法旗标（供话术点名），否则 null。
+/// 规则（纯函数零 I/O，第 321 轮 D180）：①非 `-` 头/`--` 分隔符/空核一律放过；②等号形先取 `=` 左侧
+/// 再判；③与任一合法旗标全等 → 放过（先于近似，避 `--lang-file` 被 `--lang` 误吞）；④同核不同形
+/// （破折数不符，如 `-lang`）、超集形（`langx` ⊃ `lang`）、截断形（`machin` ⊂ `machine`，且核长 ≥3
+/// 以免 `-l`/`--m` 这类链接短旗误判）皆判近似。
+pub fn nearZzcFlag(arg: []const u8) ?[]const u8 {
+    if (arg.len < 2 or arg[0] != '-') return null;
+    const head = std.mem.indexOfScalar(u8, arg, '=') orelse arg.len;
+    const form = arg[0..head];
+    const core = flagCore(form);
+    if (core.len == 0) return null;
+    for (legal_flag_words) |m| {
+        if (std.mem.eql(u8, form, m)) return null; // 合法全等：整枚 arg 早退
+    }
+    var best: ?[]const u8 = null;
+    var best_gap: usize = std.math.maxInt(usize);
+    for (legal_flag_words) |m| {
+        const mc = flagCore(m);
+        if (mc.len == 0) continue;
+        // 三形皆算近似：同核不同形（破折数不符）／超集（多打尾缀）／截断（少打尾缀，核长 ≥3）。
+        const hit = std.mem.eql(u8, core, mc) or
+            std.mem.startsWith(u8, core, mc) or
+            (core.len >= 3 and std.mem.startsWith(u8, mc, core));
+        if (!hit) continue;
+        // 取「长度差最小」的合法名做建议：`--lang-filex` 与 `--lang`(差4)/`--lang-file`(差0+?) 皆近似，
+        // 应指更贴切的 `--lang-file`；`--lan` 则指最短的 `--lang`。同差取表内前者（zzc_flags 先于 help_words）。
+        const gap = if (mc.len >= core.len) mc.len - core.len else core.len - mc.len;
+        if (gap < best_gap) {
+            best = m;
+            best_gap = gap;
+        }
+    }
+    return best;
+}
+
+// —— 对面三十九·文档旗标词面（第 303 轮 D162）——
+//
+// 三面命令样例手抄 `zzc_flags` 真值共 36 处（README 11／方案书 5／contributing 17），而从无
+// 针入任何通道——t2 探针形B（README `--machine→--mchine` 全量 6 处＋`--lang-overlay→
+// --lng-overlay` 3 处）fmt/build/test/matcher/demos-smoke 五通道零信号实锤；形A（hub 侧
+// `--lang→--lng`）则由既有 usage 对账接住 9 红——两侧不对称：hub 漂会带动行为与文档分道，
+// 而文档侧独漂（最常见的人改错字/手抄走样）方向零防御——本面补位。
+// 「哪枚旗标出现在哪个文档面」为**独立手设子集**（禁从文档文本抽取定集——避自证循环承 297/301）；
+// needle 全由 `zzc_flags` 真值 comptime 派生，改名即双向拦。册边界：`--lang` 针的 presence 语义
+// 会被超集词形（`--lang-file`/`--lang-overlay`）污染——半漂混排同 298 册边界，全量漂必拦。
+
+/// README 旗标面：五枚全在（机读旗标/选包/外部包/叠加层/注册名皆用户可见主面）。
+pub const readme_flag_face = [_]zzc.BuildFace{
+    .{ .needle = flag_machine, .why = "README 机读旗标须按 hub 真值演示——漂即读者敲未知旗标（第 303 轮 D162）" },
+    .{ .needle = flag_lang, .why = "README 选包旗标——同上形制（超集污染形册边界见顶注）" },
+    .{ .needle = flag_lang_file, .why = "README 外部语言包旗标——同上形制（第 303 轮 D162）" },
+    .{ .needle = flag_lang_overlay, .why = "README 叠加层旗标——探针实锤独漂 `--lng-overlay` 五通道零信号之形（第 303 轮 D162）" },
+    .{ .needle = flag_as, .why = "README lang add 注册名旗标——207 轮孤字面量收编的文档侧延伸（第 303 轮 D162）" },
+};
+
+/// 方案书旗标面：仅选包一枚（现盘上 --lang×5；两面未出现的旗标不入面免误报）。
+pub const plan_flag_face = [_]zzc.BuildFace{
+    .{ .needle = flag_lang, .why = "方案书选包叙述须按 hub 真值——同上形制（第 303 轮 D162）" },
+};
+
+/// contributing 指南旗标面：选包/外部包/叠加层三枚（语言包工作流全在此面）。
+pub const contrib_flag_face = [_]zzc.BuildFace{
+    .{ .needle = flag_lang, .why = "contributing 选包旗标——同上形制（第 303 轮 D162）" },
+    .{ .needle = flag_lang_file, .why = "contributing 外部包旗标——同上形制（第 303 轮 D162）" },
+    .{ .needle = flag_lang_overlay, .why = "contributing 叠加层旗标——第三方库翻译主流程旗标，漂即贡献者按指南产出发行包失败（第 303 轮 D162）" },
+};
+
+// —— 对面四十二·AGENTS.md（AI 编码操作手册）两面针（第 306 轮 D165）——
+//
+// AGENTS.md 是 AI 工具消费 zzc 的唯一入口面：命令词/旗标写错即 AI 照手册敲错命令而不自知
+// （与 301–304 文档面同族，但读者是自动化工具——静默漂的代价是 AI 产出不可编译代码）。
+// t2 探针（`zzc build→zzc bild`＋`--machine→--machinX`）五通道零信号实锤——文件本不存在于任何面。
+// 子集独立手设（判据非从 AGENTS.md 抽取）：命令面取九子命令全集（手册主流程全演示），旗标面取
+// zzc 五旗标全集（均实见）；正向 presence ＋命令/旗标两面逆向皆挂。
+
+/// AGENTS.md 命令词面：九子命令全集针（needle 由 `sub_*` 真值 comptime 派生）。
+pub const agents_cmd_face = [_]zzc.BuildFace{
+    .{ .needle = zzc.prog_name ++ " " ++ sub_init, .why = "手册 scaffold 章须按 hub 真值演示 init（第 306 轮 D165）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_check, .why = "自检闭环主命令——漂即 AI 无从验纯" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_build, .why = "编译章真值针（探针实注漂形 bild 即此针靶）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_run, .why = "运行章真值针" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_test, .why = "测试章真值针（本机实测存在）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_eject, .why = "交付上游章真值针" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_lsp, .why = "LSP 环境事实章真值针" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_lang, .why = "指定语言章真值针（lang/lang add 两形共用前缀）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_version, .why = "查包途径章真值针" },
+};
+
+/// AGENTS.md 旗标面：zzc 五旗标全集针（needle 直接 = 旗标真值）。
+pub const agents_flag_face = [_]zzc.BuildFace{
+    .{ .needle = flag_machine, .why = "机读闭环核心旗标——漂即 AI 逐行正则消费落空（探针实注形）" },
+    .{ .needle = flag_lang, .why = "指定语言主旗标（超集形污染由反引号全形规避不了，presence 沿 303 册）" },
+    .{ .needle = flag_lang_file, .why = "外部包直载旗标" },
+    .{ .needle = flag_lang_overlay, .why = "叠加层旗标——第三方库母语化入口" },
+    .{ .needle = flag_as, .why = "lang add 注册名旗标" },
+};
+
+// —— 对面四十三·纯母语行为面脚本话术对账（第 307 轮 D166）——
+//
+// AGENTS.md 铁律「混写英文关键词必拦并给改词候选」的行为面此前无真跑防线：探针实锤
+// 拆去 main.zig 强制臂（`false and`）后 fmt/build/test/matcher/demos-smoke 五通道全绿，
+// 而混写源的报错错位成后端假语法错——手册变虚假广告无人知。修法：demos-smoke 添第七臂
+// 真跑验反形（混写必 RC≠0 且输出含改词话术）；脚本手抄的两枚话术词形在此与模板真值胶合。
+
+/// 脚本断言须手抄的话术词形：皆须为 `msg_pure_native` 模板子串（307 T0 关系钉坐实，模板漂字即红）。
+pub const pure_native_smoke_face = [_]zzc.BuildFace{
+    .{ .needle = "纯母语", .why = "报错种类名前缀——脚本 grep 侧与模板同源，分道即文案改版漏随脚本（第 307 轮 D166）" },
+    .{ .needle = "请改用", .why = "改词指引词——无此即 AI 无从自修，脚本必断此词" },
+};
+
+// —— 对面四十五·CLI 叠加轴行为面（第 309 轮 D168）——
+//
+// `--lang-overlay` 的消费链有 lsp-live hover 一臂（267 轮），但 **CLI 侧失败形无防线**：
+// 探针实锤——拆去 applyOverlayPack 的 FileNotFound 报错臂（静默回退基包）后
+// fmt/build/test/matcher/smoke/lsp-live 五通道全绿而缺包命令 RC 1→0 静默通过；坏包
+// （语法错）同臂。另正形差分入档：overlay 生效时 eject 产物含包映射值形 `httpz.Server`，
+// 无 overlay 同产落 mangle 形——两形互验锁住「叠加真并入译表」不只「命令不炸」。
+
+/// 叠加包文件缺失报错模板（第 309 轮自 main.zig 迁入 hub，承 D101 文案单源形制）。
+pub const msg_overlay_missing: []const u8 = "外部叠加语言包文件不存在：{s}";
+
+/// 外部包行式语法错报错模板（同上迁入；main 侧 loadExternalPack/applyOverlayPack 共消费）。
+pub const msg_pack_syntax_hint: []const u8 = "外部语言包「{s}」解析失败：行式语法错（未知段头/空键或值/同层键冲突/" ++ Pack.meta_format ++ " 非数等），请按 docs/contributing-lang-pack.md 检查。";
+
+/// --lang 与 --lang-file 双源同指的互斥拒绝模板（第 310 轮 D169 迁 hub 单源，承 309 形制）：
+/// 行为面由 demos-smoke 第十臂真跑；话术入面 needle 取「互斥」短形（脚本 grep 侧同形）。
+pub const msg_lang_mutex: []const u8 = "--lang 与 --lang-file 互斥：内置选包、外部包文件二选一。";
+
+/// 行为面断言话术（第 310 轮 D169）：--lang 内置选包轴三形——脚本十臂真跑断言，
+/// needle 由本 hub 真值派生/选取；同文漂→310 T0 全等/子串钉红＋守卫对面红。
+pub const lang_axis_face = [_]zzc.BuildFace{
+    .{ .needle = np_unknown_pack, .why = "未知包报错种类名——派生自本 hub 真值零手抄（脚本 grep 侧同形）" },
+    .{ .needle = "互斥", .why = "双源同指拒绝指引词——须为 msg_lang_mutex 模板子串，漂即测图红" },
+    .{ .needle = "EXPECT_USAGE_RC=" ++ std.fmt.comptimePrint("{d}", .{usage_exit_code}), .why = "usage 退码数锚——由 usage_exit_code 派生，脚本字面随动；值漂即对面红" },
+};
+
+/// 第九臂手抄话术两枚与 hub 模板胶合（须为上述模板子串，T0 关系钉）；另脚本源侧/期望侧
+/// 两枚映射词形由 `overlay_pack_face` 对叠加包活线胶合（守卫对面四十五读包文本，第 24 片新读）。
+pub const overlay_smoke_face = [_]zzc.BuildFace{
+    .{ .needle = "叠加语言包文件不存在", .why = "缺包话术——脚本 grep 侧与模板同源（第 309 轮 D168）" },
+    .{ .needle = "解析失败", .why = "坏包话术——同上" },
+    .{ .needle = "过新", .why = "版本闸话术——须为 msg_fmt_too_new 模板子串，漂即测图红（第 311 轮 D170）" },
+    .{ .needle = np_upgrade, .why = "升级指引词——派生自本 hub 真值零手抄（脚本 grep 侧同形，第 311 轮 D170）" },
+    .{ .needle = "选包轴", .why = "第十二臂标识词——脚本 ok/FAIL 回声侧与注释侧双在，锁住两臂分轴不互替（第 312 轮 D171）" },
+};
+
+/// 包 `$format` 高于支持值的专错模板（第 311 轮 D170 自 main.fmt_too_new_hint 全形迁 hub，
+/// 承 309 形制）：版本闸与语法错两话术分流——过新必指升级，塌成「解析失败」即误导 AI 修没坏的包。
+pub const msg_fmt_too_new: []const u8 = "外部语言包「{s}」声明的 " ++ Pack.meta_format ++ " 过新（当前 " ++ zzc.prog_name ++ " 仅支持格式 {d}）。" ++ np_upgrade ++ " " ++ zzc.prog_name ++ "。";
+
+/// `zzc lang <未知动词>` 拒绝模板（第 313 轮 D172 迁 hub 单源，承 311 形制）：
+/// 含 np_subcmd/np_reg_packs 两处派生＋未知动词占位；行为面由第十三臂真跑。
+pub const msg_lang_bad_verb: []const u8 = "lang 只有 add " ++ np_subcmd ++ "：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与" ++ np_reg_packs ++ "）；「{s}」不是有效" ++ np_subcmd ++ "。";
+
+/// `lang add` 非法注册名拒绝全形（第 316 轮 D175：由 main 内联迁入本 hub 单一真值，承
+/// 311/313 形制——迁移无损以新旧 stderr **字节全等**坐实）。三处原手抄全部派生：`--as` 取
+/// `flag_as`、`$name` 取 `Pack.meta_name`、上限数取 `userpack.max_key_len`（comptime 印数，
+/// 改白名单长度即话术随动，禁得住 main 侧手数与真值分道）。占位仅余 `{s}`（用户传入名）。
+/// 坏包族话术词核（第 317 轮 D176）：「不完整」三字散在 main 五址内联手抄（add 硬门/
+/// --lang-file/已装被改坏/裸包兜底四形＋文件不存在形各持一份），漂一字即四处指引分道——
+/// 立词核单源，四模板各自派生，行为面由第十七臂真跑胶合（对面四十九）。
+pub const np_incomplete = "不完整";
+
+/// 外部包文件读不到（loadExternalPack 一址两消费：基包轴与 `--lang-file` 轴同话术）。
+pub const msg_ext_missing: []const u8 = "外部" ++ np_pack_word ++ "文件不存在：{s}";
+/// B6 契约硬门拒绝全形（装前即拒——装进来只会在流程深处报缺，属定时炸弹形）。
+pub const msg_pack_incomplete: []const u8 = "外部" ++ np_pack_word ++ "「{s}」" ++ np_incomplete ++ "：{s}";
+/// 已装包运行期被改坏（userpack 落盘后再选用的第二道门，与上者同词核异形）。
+/// 「装后又被改坏了？」疑问提示词（第 318 轮 D177）：已装包形独有的第二道门标记——
+/// 外部/裸两形不带此词（三形分工不重叠），故立单源供 hub 模板与第十八臂话术针胶合。
+pub const np_corrupt_hint = "装后又被改坏了？";
+
+pub const msg_installed_pack_incomplete: []const u8 = "已装" ++ np_pack_word ++ "「{s}」" ++ np_incomplete ++ "（" ++ np_corrupt_hint ++ "）：{s}";
+/// 无路径可点名时的兜底形（内置包恒过契约，此形正常不可达——保留同词核派生防分道）。
+pub const msg_bare_pack_incomplete: []const u8 = np_pack_word ++ np_incomplete ++ "：{s}";
+
+/// 「遮蔽」词核（第 319 轮 D178）：注册名撞内置表键/别名 → 选用侧永远命不中已装包。
+/// 面针与脚本 grep 同形胶合，漂字即双通道红。
+pub const np_shadow = "遮蔽";
+
+/// 内置同名遮蔽拒绝模板：装上后 `--lang` 仍走内置（表先查），文件成幽灵态、回执承诺成假——
+/// 故装前即拒（承 316 坏名/317 坏包的「失能态装前拦」同策略）。
+pub const msg_reg_key_shadow: []const u8 = "注册名「{s}」与内置" ++ np_pack_word ++ "同名，选用时会被内置表" ++ np_shadow ++ "（永远选不中，落盘只成幽灵文件）。可 " ++ flag_as ++ " 另起；若本意是用内置包，直接 " ++ flag_lang ++ " 选它即可。";
+
+pub const msg_reg_key_bad: []const u8 = np_reg_key_open ++ "{s}」不可用——须为 ASCII 字母/数字/-/_，不以 . 或 - 开头，至多 " ++ std.fmt.comptimePrint("{d}", .{userpack.max_key_len}) ++ " 字（注册名会直接成为文件名与命令行选择名）。可 " ++ flag_as ++ " 另起；展示名仍用包内 " ++ Pack.meta_name ++ "，不受此限。";
+
+/// 行为面断言话术（第 313 轮 D172）：`zzc lang` 列播轴三形——脚本十三臂真跑，
+/// 前三枚全/半派生零手抄，尾枚列播内容针独立手设（registry 改名/掏空即红）。
+pub const lang_list_face = [_]zzc.BuildFace{
+    .{ .needle = np_cur_pack, .why = "详情头——派生自本 hub 真值（脚本 grep 侧同形）" },
+    .{ .needle = np_reg_packs, .why = "可注册段头——同上派生（列播两行头缺一即选包用户无从所指）" },
+    .{ .needle = "不是有效", .why = "未知动词拒绝词——须为 msg_lang_bad_verb 模板子串，漂即测图红" },
+    .{ .needle = "zh(", .why = "列播内容针——内置注册表唯一 entry 键形，独立手设（掏空体/改名即空列表红；313 T0 对 registry 真值交叉）" },
+    .{ .needle = "收录列播", .occ = 3, .why = "第十五臂标识词——已装用户包收录形独立指认；三址（臂首注释／注释内引述／[ok] echo）逐址删一即红，旧形 occ 缺省只核存在性（第 322 轮 D181 收紧）" },
+};
+
+/// 行为面断言话术（第 314 轮 D173）：`zzc lang add` 注册链四形闭环——脚本第十四臂真跑。
+/// 既有防线仅 237 T2 静态源形计数（摘整臂 pack_ext 2→1 接住），退码/回执内容/新键可用
+/// 皆零通道；前三枚全派生零手抄，尾枚 fixture $code 独立手设（314 T0 对包文交叉）。
+pub const lang_add_face = [_]zzc.BuildFace{
+    .{ .needle = np_installed, .why = "成功回执词——派生自本 hub（静默安装/漂字即捕；237 静态针只数委派形不验真输出）" },
+    .{ .needle = np_dup_installed, .why = "防覆盖拒绝词——同上派生（DUP 臂话术/退码真跑侧首次入线）" },
+    .{ .needle = zzc.lang_dir ++ "/", .why = "落位目录针——由 hub lang_dir 派生（回执指路目录与真实落盘同源的脚本侧投影）" },
+    .{ .needle = flag_as, .why = "另起注册名旗——本 hub flag 真值（--as 形键名行为面由十四臂 D 步真跑）" },
+    .{ .needle = "tst-ja", .why = "缺省注册名内容针——fixture 包 $code，独立手设（314 T0 对包文交叉：缺省键与 $code 同源形）" },
+    .{ .needle = "不可用", .why = "坏名拒绝短形——须为 msg_reg_key_bad 模板子串（hub 漂字即测图红；第 316 轮 D175）" },
+    .{ .needle = "越界零写盘", .occ = 4, .why = "第十六臂标识词——坏名拦截＋零写盘形独立指认；四址（注释／[FAIL] 两形解释／[ok] echo）逐址删一即红（第 322 轮 D181 收紧）" },
+    .{ .needle = np_incomplete, .why = "坏包词核——派生自本 hub（三模板共有子串，脚本十七臂话术针随动；第 317 轮 D176）" },
+    .{ .needle = "EXPECT_FAIL_RC=" ++ std.fmt.comptimePrint("{d}", .{failure_exit_code}), .why = "失败退码数锚——由 failure_exit_code 派生，脚本字面随动；值漂即对面红（第 317 轮 D176）" },
+    .{ .needle = "坏包族零落盘", .occ = 4, .why = "第十七臂标识词——坏包四形拒装且不落盘独立指认；四址（注释／[FAIL]／[ok] echo 等）逐址删一即红（第 322 轮 D181 收紧）" },
+    .{ .needle = np_corrupt_hint, .why = "已装包第二道门疑问提示词——派生自本 hub（脚本十八臂话术针随动；第 318 轮 D177）" },
+    .{ .needle = "已装坏包点名路径", .occ = 3, .why = "第十八臂标识词——三步链退码/点名/疑形独立指认；三址（注释／[FAIL]／[ok] echo）逐址删一即红（第 322 轮 D181 收紧）" },
+    .{ .needle = np_shadow, .why = "同名遮蔽词核——派生自本 hub（脚本十九臂话术针随动；第 319 轮 D178）" },
+    .{ .needle = "同名遮蔽真相", .occ = 2, .why = "第十九臂标识词——装前拒＋内置优先序独立指认；两址（臂首注释／[ok] echo）缺一即红（第 322 轮 D181 收紧）" },
+    .{ .needle = np_flag_typo, .occ = 2, .why = "旗标名笔误词核——派生自本 hub；两址（二十臂话术判据 grep 址／FAIL 文案址）皆须在：判据在而文案漂、或文案在而判据漂，皆说明臂与 hub 分道（第 321 轮 D180，措辞第 322 轮 D181 对齐「址」字公约）" },
+    .{ .needle = "旗标笔误装前即拒", .occ = 3, .why = "第二十臂标识词——typo 三形退码＋最近名点名＋透传区反断独立指认，注释／[FAIL]／[ok] 三址各计一枚（旧形 occ 缺省 1，改一处即漂看不住；第 321 轮 D180 演漂形⑤ 所逼）" },
+};
+
+/// 第九臂正形源侧/期望侧词形对叠加包文本胶合：两枚须为包映射活线（键侧/值侧），
+/// 逐枚 presence 对包文；全线形键值配对由 309 T0 独立手设对拍（包漂字而面/脚本漏随即红）。
+pub const overlay_pack_face = [_]zzc.BuildFace{
+    .{ .needle = "网络服务.服务器", .why = "正形源侧方言全形——须为叠加包映射活线键侧（第 309 轮 D168）" },
+    .{ .needle = "httpz.Server", .why = "产物期望形——须为同映射线值侧——分道即包改版漏随脚本" },
+};
 
 test "第 207 轮 T0 旗标单一真值自守：名两两不同 + machine 与 hub 同源 + isZzcFlag 正反 + --as 在册" {
     // 真值表自守：任一旗标名与另一枚相等（手抄/复制漏改）即红。
@@ -1002,7 +1354,7 @@ fn countOccurrences(hay: []const u8, needle: []const u8) usize {
 /// 对面（src/main.zig 退码委派形清单·第 236 轮 D104）：守卫读 main.zig 文本逐字节对账，
 /// 消费侧若改回手抄字面量、委派形 needle 即消失、守卫红；`count` 由 236 T0 以 @embedFile 钉死。
 pub const exit_code_face = .{
-    .{ .needle = "std.process.exit(cli.usage_exit_code);", .count = @as(usize, 7), .why = "main.zig 七处 usage 直接退出臂皆委派单源，漂即某路 usage 退码分道（外部脚本 misjudge）" },
+    .{ .needle = "std.process.exit(cli.usage_exit_code);", .count = @as(usize, 9), .why = "main.zig 九处 usage 直接退出臂皆委派单源，漂即某路 usage 退码分道（外部脚本 misjudge；第 319 轮 D178 撞名拦截臂 +1、第 321 轮 D180 近似旗标拦截臂 +1）" },
     .{ .needle = "if (e == error.Usage) cli.usage_exit_code else cli.failure_exit_code", .count = @as(usize, 1), .why = "bail 规范映射臂：error.Usage→usage 码、余→fail 码同源，漂即经 bail 的退码分道" },
 };
 
@@ -1952,6 +2304,83 @@ pub const np_unknown_pack = "未知语言包"; // --lang 未知包拒绝（main�
 pub const np_lexical = "词法"; // 词法诊断 kind 前缀（main 机读出口 + server 诊断体）
 pub const np_type = "类型"; // zig 报错回译短语段（diag/translate 回译表）
 
+/// `zzc version` 出口行形串（第 296 轮 D155·对面三十二样例行臂）：main 出口与 README 样例对拍
+/// 共用的唯一形制。旧形制 main 内联拼装（`prog_name ++ " {s}（" ++ np_pack_word ++ "：{s}）`）而
+/// README 手抄成品行「zzc 0.1.0（语言包：中文）」互不引用——t2 探针 P4 实锤独漂 README 样例行
+/// 三门禁零信号，真跑 `zzc version` 与文档样例实地分道。两枚 {s} 顺位：产品版本／语言包显示名。
+pub const version_line_fmt: []const u8 = zzc.prog_name ++ " {s}（" ++ np_pack_word ++ "：{s}）";
+
+/// 对面三十二·main 侧委派形清单（第 296 轮 D155）：守卫读 main.zig 文本逐字节对账，消费侧若改回
+/// 内联拼装（委派形消失）即红；频次全等钉与旧形反锚另由 296 T0 以 @embedFile 在测试图守
+/// （承 224/236 轮「守卫面＋测图面双向互备」形制）。
+pub const version_main_face = .{
+    .{ .needle = "printOut(cli.version_line_fmt", .count = @as(usize, 1), .why = "version 出口行须委派 hub 形串——改回内联拼装则 README 对拍与真机出口形制分道（第 296 轮 D155）" },
+};
+
+/// 对面三十四·README 命令词面（第 298 轮 D157）：快跑道 29 处命令样例手抄八枚 `sub_*` 真值，
+/// 此前零针——needle 全由 `prog_name ++ " " ++ sub_*` comptime 派生（presence ≥1 枚形制）：
+/// hub 改名而 README 仍旧词→派生 needle 落空红；README 独改样例→旧词仍在盘而 needle 已换新——
+/// 两向分道皆拦。`sub_test` 不在 README（走 `zig build test`），不入面；同一词多处出现只需
+/// 一枚命中（改名类缺陷只要盘上一枚新形皆无即红，无需锁份数）。
+pub const readme_cmd_face = [_]zzc.BuildFace{
+    .{ .needle = zzc.prog_name ++ " " ++ sub_init, .why = "README 快跑/教程须按 hub 真值展示 init 命令——改名即用户照抄报未知子命令（第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_check, .why = "README 深检指引的 check 词须与 hub 同源（D71 机读契约入口也拖于此词，第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_build, .why = "README 构建样例的 build 词——同上形制（第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_run, .why = "README 运行样例的 run 词——同上形制（第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_eject, .why = "README 毕业章节的 eject 词——探针实锤独漂 `zzc emit` 三门禁零信号之形（第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_lang, .why = "README 语言包章节的 lang 词——同上形制（第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_lsp, .why = "README 编辑器接入的 lsp 词——同上形制（第 298 轮 D157）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_version, .why = "README 认代入口的 version 词——对面三十二样例行针只管成品行不管命令形，此针补位（第 298 轮 D157）" },
+};
+
+/// 对面三十七·书稿命令词面（第 301 轮 D160）：《母语编写Zig》快跑/毕业/构建章 24 处命令样例手抄
+/// 五枚 `sub_*` 真值，298 轮只钉 README 面——t2 探针两形（书稿 `zzc eject→emit`、`zzc build→bild` 全量
+/// 12 行）fmt/build/test/matcher/demos-smoke 五通道零信号实锤。书稿只演示教学主线五词（lang/lsp/
+/// test/version 不在书稿命令面）——此子集为**独立手设**（禁从书稿文本抽取，避自证循环，承 297 形制）；
+/// needle 全由 `prog_name ++ " " ++ sub_*` 派生，改名即双向拦。
+pub const book_cmd_face = [_]zzc.BuildFace{
+    .{ .needle = zzc.prog_name ++ " " ++ sub_init, .why = "书稿建章须按 hub 真值演示 init——改名即读者敲未知子命令（第 301 轮 D160）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_run, .why = "书稿快跑道的 run 词——同上形制（第 301 轮 D160）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_build, .why = "书稿构建章的 build 词——探针实锤独漂 `zzc bild` 五通道零信号之形（第 301 轮 D160）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_check, .why = "书稿深检面的 check 词——同上形制（第 301 轮 D160）" },
+    .{ .needle = zzc.prog_name ++ " " ++ sub_eject, .why = "书稿毕业章的 eject 词——同上形制（第 301 轮 D160）" },
+};
+
+/// 书稿 `zzc <词>` 逆向抽取上限（现盘上 24 处皆五主线词；防异常灌入兼防静默吞尾）。
+pub const book_zzc_word_cap: usize = 32;
+
+pub const BookZzcWords = struct {
+    words: [book_zzc_word_cap][]const u8 = undefined,
+    count: usize = 0,
+    overflow: bool = false,
+};
+
+/// 从文本逐处抽「`<prefix>`＋连续 ASCII 字母段（大小写皆收，第 305 轮 D164 扩形——探针实锤只收小写
+/// 即 `zzc Ips` 大写鬼词形零信号，而五面活体大写接尾形普查皆零——）」的词段（prefix 形如 "zzc " ；纯函数零 I/O，
+/// 第 301 轮 D160）。段为空（后跟非字母：中文/数字/连字符/反引号等叙述形）不入集只推进；
+/// 调用方以 `subcommands` 全集做鬼词普查——书稿自增非 hub 词即红。
+pub fn collectWordsAfter(text: []const u8, prefix: []const u8) BookZzcWords {
+    var out = BookZzcWords{};
+    var rest = text;
+    var rest_base: usize = 0;
+    while (std.mem.indexOf(u8, rest, prefix)) |pos| {
+        const start = rest_base + pos + prefix.len;
+        var end = start;
+        while (end < text.len and ((text[end] >= 'a' and text[end] <= 'z') or (text[end] >= 'A' and text[end] <= 'Z'))) : (end += 1) {}
+        if (end > start) {
+            if (out.count < book_zzc_word_cap) {
+                out.words[out.count] = text[start..end];
+                out.count += 1;
+            } else {
+                out.overflow = true;
+            }
+        }
+        rest_base = end;
+        rest = text[end..];
+    }
+    return out;
+}
+
 // —— 全角/纯母语拦截文案模板族（第 233 轮 D101）——
 // main `cmdCheck` 与 lsp `server.appendFastItems` 两出口对同一违例的提示正文必须逐字同形
 //（server.zig 顶注所声明的不变量）。旧形制两处各持整串字面量手抄、任一侧重措另一侧静默失联，
@@ -2090,4 +2519,1019 @@ test "第 233 轮 T0 全角/纯母语拦截文案模板族单源＋两出口委�
     var lb: [256]u8 = undefined;
     const lsp_line = std.fmt.bufPrint(&lb, msg_fw_symbol, .{ "全角分号", ";" }) catch return error.TestUnexpectedResult;
     try std.testing.expect(std.mem.endsWith(u8, cli_line, lsp_line));
+}
+
+// ── CI e2e 基线脚本 → `extension.js` 的 Contains 针族对账（第 280 轮 · D138）───────
+//
+// `tools/check-demos.ps1` 的「client guard」节以 `$extSrc.Contains("<js 书写形>")` 断言
+// 客户端实文——那是 `extension.js` 的第三份手抄面（方法词／参数键／结果字段已收对面十一／
+// 十二／十三）。该节只在 Windows PowerShell 可跑：本机 NO_PWSH ＋ GitCode 从不执行
+// Actions（D17 在册）构成双盲，第 279 轮人工普查坐实两枚针早已与 js 实文分道——D136 把
+// `cp.spawn(zzcBinary(), lspSpawnArgs())` 拆成先取 bin/args 再 spawn，signatureHelp 的
+// 活动参数是赋值形 `help.activeParameter = res.activeParameter` 而非对象 shorthand——
+// 即 pwsh 下必假红、Linux 上零信号（D94/D98/D113 同族判例）。
+// 本段把「抽取—定极性—回对」的判据入 hub，交守卫对面十八第四清单执行（两文件皆已
+// addFileArg·零新增 I/O），此类跨侧分道自此在 `zig build test` 门内转红。
+
+/// ps1 客户端节的一枚 Contains 针。`raw` 系 ps1 实文中双引号之间的**原始**片段（`""`
+/// 未折叠，可直接 grep 回脚本定位）；`positive` 为极性：true = 该串须出现在
+/// `extension.js`（`-not` 守门形），false = 该串不得出现（英文泄漏类反向针）。
+pub const JsPin = struct {
+    raw: []const u8,
+    positive: bool,
+};
+
+/// 针的抓取前缀（收尾双引号之后即 raw 起点）。
+const ext_contains_prefix = "$extSrc.Contains(\"";
+
+/// 括号帧：`inherited_not` = 入括号时父层正在生效的取反奇偶（`-not (a -and b)` 让括号内
+/// 两针同极性）；`clause_not` = 本层当前子句已见的取反奇偶（`-and`/`-or` 复位，不跨子句传）。
+const JsPinFrame = struct { inherited_not: bool, clause_not: bool };
+
+fn jsPinEffNot(frames: []const JsPinFrame, depth: usize) bool {
+    return frames[depth].inherited_not != frames[depth].clause_not;
+}
+
+/// 大小写不敏感地匹配 PowerShell 逻辑词元（`-not`/`-and`/`-or`）；命中返回其字节长。
+/// 尾字节须不是标识字符，免得把 `-nothing` 误认成 `-not`。
+fn ps1KwAt(s: []const u8, comptime kw: []const u8) ?usize {
+    if (s.len < kw.len) return null;
+    if (!std.ascii.eqlIgnoreCase(s[0..kw.len], kw)) return null;
+    if (s.len > kw.len and (std.ascii.isAlphanumeric(s[kw.len]) or s[kw.len] == '_')) return null;
+    return kw.len;
+}
+
+/// 联结词元（`-and`/`-or`）：命中即终结当前子句。
+fn ps1JoinKwAt(s: []const u8) ?usize {
+    return ps1KwAt(s, "-and") orelse ps1KwAt(s, "-or");
+}
+
+/// 跳过一段 PowerShell 字符串字面量（`at` 指向开引号），返回闭合引号之后下标。
+/// `""`/`''` 系字面引号而非收尾；反引号续行在本脚本针体内不存在，不入理（如实标注）。
+fn skipPs1String(s: []const u8, at: usize) usize {
+    const q = s[at];
+    var i = at + 1;
+    while (i < s.len) {
+        if (s[i] == q) {
+            if (i + 1 < s.len and s[i + 1] == q) {
+                i += 2;
+                continue;
+            }
+            return i + 1;
+        }
+        i += 1;
+    }
+    return s.len;
+}
+
+/// 从 raw 起点找未折叠的收尾双引号下标；`""` 视作字面引号跳过。找不到返回 null。
+fn ps1QuoteEnd(s: []const u8, start: usize) ?usize {
+    var i = start;
+    while (i < s.len) {
+        if (s[i] == '"') {
+            if (i + 1 < s.len and s[i + 1] == '"') {
+                i += 2;
+                continue;
+            }
+            return i;
+        }
+        i += 1;
+    }
+    return null;
+}
+
+/// 抽取 `ps1_txt` 全部 `$extSrc.Contains("…")` 针及其极性（逐行独立扫描，见 `findJsPinsInLine`）。
+pub fn findJsPins(gpa: std.mem.Allocator, ps1_txt: []const u8) ![]JsPin {
+    var out: std.ArrayList(JsPin) = .empty;
+    errdefer out.deinit(gpa);
+    var it = std.mem.splitScalar(u8, ps1_txt, '\n');
+    while (it.next()) |line| {
+        try findJsPinsInLine(gpa, line, &out);
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+/// 单行扫描：字符串外的 `-not` 翻转本子句奇偶、`-and`/`-or` 复位、`(`/`)` 进出括号层并继承
+/// 当层取反（`-not (a -and b)` 的分配形）。**引号态与括号栈皆以行为界**——PowerShell 字符串
+/// 不跨行（本脚本客户端节无 here-string/反引号续行），整文件连扫会让一处行尾孤引号把后续
+/// 大段代码当字符串吞掉（第 280 轮首版实锤：63 枚针只抽出 41 枚、反向针极性亦失真）。
+fn findJsPinsInLine(gpa: std.mem.Allocator, line: []const u8, out: *std.ArrayList(JsPin)) !void {
+    var frames: [32]JsPinFrame = undefined;
+    frames[0] = .{ .inherited_not = false, .clause_not = false };
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < line.len) {
+        switch (line[i]) {
+            '"', '\'' => i = skipPs1String(line, i),
+            '(' => {
+                const eff = jsPinEffNot(frames[0 .. depth + 1], depth);
+                if (depth + 1 >= frames.len) return error.Ps1ParenTooDeep;
+                depth += 1;
+                frames[depth] = .{ .inherited_not = eff, .clause_not = false };
+                i += 1;
+            },
+            ')' => {
+                if (depth > 0) depth -= 1;
+                i += 1;
+            },
+            '-' => {
+                if (ps1KwAt(line[i..], "-not")) |n| {
+                    frames[depth].clause_not = !frames[depth].clause_not;
+                    i += n;
+                } else if (ps1JoinKwAt(line[i..])) |n| {
+                    frames[depth].clause_not = false;
+                    i += n;
+                } else {
+                    i += 1;
+                }
+            },
+            '$' => {
+                if (std.mem.startsWith(u8, line[i..], ext_contains_prefix)) {
+                    const start = i + ext_contains_prefix.len;
+                    const end = ps1QuoteEnd(line, start) orelse return error.Ps1UnterminatedString;
+                    const eff = jsPinEffNot(frames[0 .. depth + 1], depth);
+                    try out.append(gpa, .{ .raw = line[start..end], .positive = eff });
+                    // `Contains(` 的左括号已被前缀吞掉：同层入栈，好让针后的 `)` 恰好弹回，
+                    // 否则该右括号会错弹外层帧、把其后的 `-and`/`-or` 记到别的子句上（A3 演漂实锤）。
+                    if (depth + 1 >= frames.len) return error.Ps1ParenTooDeep;
+                    depth += 1;
+                    frames[depth] = .{ .inherited_not = eff, .clause_not = false };
+                    i = end + 1;
+                } else {
+                    i += 1;
+                }
+            },
+            else => i += 1,
+        }
+    }
+}
+
+/// 按 PowerShell 双引号串语义判断 `raw`（`""` 表一个字面引号）是否作为子串出现在 `hay`。
+/// 等价于「先折叠 `""`→`"` 再 indexOf」而不额外分配；针体内无引号时走 indexOf 快路。
+pub fn jsPinHits(hay: []const u8, raw: []const u8) bool {
+    if (raw.len == 0) return true;
+    if (std.mem.indexOfScalar(u8, raw, '"') == null) return std.mem.indexOf(u8, hay, raw) != null;
+    var start: usize = 0;
+    while (start <= hay.len) : (start += 1) {
+        if (jsPinMatchAt(hay[start..], raw)) return true;
+    }
+    return false;
+}
+
+fn jsPinMatchAt(hay: []const u8, raw: []const u8) bool {
+    var i: usize = 0;
+    var j: usize = 0;
+    while (j < raw.len) : (j += 1) {
+        const c = raw[j];
+        if (c == '"' and j + 1 < raw.len and raw[j + 1] == '"') {
+            if (i >= hay.len or hay[i] != '"') return false;
+            i += 1;
+            j += 1;
+            continue;
+        }
+        if (i >= hay.len or hay[i] != c) return false;
+        i += 1;
+    }
+    return true;
+}
+
+/// 两面对账的审计报告：`total`/`positive` 为 ps1 客户端节抽到的针族基数（守卫 OK 文案据此
+/// 运行时真报，不硬写枚数——文案过期本身就是一种漂），`drifts` 为分道清单（空即全对账通过）：
+/// 正向针在 `ext_txt` 缺失、或反向针在 `ext_txt` 出现者入列。
+pub const JsPinAudit = struct {
+    total: usize,
+    positive: usize,
+    drifts: []JsPin,
+};
+
+pub fn jsPinAudit(gpa: std.mem.Allocator, ps1_txt: []const u8, ext_txt: []const u8) !JsPinAudit {
+    const pins = try findJsPins(gpa, ps1_txt);
+    defer gpa.free(pins);
+    var drifts: std.ArrayList(JsPin) = .empty;
+    errdefer drifts.deinit(gpa);
+    var pos: usize = 0;
+    for (pins) |p| {
+        if (p.positive) pos += 1;
+        if (jsPinHits(ext_txt, p.raw) != p.positive) try drifts.append(gpa, p);
+    }
+    return .{ .total = pins.len, .positive = pos, .drifts = try drifts.toOwnedSlice(gpa) };
+}
+
+test "第 280 轮 T0 ps1 客户端针抽取：极性（-not／括号继承／子句复位）+ 引号折叠 + 漂移判定" {
+    const gpa = std.testing.allocator;
+    // A1 单枚正向针：`-not` 守门形要求 js 实文含此串。
+    {
+        const src = "if (-not $extSrc.Contains(\"alpha\")) { $lcOk = $false }\n";
+        const pins = try findJsPins(gpa, src);
+        defer gpa.free(pins);
+        try std.testing.expectEqual(@as(usize, 1), pins.len);
+        try std.testing.expectEqualStrings("alpha", pins[0].raw);
+        try std.testing.expect(pins[0].positive);
+    }
+    // A2 反向针：无 `-not` 的 `-or` 链（英文泄漏守卫），两枚皆要求 js 不得含。
+    {
+        const src = "if ($extSrc.Contains(\"failed to start\") -or $extSrc.Contains(\"Install zzc\")) { $lcOk = $false }\n";
+        const pins = try findJsPins(gpa, src);
+        defer gpa.free(pins);
+        try std.testing.expectEqual(@as(usize, 2), pins.len);
+        for (pins) |p| try std.testing.expect(!p.positive);
+    }
+    // A3 括号继承：`-not (a -and b)` 两枚同正向（缺任一即脚本假红）。
+    {
+        const src = "if (-not ($extSrc.Contains(\"a\") -and $extSrc.Contains(\"b\"))) { x }\n";
+        const pins = try findJsPins(gpa, src);
+        defer gpa.free(pins);
+        try std.testing.expectEqual(@as(usize, 2), pins.len);
+        for (pins) |p| try std.testing.expect(p.positive);
+    }
+    // A4 子句复位：`-not $a -and $b` 里取反不跨 `-and`——a 正向、b 反向。
+    {
+        const src = "if (-not $extSrc.Contains(\"a\") -and $extSrc.Contains(\"b\")) { x }\n";
+        const pins = try findJsPins(gpa, src);
+        defer gpa.free(pins);
+        try std.testing.expectEqual(@as(usize, 2), pins.len);
+        try std.testing.expect(pins[0].positive);
+        try std.testing.expect(!pins[1].positive);
+    }
+    // A5 字符串内的联结词不改极性（needle 本体含 `-and` 时不得被当子句边界）。
+    {
+        const src = "if ($extSrc.Contains(\"x -and y\") -or $extSrc.Contains(\"z\")) { x }\n";
+        const pins = try findJsPins(gpa, src);
+        defer gpa.free(pins);
+        try std.testing.expectEqual(@as(usize, 2), pins.len);
+        try std.testing.expectEqualStrings("x -and y", pins[0].raw);
+        try std.testing.expect(!pins[0].positive and !pins[1].positive);
+    }
+    // A6 非 Contains 的 `$extSrc` 用法不入针（`Get-Content`/`-split`/`-match` 三形）。
+    {
+        const src = "$extSrc = Get-Content -Raw x\n$saveLine = ($extSrc -split \"nl\" | Where-Object { $_ -match 'textDocument/didSave' })\n";
+        const pins = try findJsPins(gpa, src);
+        defer gpa.free(pins);
+        try std.testing.expectEqual(@as(usize, 0), pins.len);
+    }
+    // A7 引号折叠：raw 里的 `""` 在实文侧是单个字面引号，快路／慢路同判。
+    {
+        try std.testing.expect(jsPinHits("say \"hi\"", "say \"\"hi\"\""));
+        try std.testing.expect(!jsPinHits("say hi", "say \"\"hi\"\""));
+        try std.testing.expect(jsPinHits("plain", "plain"));
+        try std.testing.expect(!jsPinHits("plain", "nope"));
+    }
+    // A8 漂移判定两面：正向缺、反向有皆入清单；换形后清单为空。
+    {
+        const src = "if (-not $extSrc.Contains(\"must\")) { x }\nif ($extSrc.Contains(\"leak\")) { x }\n";
+        const bad = try jsPinAudit(gpa, src, "has leak here");
+        defer gpa.free(bad.drifts);
+        try std.testing.expectEqual(@as(usize, 2), bad.total);
+        try std.testing.expectEqual(@as(usize, 1), bad.positive);
+        try std.testing.expectEqual(@as(usize, 2), bad.drifts.len);
+        const ok = try jsPinAudit(gpa, src, "must present, the forbidden word nowhere");
+        defer gpa.free(ok.drifts);
+        try std.testing.expectEqual(@as(usize, 0), ok.drifts.len);
+    }
+    // A9 未闭合引号硬失败（静默吞针正是 D138 的失保形，宁可红不可默）。
+    {
+        try std.testing.expectError(error.Ps1UnterminatedString, findJsPins(gpa, "if (-not $extSrc.Contains(\"abc\n\")) ;"));
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 第 282 轮（D140）：客户端 e2e 冒烟 `tools/extension-smoke.js` 的断言条数锚真值。
+//   该套件是 extension.js 在 Linux 上的唯一端到端防线（CI 第 5) 步），而它的覆盖面**就是断言条数本身**：
+//   删一条 `ok(...)` 不会让失败变多，只让 PASS 的数字变小而仍退 0。第 282 轮探针实锤——从 capability
+//   键名数组删一枚 `'hoverProvider'` 再删一条独立断言，`node tools/extension-smoke.js` 仍报
+//   `PASS：87 项断言全过` 退 0，且 `zig build test` 17/17 全绿（运行时与构建链双静默，D139 同族）。
+//   修形为三道门：①js 内 `const EXPECT_CHECKS = <n>;` ②js 内 `if (checks !== EXPECT_CHECKS) throw`
+//   （精确等号：退坡与增坡皆红，杜绝「改松成 `<`」的弱闸形）③本处 `smoke_js_floor` 独立手设真值，
+//   由守卫对面二十四把 ①② 的形串按本值 comptime 派生后回 js 实文逐字节对账。
+//   纪律（沿用「护栏数量下限须手设独立、不可从被测侧抽取」判例）：`smoke_js_floor` 绝不可改为从
+//   extension-smoke.js 读取——那会让「删断言 + 同步下调锚」自成自洽的绿。上调锚须三处同数。
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 客户端 e2e 冒烟应有的断言条数（独立手设真值；只许上调，下调须人工审）。
+pub const smoke_js_floor: usize = 96;
+
+/// js 侧条数锚声明形（数字随 `smoke_js_floor` 派生——锚值与本值分道即针落空，守卫即红）。
+pub fn jsAnchorDecl(comptime floor: usize) []const u8 {
+    return "const EXPECT_CHECKS = " ++ std.fmt.comptimePrint("{d}", .{floor}) ++ ";";
+}
+
+/// js 侧退坡闸形：必须是**精确等号**判定（`<`、`<=`、不判定皆为弱化闸，针落空即红）。
+pub const js_anchor_guard = "if (checks !== EXPECT_CHECKS)";
+
+pub const JsAnchorAudit = struct {
+    decl: bool,
+    guard: bool,
+};
+
+/// 对账 js 实文的两枚锚形：声明（含锚数）与退坡闸。二者缺一即防线不完整。
+pub fn jsAnchorOk(js_txt: []const u8) JsAnchorAudit {
+    return .{
+        .decl = jsAnchorHas(js_txt, smoke_js_floor),
+        .guard = std.mem.indexOf(u8, js_txt, js_anchor_guard) != null,
+    };
+}
+
+/// 以给定锚数派生声明针并回 js 实文查命中——独立于 `smoke_js_floor` 的注入形，供测面正反小样复用
+/// （同一判据换真值即知「锚数分道」是否真被拦，而非只验一次巧合命中）。
+pub fn jsAnchorHas(js_txt: []const u8, comptime floor: usize) bool {
+    return std.mem.indexOf(u8, js_txt, jsAnchorDecl(floor)) != null;
+}
+
+test "第 282 轮 T0 客户端 e2e 断言条数锚：派生形钉＋下限钉＋删锚/分道/改松三形负例（D140）" {
+    // B1 派生形钉：声明针含锚数，且随锚值同动（改 hub 值而不改 js 即针落空）。
+    try std.testing.expectEqualStrings("const EXPECT_CHECKS = 89;", jsAnchorDecl(89));
+    try std.testing.expectEqualStrings("const EXPECT_CHECKS = 7;", jsAnchorDecl(7));
+    // B2 下限钉：hub 真值只许上调（加断言时同步上调即免改测），下调即红——拦「锚数被悄悄降级」。
+    try std.testing.expect(smoke_js_floor >= 89);
+    // B3 完整形：两枚锚俱在。
+    const good =
+        \\const EXPECT_CHECKS = 96;
+        \\let checks = 0;
+        \\if (checks !== EXPECT_CHECKS) {
+        \\  throw new Error('x');
+        \\}
+        \\
+    ;
+    const a = jsAnchorOk(good);
+    try std.testing.expect(a.decl);
+    try std.testing.expect(a.guard);
+    // B4 负例一：声明被删（只留闸）→ decl 落空。
+    const no_decl =
+        \\let checks = 0;
+        \\if (checks !== EXPECT_CHECKS) {}
+        \\
+    ;
+    try std.testing.expect(!jsAnchorOk(no_decl).decl);
+    try std.testing.expect(jsAnchorOk(no_decl).guard);
+    // B5 负例二：js 锚数与 hub 真值分道（改小一格即落空——「删断言 + 同步改小 js」仍被 hub 值拦下）。
+    const small =
+        \\const EXPECT_CHECKS = 88;
+        \\if (checks !== EXPECT_CHECKS) {}
+        \\
+    ;
+    try std.testing.expect(jsAnchorHas(small, 88));
+    try std.testing.expect(!jsAnchorHas(small, 89));
+    try std.testing.expect(!jsAnchorHas(small, smoke_js_floor));
+    // B6 负例三：闸被改松（`!==` → `<`，退坡不再红）→ guard 落空。
+    const loose =
+        \\const EXPECT_CHECKS = 96;
+        \\if (checks < EXPECT_CHECKS) {}
+        \\
+    ;
+    try std.testing.expect(jsAnchorOk(loose).decl);
+    try std.testing.expect(!jsAnchorOk(loose).guard);
+    // B7 负例四：整道闸被删 → guard 落空（探针 E-b 的「PASS：87 仍退 0」形）。
+    const no_guard =
+        \\const EXPECT_CHECKS = 96;
+        \\console.log('PASS');
+        \\
+    ;
+    try std.testing.expect(jsAnchorOk(no_guard).decl);
+    try std.testing.expect(!jsAnchorOk(no_guard).guard);
+    // B8 闸形与声明必须成对：只给声明不给闸、或只给闸不给声明，皆不得判为完整防线。
+    try std.testing.expect(jsAnchorOk("").decl == false and jsAnchorOk("").guard == false);
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// 第 283 轮（D142）：客户端 e2e 冒烟的**谓词退化**普查（承 D140 条数锚的极限形）。
+//   条数锚拦得住「少一条断言」，拦不住「断言还在、判据被掏空」：把 `ok(x > 0, '…')` 改成
+//   `ok(true, '…')`，条数不降、label 不改、PASS 行一字不变，而该条覆盖面已归零。
+//   第 283 轮普查见 `tools/extension-smoke.js` 原有三处恒真形（握手生效／didChange 清空／重启握手），
+//   皆已换成与 `waitFor` 同骨的实质判据（`ok(readyCount() >= 1, …)`、
+//   `ok((state.diagnostics.get(uri) || []).length === 0, …)`），并把该表达式改永假实测可红——
+//   证新判据非另一种恒真。本普查把「字面量真」这条路永久封死：上限 0，一处即红。
+// ───────────────────────────────────────────────────────────────────────────
+
+/// 恒真谓词的允许上限：**0**（调高须人工审并在消缺台账记形制理由）。
+pub const js_tautology_ceiling: usize = 0;
+
+/// 扫 js 实文数出「`ok(` 之后跳空白即字面量 `true`」的调用数。
+/// 只认字面量真，故实质表达式（含 `!!x`、`a === b`、`Array.isArray(x)`）皆不计；函数定义
+/// `function ok(cond, label)` 的形是 `ok(cond`，也不计——判据退化无处藏。
+pub fn jsTautCount(js_txt: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i + 3 <= js_txt.len) : (i += 1) {
+        if (!std.mem.startsWith(u8, js_txt[i..], "ok(")) continue;
+        var j = i + 3;
+        while (j < js_txt.len and (js_txt[j] == ' ' or js_txt[j] == '\t')) : (j += 1) {}
+        if (std.mem.startsWith(u8, js_txt[j..], "true")) n += 1;
+    }
+    return n;
+}
+
+test "第 283 轮 T0 恒真谓词普查：字面量真计数／空白形／实质表达式零误报／上限钉 0（D142）" {
+    // C1 空文本与纯噪声：0。
+    try std.testing.expectEqual(@as(usize, 0), jsTautCount(""));
+    try std.testing.expectEqual(@as(usize, 0), jsTautCount("no predicates here\n"));
+    // C2 单处退化：1。
+    try std.testing.expectEqual(@as(usize, 1), jsTautCount("  ok(true, '握手生效');\n"));
+    // C3 空白与制表形不放过：`ok( true`、`ok(\ttrue`。
+    try std.testing.expectEqual(@as(usize, 1), jsTautCount("ok(  true, 'x');"));
+    try std.testing.expectEqual(@as(usize, 1), jsTautCount("ok(\ttrue, 'x');"));
+    // C4 多处累加（退化的典型是整批替换）。
+    try std.testing.expectEqual(@as(usize, 3), jsTautCount("ok(true, 'a'); ok(true, 'b'); ok(true, 'c');"));
+    // C5 实质表达式零误报：本轮换上手的三形 + 常见等价写法。
+    const real =
+        \\ok(readyCount() >= 1, 'initialize 应答并打日志（客户端握手）');
+        \\ok((state.diagnostics.get(uri) || []).length === 0, 'didChange 全文同步生效（诊断清空）');
+        \\ok(!state.output.join('').includes('lsp 帧解析错误'), '帧解析无错误');
+        \\ok(Array.isArray(def2) && def2.length === 1, '重启后 provider 仍可应答');
+        \\function ok(cond, label) { if (!cond) throw new Error(cond); }
+        \\
+    ;
+    try std.testing.expectEqual(@as(usize, 0), jsTautCount(real));
+    // C6 上限钉死为 0：本判据只许收紧不许放宽（放宽须人工审）。
+    try std.testing.expectEqual(@as(usize, 0), js_tautology_ceiling);
+    // C7 与条数锚同骨的联合判据形：退化后的文本仍满足「条数不减」，唯本普查可拦（自证二者不同职）。
+    const degraded = "ok(true, 'a');\nok(readyCount() >= 2, 'b');\n";
+    try std.testing.expectEqual(@as(usize, 1), jsTautCount(degraded));
+}
+
+test "第 296 轮 T0 version 出口行形串单一真值：渲染钉＋main 委派频次钉＋旧内联形反锚（对面三十二样例行臂·D155）" {
+    // A1 渲染钉（独立字面量、不复用族常量）：以哨兵实参渲染形串，验两枚 {s} 顺位与固定段
+    //    （prog/语言包词/全角括号冒号）逐字节同骨——形串改形（半角括号/漏冒号/换词）在此现形。
+    const gpa = std.testing.allocator;
+    const shown = try std.fmt.allocPrint(gpa, version_line_fmt, .{ "9.9.9", "试验田" });
+    defer gpa.free(shown);
+    try std.testing.expectEqualStrings("zzc 9.9.9（语言包：试验田）", shown);
+    // A2 委派频次钉＋旧形反锚：@embedFile 直读 src/main.zig（真 source dependency），version 出口
+    //    恰一处委派 hub 形串；旧内联拼装形必为 0 处——消费侧改回手抄字面量即红（承 224/236 形制）。
+    const main_src = @embedFile("../main.zig");
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, "printOut(cli.version_line_fmt"));
+    try std.testing.expectEqual(@as(usize, 0), countOccurrences(main_src, "cli.np_pack_word ++ \"：{s}）\""));
+    // A3 清单自身钉：委派形基数 1（增删臂须同步本钉）。
+    try std.testing.expectEqual(@as(usize, 1), version_main_face.len);
+}
+
+test "第 298 轮 T0 README 命令词面：八枚 needle 与独立手抄 want 表逐字节对拍＋基数钉（D157）" {
+    // A1 派生形对拍：want 表独立手抄（与 README 盘上同源而不经 hub）——hub 侧 `prog_name`/`sub_*`
+    //    任一改动即此钉红；盘上 README 侧独漂由守卫对面三十四捕（双向互备，承 296 T0 形制；
+    //    README 在仓根越出模块包路径不可 @embedFile——202 轮硬约束判例）。
+    const want = [_][]const u8{
+        "zzc init",
+        "zzc check",
+        "zzc build",
+        "zzc run",
+        "zzc eject",
+        "zzc lang",
+        "zzc lsp",
+        "zzc version",
+    };
+    try std.testing.expectEqual(want.len, readme_cmd_face.len); // A2 基数钉：增删子命令面须同步 want 表与本钉
+    inline for (readme_cmd_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want[i], c.needle);
+    }
+    // A3 词源钉：八枚 sub_* 真值本体（面由它们派生，双层皆钉防 hub 漂移与针形改写）。
+    try std.testing.expectEqualStrings("init", sub_init);
+    try std.testing.expectEqualStrings("check", sub_check);
+    try std.testing.expectEqualStrings("build", sub_build);
+    try std.testing.expectEqualStrings("run", sub_run);
+    try std.testing.expectEqualStrings("eject", sub_eject);
+    try std.testing.expectEqualStrings("lang", sub_lang);
+    try std.testing.expectEqualStrings("lsp", sub_lsp);
+    try std.testing.expectEqualStrings("version", sub_version);
+}
+
+test "第 301 轮 T0 书稿命令词面：五枚派生针 want 对拍＋抽取器合成小样正反形（D160）" {
+    // A1 派生形对拍：want 表独立手抄（与书稿盘上同源而不经 hub）——hub 侧 prog_name/sub_* 任一改动即红；
+    //    盘上书稿独漂由守卫对面三十七双向捕（针落空＋鬼词），承 296–300 T0 形制。
+    const want = [_][]const u8{ "zzc init", "zzc run", "zzc build", "zzc check", "zzc eject" };
+    try std.testing.expectEqual(want.len, book_cmd_face.len); // A2 基数钉：教学主线子集增删须同步本钉
+    inline for (book_cmd_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want[i], c.needle);
+    }
+    // A3 子集合法性钉：五枚皆须属 subcommands 全集（防书稿面子集拖出幽灵词自证）。
+    for (want) |w| {
+        const word = w[4..]; // 去 "zzc " 前缀取词段
+        var found = false;
+        for (subcommands) |sub| {
+            if (std.mem.eql(u8, sub, word)) found = true;
+        }
+        try std.testing.expect(found);
+    }
+    // A4 抽取器正反形：连续小写段入集；空段（中文/数字/连字符/反引号尾随）不入；多词只取首词。
+    const sample = "zzc run` 说明 zzc 工具 zzc 0.1.0 然 zzc check --machine 与 zzc build-exe";
+    const got = collectWordsAfter(sample, "zzc ");
+    try std.testing.expectEqual(@as(usize, 3), got.count); // run / check / build（build-exe 取首段 build）
+    try std.testing.expectEqualStrings("run", got.words[0]);
+    try std.testing.expectEqualStrings("check", got.words[1]);
+    try std.testing.expectEqualStrings("build", got.words[2]);
+    try std.testing.expect(!got.overflow);
+    // A5 上限值钉与关系钉：cap 现盘上 24 处有余量；禁 0 退坡。
+    try std.testing.expectEqual(@as(usize, 32), book_zzc_word_cap);
+    try std.testing.expect(book_zzc_word_cap > want.len);
+}
+
+test "第 302 轮 T0 help 旗标族单源与文档合法词集：want 对拍＋正反形＋委派针形钉（D161）" {
+    // A1 help 旗标族 want 表独立手抄逐字节对拍＋基数钉：四枚任何增删改形即红。
+    const hwant = [_][]const u8{ "--help", "-h", "-?", "help" };
+    try std.testing.expectEqual(hwant.len, help_words.len);
+    inline for (help_words, 0..) |w, i| {
+        try std.testing.expectEqualStrings(hwant[i], w);
+    }
+    // A2 合法集判据正反形：九子命令＋help 皆真；鬼词/漂移词/大写形皆假。
+    for (subcommands) |sub| {
+        try std.testing.expect(isDocWordLegal(sub));
+    }
+    try std.testing.expect(isDocWordLegal("help"));
+    try std.testing.expect(!isDocWordLegal("wizard")); // 探针鬼词形
+    try std.testing.expect(!isDocWordLegal("emit")); // 改名漂移形（eject→emit）
+    try std.testing.expect(!isDocWordLegal("RUN")); // 大写形：CLI 分发读小写真值，大小写不一律
+    // A3 main 委派针形钉：needle 恰为表驱动委派形，基数一枚（防面膨手抄回潮位）。
+    try std.testing.expectEqual(@as(usize, 1), help_main_face.len);
+    try std.testing.expectEqualStrings("for (cli.help_words)", help_main_face[0].needle);
+}
+
+test "第 303 轮 T0 文档旗标词面：三族 want 对拍＋基数钉＋子集合法性钉（D162）" {
+    // A1 三面 want 表皆独立手抄（与文档盘上同源而不经 hub）——hub 侧 flag_* 任一改动即红；
+    //    盘上文档独漂由守卫对面三十九 checkFace 捕，承 296–302 T0 形制。
+    try std.testing.expectEqual(@as(usize, 5), readme_flag_face.len);
+    try std.testing.expectEqual(@as(usize, 1), plan_flag_face.len);
+    try std.testing.expectEqual(@as(usize, 3), contrib_flag_face.len);
+    const want5 = [_][]const u8{ "--machine", "--lang", "--lang-file", "--lang-overlay", "--as" };
+    inline for (readme_flag_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want5[i], c.needle);
+    }
+    try std.testing.expectEqualStrings("--lang", plan_flag_face[0].needle);
+    const want3 = [_][]const u8{ "--lang", "--lang-file", "--lang-overlay" };
+    inline for (contrib_flag_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want3[i], c.needle);
+    }
+    // A2 子集合法性钉：九枚针全须属 zzc_flags 全集（防面子集拖出幽灵旗标自证）。
+    inline for (readme_flag_face ++ plan_flag_face ++ contrib_flag_face) |c| {
+        try std.testing.expect(isZzcFlag(c.needle));
+    }
+    // A3 关系钉：方案书/contributing 面皆须为 README 面子集（README 为用户全可见主面，
+    //    子面不得拖出 README 未演示的新旗标）；基数 5 为全集基数（zzc_flags 五枚一一对应）。
+    inline for (plan_flag_face ++ contrib_flag_face) |c| {
+        var in_readme = false;
+        for (readme_flag_face) |r| {
+            if (std.mem.eql(u8, r.needle, c.needle)) in_readme = true;
+        }
+        try std.testing.expect(in_readme);
+    }
+    try std.testing.expectEqual(zzc_flags.len, readme_flag_face.len); // README 面即全集
+}
+
+test "第 304 轮 T0 旗标逆向面：豁免表 want 对拍＋合法集正反形＋抽取器合成小样（D163）" {
+    // A1 豁免表 want 独立手抄逐字节对拍＋基数钉：外部工具旗标增删须同步本钉并附出处审。
+    const wext = [_][]const u8{ "--check", "--fuzz", "--save", "--install-extension", "--summary" };
+    try std.testing.expectEqual(wext.len, doc_flag_exempt.len);
+    inline for (doc_flag_exempt, 0..) |f, i| {
+        try std.testing.expectEqualStrings(wext[i], f);
+    }
+    // A2 合法集正反形：zzc 五旗标/--help/五豁免皆真；探针鬼词与短旗裸形皆假。
+    for (zzc_flags) |f| {
+        try std.testing.expect(isDocFlagLegal(f));
+    }
+    try std.testing.expect(isDocFlagLegal("--help"));
+    for (doc_flag_exempt) |f| {
+        try std.testing.expect(isDocFlagLegal(f));
+    }
+    try std.testing.expect(!isDocFlagLegal("--verbose")); // 探针鬼词形
+    try std.testing.expect(!isDocFlagLegal("--zzcghost")); // 探针鬼词形二
+    try std.testing.expect(!isDocFlagLegal("--machinX")); // 探针鬼词形三（第 306 轮实注形）
+    try std.testing.expect(!isDocFlagLegal("--langg")); // 手抄走样形（近合法而不合法）
+    try std.testing.expect(!isDocFlagLegal("lang")); // 无破折头裸形不入集面
+    // A3 抽取器合成小样正反形：双破折头小写段全形入集（含连字符内部段）；尾破折剔除；
+    //    `---` 分隔形/单短旗/中文破折/数字头不入。
+    const s = "zig build --fuzz 与 --lang-overlay 然 --- |----| 及 -Doptimize --2fast --x- 完 --";
+    const got = collectDocFlagWords(s);
+    try std.testing.expectEqual(@as(usize, 3), got.count); // --fuzz / --lang-overlay / --x（尾破折剔）
+    try std.testing.expectEqualStrings("--fuzz", got.words[0]);
+    try std.testing.expectEqualStrings("--lang-overlay", got.words[1]);
+    try std.testing.expectEqualStrings("--x", got.words[2]);
+    try std.testing.expect(!got.overflow);
+    // A4 中文破折（U+2014 双份）字节形不匹 ASCII 双破折：独立小样验零入集。
+    const zh = "——不是旗标——";
+    try std.testing.expectEqual(@as(usize, 0), collectDocFlagWords(zh).count);
+    // A5 全集无重叠钉：豁免表与 zzc_flags 交集空（防同形两源自证）。
+    for (doc_flag_exempt) |e| {
+        try std.testing.expect(!isZzcFlag(e));
+    }
+    // A6 第 305 轮 D164 命令抽取器扩形正反形：大写鬼词形入集（探针实锤原只收小写即零信号），
+    //    大小写混合形亦入集；合法小写形行为不变。
+    const up = collectWordsAfter("跑 zzc Ips 与 zzc CHECK 及 zzc check 完", "zzc ");
+    try std.testing.expectEqual(@as(usize, 3), up.count);
+    try std.testing.expectEqualStrings("Ips", up.words[0]);
+    try std.testing.expectEqualStrings("CHECK", up.words[1]);
+    try std.testing.expectEqualStrings("check", up.words[2]);
+    try std.testing.expect(!isDocWordLegal(up.words[0])); // 大写鬼词形不在合法集（判据大小写敏感）
+}
+
+test "第 306 轮 T0 AGENTS.md 两面针：want 对拍＋基数＋子集合法性/关系钉（D165）" {
+    // A1 命令面九枚全集：want 独立手抄逐字节对拍＋基数钉（与 subcommands 全集同数）。
+    const wcmd = [_][]const u8{ "zzc init", "zzc check", "zzc build", "zzc run", "zzc test", "zzc eject", "zzc lsp", "zzc lang", "zzc version" };
+    try std.testing.expectEqual(wcmd.len, agents_cmd_face.len);
+    try std.testing.expectEqual(subcommands.len, agents_cmd_face.len); // 全集形制钉：命令面即九子命令
+    inline for (agents_cmd_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(wcmd[i], c.needle);
+    }
+    // A2 命令面needle皆 = prog_name＋空格＋某子命令（关系钉：禁脱钩形）。
+    inline for (agents_cmd_face, 0..) |c, i| {
+        const sub = c.needle[zzc.prog_name.len + 1 ..];
+        try std.testing.expectEqualStrings(subcommands[i], sub);
+    }
+    // A3 旗标面五枚全集：want 对拍＋基数＋子集合法性钉（皆 ∈ zzc_flags）。
+    const wflag = [_][]const u8{ "--machine", "--lang", "--lang-file", "--lang-overlay", "--as" };
+    try std.testing.expectEqual(wflag.len, agents_flag_face.len);
+    try std.testing.expectEqual(zzc_flags.len, agents_flag_face.len); // 本面即全集
+    inline for (agents_flag_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(wflag[i], c.needle);
+        try std.testing.expect(isZzcFlag(c.needle));
+    }
+    // A4 探针鬼词形反证：手册漂形不在任何合法集。
+    try std.testing.expect(!isDocWordLegal("bild")); // 探针命令形（第 306 轮实注）
+    try std.testing.expect(!isDocFlagLegal("--machinX")); // 探针旗标形（同轮实注）
+}
+
+test "第 307 轮 T0 纯母语话术面：两枚基数＋模板子串关系钉（D166）" {
+    // A1 基数钉：两枚（种类名＋改词指引词），防面膨/降臂。
+    try std.testing.expectEqual(@as(usize, 2), pure_native_smoke_face.len);
+    // A2 关系钉：两枚 needle 皆须为 msg_pure_native 模板子串——模板漂字而面不随动即红，
+    //    脚本手抄侧经守卫对面四十三与模板胶合（三处同源：模板/面/脚本）。
+    for (pure_native_smoke_face) |c| {
+        try std.testing.expect(std.mem.indexOf(u8, msg_pure_native, c.needle) != null);
+    }
+    // A3 反形：非模板词形不得入面（防近形手抄走样）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_pure_native, "纯麦语") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_pure_native, "请改月") == null);
+}
+
+test "第 309 轮 T0 叠加轴行为面：话术模板子串钉＋包映射全线手设对拍（D168）" {
+    // A1 基数钉：话术五（第 311 轮版本闸两枚＋312 轮选包轴标识一枚入面）＋映射两。
+    try std.testing.expectEqual(@as(usize, 5), overlay_smoke_face.len);
+    try std.testing.expectEqual(@as(usize, 2), overlay_pack_face.len);
+    // A2 话术关系钉：两枚须为迁入模板的子串（模板漂字而面不随即红）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_overlay_missing, overlay_smoke_face[0].needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_pack_syntax_hint, overlay_smoke_face[1].needle) != null);
+    // A3 映射全线关系钉：键侧 ++ " = " ++ 值侧 须等于独立手设的包映射活线全形（盘上对包文本
+    //    的 presence 由守卫对面四十五跑时执行——@embedFile 不可越包路径，296 自守形制在此不适用）。
+    const map_line = "网络服务.服务器 = httpz.Server";
+    const joined = overlay_pack_face[0].needle ++ " = " ++ overlay_pack_face[1].needle;
+    try std.testing.expectEqualStrings(map_line, joined);
+    // A4 反形：臆造映射/话术形不在任何真值。
+    try std.testing.expect(std.mem.indexOf(u8, map_line, "httpz.Socket") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_overlay_missing, "堆叠语言包") == null);
+}
+
+// 第 310 轮 T0（D169）：--lang 内置选包轴三形面——基数钉；话术全等/子串关系钉
+// （针[0]=np_unknown_pack 全等零手抄、针[1]「互斥」必为互斥模板子串）；退码数锚
+// 与 usage_exit_code 派生对拍；臆造反形独立成测。
+test "第 310 轮 T0 --lang 选包轴面：话术全等/子串钉＋退码数锚与 usage_exit_code 同源（D169）" {
+    // A1 基数钉：三枚（未知包话术/互斥话术/退码数锚）。
+    try std.testing.expectEqual(@as(usize, 3), lang_axis_face.len);
+    // A2 全等/对拍：want 独立手抄（盘上实测话术，与上方定义非同一表达式）。
+    try std.testing.expectEqualStrings("未知语言包", lang_axis_face[0].needle);
+    try std.testing.expectEqualStrings("互斥", lang_axis_face[1].needle);
+    try std.testing.expectEqualStrings("EXPECT_USAGE_RC=2", lang_axis_face[2].needle);
+    // A3 关系钉：针[0] 与 hub 真值全等；针[1] 须为互斥模板子串（模板漂字即红）。
+    try std.testing.expectEqualStrings(np_unknown_pack, lang_axis_face[0].needle);
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_mutex, lang_axis_face[1].needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_mutex, "互斥相干") == null); // 近形反形
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_mutex, "矛盾") == null);
+    // A4 退码同源：数锚随 usage_exit_code；臆造退码反形。
+    try std.testing.expectEqual(@as(u8, 2), usage_exit_code);
+    try std.testing.expect(std.mem.indexOf(u8, lang_axis_face[2].needle, "RC=3") == null);
+}
+
+// 第 311 轮 T0（D170）：版本闸模板全形字节钉（独立手抄拼装形）＋新两枚关系钉
+// （「过新」⊂模板、升级词与 np_upgrade 全等零手抄）＋误导极性反形。
+test "第 311 轮 T0 版本闸模板：全形字节钉＋新针关系/全等钉＋误导反形（D170）" {
+    // A1 全形独立手抄（盘上实测输出同骨；模板拼装任一段漂即此钉红）。
+    const want_full = "外部语言包「{s}」声明的 $format 过新（当前 zzc 仅支持格式 {d}）。请升级 zzc。";
+    try std.testing.expectEqualStrings(want_full, msg_fmt_too_new);
+    // A2 基数随动：面五枚（第 312 轮选包轴标识入面）；新两枚关系钉。
+    try std.testing.expectEqual(@as(usize, 5), overlay_smoke_face.len);
+    try std.testing.expect(std.mem.indexOf(u8, msg_fmt_too_new, overlay_smoke_face[2].needle) != null); // 过新⊂模板
+    try std.testing.expectEqualStrings(np_upgrade, overlay_smoke_face[3].needle); // 升级词全等派生
+    // A3 分流极性钉：版本闸话术与语法错话术互不含对方极形（塌臂误导形的测图侧投影）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_fmt_too_new, "解析失败") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_pack_syntax_hint, "过新") == null);
+    // A4 臆造反形：近形词不在模板。
+    try std.testing.expect(std.mem.indexOf(u8, msg_fmt_too_new, "过旧") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_fmt_too_new, "请降级") == null);
+}
+
+// 第 312 轮 T0（D171）：选包轴标识针入面——基数五钉＋全等对拍（独立手抄）＋
+// 臆造反形；两臂分轴胶合关系：十一/十二臂共用话术四枚，本针独指本臂。
+test "第 312 轮 T0 选包轴标识针：基数五钉＋全等对拍＋反形（D171）" {
+    try std.testing.expectEqual(@as(usize, 5), overlay_smoke_face.len);
+    try std.testing.expectEqualStrings("选包轴", overlay_smoke_face[4].needle); // want 独立手抄
+    try std.testing.expect(std.mem.indexOf(u8, overlay_smoke_face[4].needle, "叠加轴") == null); // 分轴互斥形
+    try std.testing.expect(std.mem.indexOf(u8, overlay_smoke_face[4].needle, "选包抽") == null); // 近形反形
+}
+
+// 第 313 轮 T0（D172）：`zzc lang` 列播轴面——基数四钉；三枚全/半派生关系钉
+// （两 header 与 np_* 全等、「不是有效」⊂拒绝模板）；内容针对 registry 真值交叉
+// （entry 首键必为 "zh"，模板拼装与独立手抄全形对拍）；臆造反形。
+test "第 313 轮 T0 列播轴面：派生全等钉＋模板子串钉＋registry 内容交叉（D172）" {
+    const reg = @import("../lang/registry.zig");
+    // A1 基数钉：五枚（第 315 轮收录列播标识入面，随动；313 轮旧值四）。
+    try std.testing.expectEqual(@as(usize, 5), lang_list_face.len);
+    // A2 派生全等：两 header 针与 hub 真值同骨（独立手抄 want 对拍）。
+    try std.testing.expectEqualStrings("当前语言包", lang_list_face[0].needle);
+    try std.testing.expectEqualStrings("可注册包", lang_list_face[1].needle);
+    try std.testing.expectEqualStrings(np_cur_pack, lang_list_face[0].needle);
+    try std.testing.expectEqualStrings(np_reg_packs, lang_list_face[1].needle);
+    // A3 子串关系钉：拒绝词必为迁入模板子串（模板漂字即红）；全形独立手抄对拍。
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_bad_verb, lang_list_face[2].needle) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_bad_verb, "lang 只有 add 子命令") != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_bad_verb, "不是有效子命令。") != null);
+    // A4 内容交叉：列播针必命中 registry 首 entry 键形（键改而针不改即红；反之亦然）。
+    try std.testing.expect(registry_first_key_shape(reg, lang_list_face[3].needle));
+    // A5 臆造反形：近形/非本轴词不在真值。
+    try std.testing.expect(std.mem.indexOf(u8, msg_lang_bad_verb, "不是合法") == null); // 近形
+    try std.testing.expect(std.mem.indexOf(u8, lang_list_face[3].needle, "tw(") == null); // 臆造列形
+}
+
+/// A4 辅助：needle 形如 "zh(" 须等于 registry 首 entry 的 key ++ "("（comptime 拼装比对）。
+fn registry_first_key_shape(comptime r: type, comptime needle: []const u8) bool {
+    const expect = r.entries[0].key ++ "(";
+    return std.mem.eql(u8, needle, expect);
+}
+
+// 第 314 轮 T0（D173）：`zzc lang add` 注册链面——基数五钉；三枚全派生对拍（含
+// lang_dir 拼装形）；内容针独立手抄全形钉（包文活线交叉交 matcher 对面四十八——
+// @embedFile 不可越包路径，309 在册形制）；臆造反形。
+test "第 314 轮 T0 注册链面：派生全等钉＋内容手抄钉＋反形（D173）" {
+    // A1 基数钉：五枚。
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len); // 第 321 轮 D180 两枚随动（旧值 14） // 第 319 轮 D178 两枚随动（旧值 12） // 第 318 轮 D177 两枚随动（旧值 10） // 第 317 轮 D176 三枚随动（旧值 7） // 第 316 轮 D175 两枚随动（旧值 5）
+    // A2 全派生对拍：回执/拒绝词与 hub 真值同骨（独立手抄 want 一并钉）。
+    try std.testing.expectEqualStrings("已装入", lang_add_face[0].needle);
+    try std.testing.expectEqualStrings(np_installed, lang_add_face[0].needle);
+    try std.testing.expectEqualStrings("本工程内已装有", lang_add_face[1].needle);
+    try std.testing.expectEqualStrings(np_dup_installed, lang_add_face[1].needle);
+    try std.testing.expectEqualStrings("--as", lang_add_face[3].needle);
+    try std.testing.expectEqualStrings(flag_as, lang_add_face[3].needle);
+    // A3 目录拼装钉：落位针恰为 lang_dir 加尾斜杠（回执指路与真实落盘同源）。
+    try std.testing.expectEqualStrings(".zzc/lang/", lang_add_face[2].needle);
+    try std.testing.expectEqualStrings(zzc.lang_dir ++ "/", lang_add_face[2].needle);
+    // A4 内容针独立手抄全形钉（fixture 包文侧交叉由对面四十八 run 时读承担）。
+    try std.testing.expectEqualStrings("tst-ja", lang_add_face[4].needle);
+    // A5 臆造反形：近形词不在真值。
+    try std.testing.expect(std.mem.indexOf(u8, np_installed, "已加载") == null);
+    try std.testing.expect(std.mem.indexOf(u8, lang_add_face[4].needle, "tst-jb") == null);
+}
+
+// 第 315 轮 T0（D174）：收录列播标识针入面——基数五钉＋全等对拍（独立手抄）＋
+// 与 313 轮「zh(」内容针互不含（各司两臂）；十五臂三形之守卫侧胶合。
+test "第 315 轮 T0 收录列播标识针：基数五钉＋全等对拍＋分针反形（D174）" {
+    try std.testing.expectEqual(@as(usize, 5), lang_list_face.len);
+    try std.testing.expectEqualStrings("收录列播", lang_list_face[4].needle); // want 独立手抄＝第五枚（面原四枚加一）
+    try std.testing.expect(std.mem.indexOf(u8, lang_list_face[4].needle, "zh(") == null); // 分针互斥形
+    try std.testing.expect(std.mem.indexOf(u8, lang_list_face[3].needle, "收录") == null); // 反向互斥
+    try std.testing.expect(std.mem.indexOf(u8, lang_list_face[4].needle, "收绿列播") == null); // 近形反形
+}
+
+// 第 316 轮 T0（D175）：坏注册名话术模板入 hub 单源——三处原手抄改派生后逐关系钉：
+// 起首＝np_reg_key_open、`--as`/`$name`/上限数皆派生在场、脚本短形「不可用」⊂ 模板；
+// 臆造异引号形反证（同族 313：针只认全形，改引号即不命中）。基数七钉随 face 扩枚。
+test "第 316 轮 T0 坏名话术模板：派生三在场＋子串⊂＋反形（D175）" {
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len); // 第 321 轮 D180 两枚随动（旧值 14） // 第 319 轮 D178 两枚随动（旧值 12） // 第 318 轮 D177 两枚随动（旧值 10） // 第 317 轮 D176 三枚随动（旧值 7）
+    // A1 起首全等：模板首段即 hub 开引号词（main 不再自拼前缀）。
+    try std.testing.expectEqual(@as(usize, 0), std.mem.indexOf(u8, msg_reg_key_bad, np_reg_key_open).?);
+    // A2 三处派生在场：旗名、展示名键、上限数（comptime 印数与 userpack 真值同骨）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, flag_as) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, Pack.meta_name) != null);
+    const len_pin = std.fmt.comptimePrint("至多 {d} 字", .{userpack.max_key_len});
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, len_pin) != null);
+    // A3 脚本面短形⊂模板：十六臂 grep 的「不可用」须仍在 hub 全形内（模板删词即测图红）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, "不可用") != null);
+    try std.testing.expectEqualStrings("不可用", lang_add_face[5].needle);
+    try std.testing.expectEqualStrings("越界零写盘", lang_add_face[6].needle); // 独立手抄
+    // A4 反形：异体引号/漂字不在模板（臆造形不得自证）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, "注册名『") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, "不可用铀") == null);
+}
+
+// 第 317 轮 T0（D176）：坏包族话术词核单源——「不完整」须同时嵌进三形模板（异形同核），
+// 外部/已装/裸三址前缀各异而词核共骨；退码数锚由 failure_exit_code comptime 派生（脚本
+// 字面随动）；母语出口铁律反形：模板内不得泄 error 名（InvalidLangPack/PackMissing* 等）。
+test "第 317 轮 T0 坏包词核三模板同骨＋数锚派生＋反形（D176）" {
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len); // 第 321 轮 D180 两枚随动（旧值 14） // 第 319 轮 D178 两枚随动（旧值 12） // 第 318 轮 D177 两枚随动（旧值 10）
+    // A1 词核⊂三模板（异形同核；改词核即三址同动，脚本十七臂针随 hub 漂而不脱真值）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_pack_incomplete, np_incomplete) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_installed_pack_incomplete, np_incomplete) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_bare_pack_incomplete, np_incomplete) != null);
+    // A2 包名词派生在场：四模板皆取 np_pack_word（"语言包"三字不得分道）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_ext_missing, np_pack_word) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_pack_incomplete, np_pack_word) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_installed_pack_incomplete, np_pack_word) != null);
+    // A3 数锚针全等派生：脚本面 EXPECT_FAIL_RC=<hub 值>（值漂即对面红，零新手抄）。
+    try std.testing.expectEqualStrings(
+        "EXPECT_FAIL_RC=" ++ std.fmt.comptimePrint("{d}", .{failure_exit_code}),
+        lang_add_face[8].needle,
+    );
+    try std.testing.expectEqualStrings("坏包族零落盘", lang_add_face[9].needle); // 独立手抄
+    // A4 反形：error 名与漂核字面不在模板（母语出口铁律＋同骨性守门）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_pack_incomplete, "PackMissing") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_installed_pack_incomplete, "InvalidLangPack") == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_bare_pack_incomplete, "不完备") == null);
+}
+
+// 第 318 轮 T0（D177）：已装包第二道门话术分工——疑形提示词只属 installed 模板（外部/裸二形
+// 皆不含，三形不重叠即不致把「装配期拒收」与「运行期被改坏」混成一条指引）；模板须持双插值
+// （路径点名＋缺项说明），探针摘掉插值即退化成裸形；基数十二枚随动。
+test "第 318 轮 T0 已装包疑形提示词分工＋双插值＋反形（D177）" {
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len); // 第 321 轮 D180 两枚随动（旧值 14） // 第 319 轮 D178 两枚随动（旧值 12）
+    // A1 疑形提示词⊂已装模板（派生在场），且模板以其为骨（改词即臂针随 hub 漂不脱真值）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_installed_pack_incomplete, np_corrupt_hint) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_installed_pack_incomplete, np_incomplete) != null);
+    // A2 三形分工不重叠：外部形与裸形皆不带疑形提示词（混形即把两种成因指引成一处）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_pack_incomplete, np_corrupt_hint) == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_bare_pack_incomplete, np_corrupt_hint) == null);
+    // A3 双插值形制：已装模板须有两个 {s}（路径＋缺项说明）——探针摘掉路径插值即退化成裸形。
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, msg_installed_pack_incomplete, "{s}"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, msg_bare_pack_incomplete, "{s}"));
+    // A4 反形：臂标识独立手抄钉＋漂字面不在模板。
+    try std.testing.expectEqualStrings("已装坏包点名路径", lang_add_face[11].needle); // 独立手抄
+    try std.testing.expect(std.mem.indexOf(u8, np_corrupt_hint, "装后又被改坏了!") == null);
+}
+
+// 第 319 轮 T0（D178）：撞内置名与坏名两闸分工不重叠（坏名管形状、撞名管失能——互相不含对方
+// 词核即不会把「另起注册名」的同一指引糊成一条）；遮蔽模板以 np_reg_key_open 起头（与坏名形
+// 共用注册名引号骨）并派生 flag_as/flag_lang 两枚旗标真值；臂标识独立手抄。
+test "第 319 轮 T0 遮蔽话术派生＋两闸分工＋反形（D178）" {
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len); // 第 321 轮 D180 两枚随动（旧值 14） // 独立基数钉
+    // A1 词核与起头骨：遮蔽模板以 np_reg_key_open 起头（与坏名形同骨）。
+    try std.testing.expectEqual(@as(usize, 0), std.mem.indexOf(u8, msg_reg_key_shadow, np_reg_key_open).?);
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_shadow, np_shadow) != null);
+    // A2 两枚旗标真值派生在场：指引里的 --as / --lang 皆取 hub，漂旗标即话术随动。
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_shadow, flag_as) != null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_shadow, flag_lang) != null);
+    // A3 两闸分工不重叠：坏名形不含遮蔽词核、撞名形不含坏名词核（混床即一条指引两种成因）。
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_bad, np_shadow) == null);
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_shadow, "不可用") == null);
+    // A4 反形：臂标识独立手抄＋模板内不泄 error 名/内部英文标识符。
+    try std.testing.expectEqualStrings("同名遮蔽真相", lang_add_face[13].needle); // 独立手抄
+    try std.testing.expect(std.mem.indexOf(u8, msg_reg_key_shadow, "AlreadyInstalled") == null);
+}
+
+// 第 320 轮 T0（D179）：选包「内置先查、已装兜底」的**调用序本身**入静态钉。
+// 缘起：第 319 轮第十九臂形二用输出文本（内置名正断＋已装名反断）代理钉序，探针把
+// 已装查询提到内置之前求值而两分支都回 `registry.lookup(n)`——输出字面不动，形二看不见，
+// test/matcher/smoke 三通道全绿（序改而输出不变型零信号）。序是遮蔽语义的骨架：今日同输出，
+// 明日把兜底支一改即反客为主。故以 @embedFile main 直读选包段，钉「首现序＋出现次数＋兜底
+// 同源＋装前拦臂同真相源」，把代理判据升级为序判据。
+test "第 320 轮 T0 选包调用序静态钉＋装前拦臂同 lookup 源（D179）" {
+    const main_src = @embedFile("../main.zig"); // 真 source dependency：改 main.zig 即此红
+    // A1 取窗：选包段起点/终点两枚锚各自恰一枚（锚漂即此红，不用全文件噪声序）。
+    const seg_open = "const chosen: registry.Entry = if (lang_name) |n|";
+    const seg_close = "const bp = Pack.loadWithOverlays";
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, seg_open));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, seg_close));
+    const i = std.mem.indexOf(u8, main_src, seg_open).?;
+    const j = std.mem.indexOf(u8, main_src, seg_close).?;
+    try std.testing.expect(i < j);
+    const seg = main_src[i..j];
+    // A2 序针：段内内置表查询首现早于已装包查询首现（内置先查）。
+    const a = std.mem.indexOf(u8, seg, "registry.lookup(n)").?;
+    const b = std.mem.indexOf(u8, seg, "userpack.installedFile(").?;
+    try std.testing.expect(a < b);
+    // A3 计数针：段内已装查询恰一枚——多一枚即「预查再回内置」形（探针实锤形，输出不变而序已改）。
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(seg, "userpack.installedFile("));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(seg, "registry.lookup(n)"));
+    // A4 兜底同源：命中已装包须归位来源（供 317/318 的疑形话术）并交回同一装载真相源。
+    try std.testing.expect(std.mem.indexOf(u8, seg, "installed_src = ip;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, seg, "loadExternalPack(ip)") != null);
+    // A5 全图计数钉：main 内 lookup 恰两枚（选用侧＋装前拦截臂）、installedFile 恰一枚（第三源添入即此红）。
+    try std.testing.expectEqual(@as(usize, 2), countOccurrences(main_src, "registry.lookup("));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, "userpack.installedFile("));
+    // A6 装前拦截臂取同一 lookup 真相源且住在 cmdLangAdd 内（另起判据表即与遮蔽语义分道）。
+    const add_open = "fn cmdLangAdd(args: []const []const u8) void {";
+    const add_close = "fn cmdCheck(lang: Pack";
+    const k = std.mem.indexOf(u8, main_src, add_open).?;
+    const l = std.mem.indexOf(u8, main_src, add_close).?;
+    try std.testing.expect(k < l);
+    const add_seg = main_src[k..l];
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(add_seg, "if (registry.lookup(key)) |_| {"));
+    try std.testing.expect(std.mem.indexOf(u8, add_seg, "cli.msg_reg_key_shadow") != null);
+    // A7 反形：段内不得出现「先查已装再弃其值」的预查字面。
+    try std.testing.expect(std.mem.indexOf(u8, seg, "|_| registry.lookup") == null);
+}
+
+// 第 321 轮 T0（D180）：自家旗标近似名判据的正反形＋透传假阳反形＋main 拦阻臂委派钉。
+// 缘起：活体真值实测 `--langx zh`／`--language zh`／`-lang zh`／`--machin` 一律静默吞（RC=0 按默认
+// 包跑），而错**包名**早在 314 轮设闸退 2——错旗标名比错包名更隐蔽（用户与 AI 皆以为旗标生效）。
+// unit 层已钉 findFlag 严格匹配（本轮吞并探针即被 25/26/42/207 轮四枚测×双图拦红），缺的是判据本体
+// 与真跑层拦阻；判据入 hub 纯函数，main 只扫描＋退出（承「判据入 hub、守卫只做 I/O」形制）。
+test "第 321 轮 T0 近似旗标判据正反形＋透传假阳反形＋main 拦阻臂委派钉（D180）" {
+    // A1 近似三形各自点名合法名：超集（多打尾缀）／截断（少打尾缀）／破折数不符。
+    try std.testing.expectEqualStrings("--lang", nearZzcFlag("--langx").?);
+    try std.testing.expectEqualStrings("--lang", nearZzcFlag("--language").?);
+    try std.testing.expectEqualStrings("--lang", nearZzcFlag("-lang").?);
+    try std.testing.expectEqualStrings("--machine", nearZzcFlag("--machin").?);
+    // A2 最近匹配打分：同族多枚皆近似时取长度差最小者（非表内首个命中——错建议比无建议更害人）。
+    try std.testing.expectEqualStrings("--lang-file", nearZzcFlag("--lang-filex").?);
+    try std.testing.expectEqualStrings("--lang-overlay", nearZzcFlag("--lang-overlayx").?);
+    try std.testing.expectEqualStrings("--lang", nearZzcFlag("--lan").?);
+    // A3 等号形先取 `=` 左侧再判（值体不得污染名判据）。
+    try std.testing.expectEqualStrings("--lang", nearZzcFlag("--langx=zh").?);
+    try std.testing.expectEqualStrings("--help", nearZzcFlag("--hel").?);
+    // A4 合法集全等一律放过（含同族前缀枚 `--lang-file`/`--lang-overlay` 与 help 四形）。
+    for (legal_flag_words) |m| {
+        if (nearZzcFlag(m) != null) std.debug.print("合法枚被误判：{s}\n", .{m});
+        try std.testing.expect(nearZzcFlag(m) == null);
+    }
+    // A5 假阳反形（本轮最要紧的一钉）：zig 原生/透传常见旗标绝不判近似——拦错真命令即伤透传契约。
+    const passthrough = [_][]const u8{
+        "-Doptimize=ReleaseSafe", "--cache-dir=p", "--summary=all",
+        "--check",                "--fuzz",        "--save",
+        "--install-extension",    "-lc",           "-l",
+        "-O",                     "--mod",         "--name=x",
+        "--verbose",              "--no-emit-bin", "-Mroot=./g",
+        "--strip",                "--test-name=t", "--lang=zh",
+    };
+    for (passthrough) |q| {
+        if (nearZzcFlag(q)) |bad| std.debug.print("假阳：{s} 被疑作 {s}\n", .{ q, bad });
+        try std.testing.expect(nearZzcFlag(q) == null);
+    }
+    // A6 非旗标/分隔符/空串一律放过（`--` 之后属透传区，main 侧另有 break 闸）。
+    try std.testing.expect(nearZzcFlag("--") == null);
+    try std.testing.expect(nearZzcFlag("-") == null);
+    try std.testing.expect(nearZzcFlag("") == null);
+    try std.testing.expect(nearZzcFlag("lang") == null);
+    try std.testing.expect(nearZzcFlag("src/main.zz") == null);
+    // A7 话术单源：模板含词核、合法名清单由 zzc_flags comptime 派生且逐字节等于独立手抄形。
+    try std.testing.expect(std.mem.indexOf(u8, msg_flag_near, np_flag_typo) != null);
+    try std.testing.expectEqualStrings("--lang、--lang-file、--lang-overlay、--machine、--as", flag_list_text);
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, flag_list_text, "、")); // 五枚相连→四分隔
+    for (zzc_flags) |f| try std.testing.expect(std.mem.indexOf(u8, flag_list_text, f) != null);
+    // A8 main 消费面委派钉：拦阻臂、话术、`--` 逃生口 break 各恰一枚（手抄/多址即此红）。
+    const main_src = @embedFile("../main.zig");
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, "cli.nearZzcFlag(a)"));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, "cli.msg_flag_near"));
+    try std.testing.expectEqual(@as(usize, 1), countOccurrences(main_src, "if (std.mem.eql(u8, a, \"--\")) break;"));
+    // A9 面基数 16 独立钉＋标识针手抄对拍（削面即编译期/运行时双拦）。
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len);
+    try std.testing.expectEqualStrings("旗标笔误装前即拒", lang_add_face[15].needle);
+    try std.testing.expectEqualStrings(np_flag_typo, lang_add_face[14].needle);
+    // A10 双址计数闸（演漂形⑤ 所逼）：旧形 occ 缺省=1，注释与 echo 只改一处亦过——两枚新针各要 2 枚。
+    try std.testing.expectEqual(@as(usize, 2), lang_add_face[14].occ); // 词核：判据址＋文案址
+    try std.testing.expectEqual(@as(usize, 3), lang_add_face[15].occ); // 标识：注释＋[FAIL]＋[ok] 三址
+}
+
+/// 从面针 `.why` 文里解析**声明的址数**（「双址/两址」→2、「三址」→3、「四址」→4…；未声明返 null 即
+/// presence 语义 1）。第 322 轮 D181 元判据的判据本体：先由文字声明、再与 `occ` 等值对拍——比「检测某
+/// 固定字样」硬：措辞从「双址」改成「四址」而 occ 未随动立刻红，删 `.occ` 也立刻红。
+fn declaredAddrCount(why: []const u8) ?usize {
+    // 数组＋具名字段（元组的 `pr[0]` 是 comptime 索引，运行期循环里取会报 "unable to resolve comptime value"）。
+    const pairs = [_]struct { word: []const u8, n: usize }{
+        .{ .word = "双址", .n = 2 },
+        .{ .word = "两址", .n = 2 },
+        .{ .word = "三址", .n = 3 },
+        .{ .word = "四址", .n = 4 },
+        .{ .word = "五址", .n = 5 },
+        .{ .word = "六址", .n = 6 },
+    };
+    for (pairs) |pr| {
+        if (std.mem.indexOf(u8, why, pr.word) != null) return pr.n;
+    }
+    return null;
+}
+
+// 第 322 轮 T0（D181）：面针「名实相符」元判据——第 321 轮演漂形⑤ 揭出结构性病灶：`.why` 自称
+// 「双址」而 `BuildFace.occ` 缺省只核存在性（守只看「在不在」），改掉一处仍绿。本轮把 5 枚自称双址
+// 的标识针按**实测址数**收紧（3/4/4/3/2），且立元判据自动覆盖今后添针：自称多址者 occ 必 ≥2、
+// occ>1 者 .why 必写址（双向，防「收紧后忘写址数」「写址数却仍 occ=1」两向漂）。元判据只遍历下面
+// 清单内的表——清单漏表即整表失守，故另钉清单枚数与各表基数（独立手抄）。
+test "第 322 轮 T0 面针名实相符元判据＋面表清单基数钉（D181）" {
+    const tables = .{ lang_list_face[0..], lang_add_face[0..] };
+    // A1 清单基数钉：入清单的表恰两张、各自基数独立手抄（添表/掏表即此红）。
+    try std.testing.expectEqual(@as(usize, 2), tables.len);
+    try std.testing.expectEqual(@as(usize, 5), lang_list_face.len);
+    try std.testing.expectEqual(@as(usize, 16), lang_add_face.len);
+    // A2 名实相符双向（判据本体＝文字声明的址数）：声明几址就必须几址；已收紧（occ>1）而 why 未声明
+    // 址数亦红——首版只认「双址」字样，删 .occ 后 why 写「四址」竟不红，故改为数字解析等值对拍。
+    inline for (tables) |tab| {
+        inline for (tab) |c| {
+            if (declaredAddrCount(c.why)) |n| {
+                if (c.occ != n) std.debug.print("名实不符：{s} 声明 {d} 址而 occ={d}\n", .{ c.needle, n, c.occ });
+                try std.testing.expectEqual(n, c.occ);
+            } else if (c.occ > 1) {
+                std.debug.print("occ 已收紧而 why 未声明址数：{s}\n", .{c.needle});
+                try std.testing.expect(false);
+            }
+        }
+    }
+    // A3 收紧实况值钉（独立手抄，不复用被测常量）：针文本与实址数双钉——纯索引钉在表序调整时
+    // 会张冠李戴（本轮首打即把「同名遮蔽真相」写成 [12]（实为词核 [12]）、靠针文本才能立刻定位）。
+    const occ_pins = .{
+        .{ lang_list_face[4], "收录列播", @as(usize, 3) },
+        .{ lang_add_face[6], "越界零写盘", @as(usize, 4) },
+        .{ lang_add_face[9], "坏包族零落盘", @as(usize, 4) },
+        .{ lang_add_face[11], "已装坏包点名路径", @as(usize, 3) },
+        .{ lang_add_face[13], "同名遮蔽真相", @as(usize, 2) },
+        .{ lang_add_face[14], "笔误", @as(usize, 2) },
+        .{ lang_add_face[15], "旗标笔误装前即拒", @as(usize, 3) },
+    };
+    inline for (occ_pins) |pin| {
+        try std.testing.expectEqualStrings(pin[1], pin[0].needle);
+        try std.testing.expectEqual(pin[2], pin[0].occ);
+    }
+    // A4 反形：occ 缺省仍为 1（未收紧的针不得被误当多址——presence 语义保持不变）。
+    try std.testing.expectEqual(@as(usize, 1), lang_add_face[0].occ);
+    try std.testing.expectEqual(@as(usize, 1), lang_list_face[0].occ);
 }

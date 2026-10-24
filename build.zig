@@ -183,6 +183,59 @@ pub fn build(b: *std.Build) void {
     // 比对生成物却从不与声明面对账——故两文件皆须 addFileArg 声明后由守卫逐字节对账。
     check_matcher_run.addFileArg(b.path("editors/vscode/language-configuration.json"));
     check_matcher_run.addFileArg(b.path("editors/vscode/syntaxes/zz.tmLanguage.json"));
+    // 对面二十三（第 281 轮 D139）：LSP 长连接冒烟脚本 `tools/lsp-live-smoke.sh`——其内嵌帧方法词与
+    // capability 断言形串是协议词汇的第四处手抄，脚本非测图 source dep 且不在 test 门内（t2 探针 P1：
+    // 删一条断言而 17/17 全绿且脚本自身仍 PASS），故须 addFileArg 声明依赖后由守卫逐枚对账。
+    check_matcher_run.addFileArg(b.path("tools/lsp-live-smoke.sh"));
+    // 对面二十四（第 282 轮 D140／D141）：客户端 e2e 冒烟 `tools/extension-smoke.js`——断言条数即覆盖面，
+    // 探针实锤删一条断言仍报 `PASS：87` 退 0 且构建链全绿；条数锚与 capability 键名族皆须跨侧对账，
+    // 故同 D139 补 addFileArg 声明（改 js 即触发守卫重跑）。
+    check_matcher_run.addFileArg(b.path("tools/extension-smoke.js"));
+    // 对面二十九（第 292 轮 D151）：打包器命名面——`tools/build-vsix.py` 的包名/包内前缀/排除
+    // 后缀三枚针脚与 `src/vsix.zig` hub 同源，改 py 即触发守卫重跑（非 source dep 则恒绿静默）。
+    check_matcher_run.addFileArg(b.path("tools/build-vsix.py"));
+    // 对面三十（第 294 轮 D153）：`docs/关键字对照表.md` 是内置默认包 `[keywords]`／`[aliases]` 两段的
+    // 第二份手抄，而包内 `未知标识符` 报错文案正把用户指向该表；两文件皆非测图 source dep（表在 `docs/`
+    // 越出模块包路径、不可 `@embedFile`，202 轮硬约束判例），P1 探针实锤三形漂动三门禁零信号——故一并
+    // addFileArg 声明，改任一面即触发守卫重跑。路径串由 `lang/pack.zig` 的 kwtable_path 派生并被守卫核对。
+    check_matcher_run.addFileArg(b.path("docs/关键字对照表.md"));
+    check_matcher_run.addFileArg(b.path("src/lang/packs/中文.txt"));
+    // 第 295 轮 D154：书稿《字典篇》系包映射面的**第三份手抄**（该篇头注自称「可按主题查词」，探针实测
+    // 却缺 27/113 枚，且两条尾注点名「均在词表中」的十枚一枚皆不在表内）；书非 source dependency，
+    // 故同 D153 补 addFileArg 声明，路径串由 `lang/pack.zig` 的 book_path 派生并被守卫核对。
+    check_matcher_run.addFileArg(b.path("docs/母语编写zig-中文版.md"));
+    // 第 296 轮 D155：对面三十二——仓根 `README.md` 的版本族（产品版本/工具链版本/`zzc version` 样例/
+    // 扩展版号与产物全名共十余处手抄）系 `zzc_paths`/`package.json` 真值的文档侧副本；探针实锤五形
+    // 同注后 fmt/build/test/matcher 皆零信号（README 从不被门禁读取、亦非测图 source dep），升代或
+    // 独漂皆静默——故 addFileArg 声明为文件依赖，路径串由 hub 的 readme_path 派生并被守卫核对。
+    check_matcher_run.addFileArg(b.path("README.md"));
+    // 第 297 轮 D156：demo 冒烟脚本 `tools/demos-smoke.sh` 纳入同一形制——第 17 片。六枚 demo
+    // 是用户照抄面而 `check-demos.ps1` 基线因 NO_PWSH＋CI 无 pwsh 步从未被调用（t2 探针实锤
+    // demo 编译坏形后四门禁零信号）；守卫对面三十三读脚本实文对账入口点名/条数锚/盘上双向。
+    check_matcher_run.addFileArg(b.path("tools/demos-smoke.sh"));
+    // 第 298 轮 D157：CI 工作流 `.gitcode/workflows/ci.yml` 纳入 matcher 步输入——第 18 片。此前它
+    // 只被 D73 步（版本族）读：改脚本名忘改 ci.yml 即本地全绿而 CI 到推即断（lsp-live-smoke.sh 顶注
+    // 自警在册）；matcher 步需自己的 addFileArg（逐 step 生效，D73 片不顶本针）。
+    check_matcher_run.addFileArg(b.path(".gitcode/workflows/ci.yml"));
+    // 第 300 轮 D159：hello demo 源纳入 matcher 步输入——第 19 片。对面三十六需**全文**读它对书稿
+    // 引文块做逐字节对拍（非 297 轮限读 1 字节的验在形），改源不触发重跑即假绿（202 轮判例）。
+    check_matcher_run.addFileArg(b.path("demo/hello/src/main.zz"));
+    // 第 302 轮 D161：方案书与 contributing 指南纳入 matcher 步输入——第 20/21 片。对面三十八对
+    // 两面命令样例做逆向鬼词普查（此前两面从无针入任何通道：方案书全量漂 eject→emit 五通道
+    // 零信号实锤）；不声明即改文档不触发重跑，202/210 轮假绿判例重播。
+    check_matcher_run.addFileArg(b.path("docs/方案书.md"));
+    check_matcher_run.addFileArg(b.path("docs/contributing-lang-pack.md"));
+    // 第 22 片（对面四十一·第 305 轮 D164）：扩展 README——全仓守卫从不读本文件，包线（vsix 字节同源）
+    // 只锁「包↔盘」不锁语义；t2 探针两面漂重打包后六道零信号实锤。配置键三针＋命令/旗标两面逆向第五面。
+    // 路径单源 `paths.ext_readme_path`，needle 由真值派生（`src/zzc_paths.zig` doc41_build_face）。
+    check_matcher_run.addFileArg(b.path("editors/vscode/README.md"));
+    // 第 23 片（对面四十二·第 306 轮 D165）：AGENTS.md（AI 编码操作手册）——读者是自动化工具，
+    // 命令词/旗标静默漂即 AI 照手册产出不可编译代码；两面九+五枚正向针＋命令/旗标两面逆向第六面。
+    check_matcher_run.addFileArg(b.path("AGENTS.md"));
+    // 第 24 片（对面四十五·第 309 轮 D168）：第三方库叠加包 contrib/packs/httpz-中文.txt——
+    // 第九臂正形/映射源的盘上真值件（@embedFile 不可越包路径，296 自守形制在此不适用，改 run 时读）；
+    // 路径单源 `paths.overlay_pack_path`，映射两枚 needle 对包文 presence 由守卫胶合。
+    check_matcher_run.addFileArg(b.path("contrib/packs/httpz-中文.txt"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 

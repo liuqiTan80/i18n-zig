@@ -148,10 +148,12 @@ pub const m_prepareRename = "textDocument/prepareRename";
 pub const m_workspaceSymbol = "workspace/symbol";
 pub const m_signatureHelp = "textDocument/signatureHelp";
 pub const m_selectionRange = "textDocument/selectionRange";
+/// 第 279 轮：上下文补全（关键词/类型/别名点链/本文件顶层声明），触发字符 `.`。
+pub const m_completion = "textDocument/completion";
 pub const m_publishDiagnostics = "textDocument/publishDiagnostics";
 
-/// 对面·`extension.js` 二十二枚 needle（守卫判据的构造也在 hub，守卫视仅只读 I/O——
-/// 同 215/216/217 形制；序：生命周期四 → 文档同步四 → 请求十三 → 服务端通知消费一）。
+/// 对面·`extension.js` 二十三枚 needle（守卫判据的构造也在 hub，守卫视仅只读 I/O——
+/// 同 215/216/217 形制；序：生命周期四 → 文档同步四 → 请求十四 → 服务端通知消费一）。
 pub const methods_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "request('" ++ m_initialize ++ "', initialize)", .why = "客户端握手发起词须逐字节等于服务端 dispatch 真值——分道即 initialize 应答都收不了，LSP 全废（真跑 P7 坐实漂形零应答）" },
     .{ .needle = "method: '" ++ m_initialized ++ "', params: {} }", .why = "初始化完毕通知词须等于服务端真值——通知形无应答，分道即服务端静默丢弃、无人感知" },
@@ -174,6 +176,7 @@ pub const methods_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "request('" ++ m_workspaceSymbol ++ "', {", .why = "工作区符号请求词须等于服务端真值——分道即项目符号恒空（客户端注册了 provider 却永无结果）" },
     .{ .needle = "request('" ++ m_signatureHelp ++ "', {", .why = "参数提示请求词须等于服务端真值——分道即调用括号提示恒空（客户端注册了 provider 却永无结果）" },
     .{ .needle = "request('" ++ m_selectionRange ++ "', {", .why = "智能扩选请求词须等于服务端真值——分道即扩选停在词/行、永不外扩到包围块与整文档（客户端注册了 provider 却永无结果）" },
+    .{ .needle = "request('" ++ m_completion ++ "', {", .why = "上下文补全请求词须等于服务端真值——分道即候选恒空（客户端注册了 provider 与 `.` 触发字符却永无结果，补全静默退化为纯 snippets）" },
     .{ .needle = "msg.method === '" ++ m_publishDiagnostics ++ "'", .why = "服务端发布诊断通知的消费订阅词须等于 publishRaw 写侧真值——分道即服务端照发、客户端全瞎，诊断面板恒空（t2 P2 静默面）" },
 };
 
@@ -211,6 +214,7 @@ pub const k_endLine = "endLine";
 /// 从未核结果体字段；js 非 source dep（t2 探针 P1–P4 字段漂全绿静默），P6 写侧 kind 漂
 /// 连测面亦零锚——字段分道即诊断波浪线/悬停渲染/错误码映射静默熄灭。
 pub const k_range = "range";
+pub const k_selectionRange = "selectionRange";
 pub const k_severity = "severity";
 pub const k_source = "source";
 pub const k_message = "message";
@@ -251,6 +255,14 @@ pub const k_activeParameter = "activeParameter";
 /// `positions[]` 并在递归映射里读 `range` 与 `parent`。
 pub const k_positions = "positions";
 pub const k_parent = "parent";
+/// 第 279 轮：上下文补全（`CompletionList` / `CompletionItem`）——服务端写
+/// `isIncomplete`/`items[]`，每项写 `label`/`kind`/`detail`/可选 `documentation` 与
+/// `textEdit{range,newText}`（点链补全用于替换整条链前缀）；客户端逐一同键读取。
+pub const k_items = "items";
+pub const k_isIncomplete = "isIncomplete";
+pub const k_detail = "detail";
+pub const k_documentation = "documentation";
+pub const k_textEdit = "textEdit";
 pub const v_quickfix = "quickfix";
 pub const v_source_fix_all = "source.fixAll";
 /// 第 271 轮：折叠区间 kind 值（LSP `FoldingRangeKind.Comment`）——客户端据此映射
@@ -312,6 +324,8 @@ const cap_workspace_symbol = "\"workspaceSymbolProvider\":true";
 const cap_signature_help = "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}";
 /// 第 277 轮：智能扩选能力——布尔形（客户端据此注册 SelectionRangeProvider）。
 const cap_selection_range = "\"selectionRangeProvider\":true";
+/// 第 279 轮：上下文补全能力——触发字符 `.`（点链续写即弹；普通词按前缀补全）。
+const cap_completion = "\"completionProvider\":{\"triggerCharacters\":[\".\"]}";
 const cap_semtok_key = "\"semanticTokensProvider\"";
 const cap_semtok = cap_semtok_key ++ ":{\"legend\":{" ++ legend_json ++ ",\"tokenModifiers\":[]},\"full\":true}";
 const cap_server_info = "\"serverInfo\":{\"name\":\"" ++ paths.prog_name ++ "-lsp\"}";
@@ -333,6 +347,7 @@ pub const cap_face = [_]jsonrpc.FaceCheck{
     .{ .needle = cap_workspace_symbol, .why = "ps1 断言 workspaceSymbolProvider 在——与写侧漂即工作区符号能力协商断言与实际应答分道" },
     .{ .needle = cap_signature_help, .why = "ps1 断言 signatureHelpProvider 触发字符形在——与写侧漂即参数提示能力协商断言与实际应答分道" },
     .{ .needle = cap_selection_range, .why = "ps1 断言 selectionRangeProvider 在——与写侧漂即智能扩选能力协商断言与实际应答分道" },
+    .{ .needle = cap_completion, .why = "ps1 断言 completionProvider 触发字符形在——与写侧漂即上下文补全能力协商断言与实际应答分道" },
 };
 
 /// 写侧转义形（`\"key\"`）：与解析臂同字一源，杜绝两份手抄。
@@ -352,6 +367,7 @@ const ek_end = "\"" ++ k_end ++ "\"";
 const ek_startLine = "\"" ++ k_startLine ++ "\"";
 const ek_endLine = "\"" ++ k_endLine ++ "\"";
 const ek_range = "\"" ++ k_range ++ "\"";
+const ek_selectionRange = "\"" ++ k_selectionRange ++ "\"";
 const ek_severity = "\"" ++ k_severity ++ "\"";
 const ek_source = "\"" ++ k_source ++ "\"";
 const ek_message = "\"" ++ k_message ++ "\"";
@@ -373,6 +389,11 @@ const ek_label = "\"" ++ k_label ++ "\"";
 const ek_activeSignature = "\"" ++ k_activeSignature ++ "\"";
 const ek_activeParameter = "\"" ++ k_activeParameter ++ "\"";
 const ek_parent = "\"" ++ k_parent ++ "\"";
+const ek_items = "\"" ++ k_items ++ "\"";
+const ek_isIncomplete = "\"" ++ k_isIncomplete ++ "\"";
+const ek_detail = "\"" ++ k_detail ++ "\"";
+const ek_documentation = "\"" ++ k_documentation ++ "\"";
+const ek_textEdit = "\"" ++ k_textEdit ++ "\"";
 const em_markdown = "\"" ++ v_markdown ++ "\"";
 const eq_prog_name = "\"" ++ paths.prog_name ++ "\"";
 const ek_v20 = "\"" ++ jsonrpc.version_value ++ "\"";
@@ -380,6 +401,12 @@ const ek_method = "\"" ++ k_method ++ "\"";
 const f_result_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_result ++ ":{s}}}";
 const f_error_response = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_id ++ ":{s}," ++ ek_error ++ ":{{" ++ ek_code ++ ":{d}," ++ ek_message ++ ":{s}}}}}";
 const f_range_json = "{{" ++ ek_start ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}," ++ ek_end ++ ":{{" ++ ek_line ++ ":{d}," ++ ek_character ++ ":{d}}}}}";
+/// LSP `Location` 对象 `{"uri":"…","range":{…}}`——定义/引用/高亮跳转共用（第 288 轮 D147 收编，
+/// 原先 `locationJson` 内联 raw literal 不随 `k_uri`/`k_range` 联动）。
+const f_location_json = "{{" ++ ek_uri ++ ":{s}," ++ ek_range ++ ":{s}}}";
+/// LSP `DocumentSymbol` 对象——大纲/面包屑消费（第 289 轮 D148 收编，
+/// 原 `documentSymbol` 内联 raw literal 不随 `k_name`/`k_kind`/`k_range`/`k_selectionRange` 联动）。
+const f_document_symbol = "{{" ++ ek_name ++ ":{s}," ++ ek_kind ++ ":{d}," ++ ek_range ++ ":{s}," ++ ek_selectionRange ++ ":{s}}}";
 const f_publish_diagnostics = "{{" ++ ek_jsonrpc ++ ":" ++ ek_v20 ++ "," ++ ek_method ++ ":\"" ++ m_publishDiagnostics ++ "\"," ++ ek_params ++ ":{{" ++ ek_uri ++ ":{s}," ++ ek_diagnostics ++ ":{s}}}}}";
 const f_sem_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
 const f_fast_item = "{{" ++ ek_range ++ ":{s}," ++ ek_severity ++ ":{d}," ++ ek_source ++ ":" ++ eq_prog_name ++ "," ++ ek_message ++ ":{s}}}";
@@ -387,7 +414,9 @@ const f_hover_result = "{{" ++ ek_contents ++ ":{{" ++ ek_kind ++ ":" ++ em_mark
 const f_code_action = "{{" ++ ek_title ++ ":{s}," ++ ek_kind ++ ":\"" ++ v_quickfix ++ "\"," ++ ek_edit ++ ":{{" ++ ek_changes ++ ":{{{s}:[" ++ "{{" ++ ek_range ++ ":{s}," ++ ek_newText ++ ":{s}}}]}}}}}}";
 /// 第 269 轮：批量修复的单条 edit 与整条 `source.fixAll` 动作骨架（changes 内多枚 edit 由调用方拼好）。
 const f_code_action_edit = "{{" ++ ek_range ++ ":{s}," ++ ek_newText ++ ":{s}}}";
-const f_fix_all_action = "{{" ++ ek_title ++ ":{s}," ++ ek_kind ++ ":\"" ++ v_source_fix_all ++ "\"," ++ ek_edit ++ ":{{" ++ ek_changes ++ ":{{{s}:[{s}]}}}}}}";
+/// 第 278 轮：`{s}` 是 itemsJoinAndFree 已带方括号的数组文本——旧模板再套一层 `[]`
+/// 成 `[[{...}]]`，文本断言全绿而真实客户端读 `c.range` 抛错（保存时修复失效）。
+const f_fix_all_action = "{{" ++ ek_title ++ ":{s}," ++ ek_kind ++ ":\"" ++ v_source_fix_all ++ "\"," ++ ek_edit ++ ":{{" ++ ek_changes ++ ":{{{s}:{s}}}}}}}";
 /// 第 270 轮：折叠区间项骨架（LSP `FoldingRange` 只取行号两键；客户端直接读同名属性）。
 const f_fold_item = "{{" ++ ek_startLine ++ ":{d}," ++ ek_endLine ++ ":{d}}}";
 /// 第 271 轮：注释块折叠项——多带一枚 `kind:"comment"`，客户端映射为注释色标。
@@ -409,6 +438,25 @@ const f_signature_help = "{{" ++ ek_signatures ++ ":[{s}]," ++ ek_activeSignatur
 /// 同一链节；叶节无 parent 键）。链由内到外折叠：叶先落，逐层外包成 node。
 const f_selection_leaf = "{{" ++ ek_range ++ ":{s}}}";
 const f_selection_node = "{{" ++ ek_range ++ ":{s}," ++ ek_parent ++ ":{s}}}";
+/// 第 279 轮：补全结果骨架——`{s}` 为 items 已拼好的数组文本，`{s}` 为 "true"/"false"；
+/// 单项 = label/kind/detail 三必键（detail 可为空串），可选 documentation 与 textEdit 由调用方
+/// 追加（点链补全带 textEdit 以替换整条链前缀，避免客户端默认只替换末段词）。
+const f_completion_list = "{{" ++ ek_isIncomplete ++ ":{s}," ++ ek_items ++ ":{s}}}";
+const f_completion_base = "{{" ++ ek_label ++ ":{s}," ++ ek_kind ++ ":{d}," ++ ek_detail ++ ":{s}";
+const f_completion_doc = "," ++ ek_documentation ++ ":{s}";
+const f_completion_text_edit = "," ++ ek_textEdit ++ ":{{" ++ ek_range ++ ":{s}," ++ ek_newText ++ ":{s}}}";
+const f_empty_completion = "{{" ++ ek_isIncomplete ++ ":false," ++ ek_items ++ ":[]}}";
+/// 空表的**已渲染**形：应答体里插的是值而非格式串，直接取 `f_empty_completion` 会把
+/// `{{`/`}}` 原样写进 JSON（真实客户端 parse 即抛）。此处 comptime 渲染一次，仍单源。
+const json_empty_completion = std.fmt.comptimePrint(f_empty_completion, .{});
+/// 补全单次返回的**候选上限**（第 291 轮 D150 收编：原为写侧臂内的裸魔数 200）：超过即截断并置
+/// `isIncomplete:true`——该旗标是告知宿主「表未列全、继续输入须回问」的唯一信号，一侧漂键名或此路
+/// 径整体空转，皆使长前缀补全静默停更。截断测块与本值同骨（测面不得另抄 200）。
+pub const completion_item_limit: usize = 200;
+/// 测面针脚：`isIncomplete:false` 的**已渲染**形（由 `k_isIncomplete` 派生，键漂则针脚随漂）——第 291 轮
+/// D150 收编测内 raw literal，消「hub 改键名 → 测面硬编另说一套」的双源（那时真静默的是 js 读侧）。
+const needle_incomplete_false = "\"" ++ k_isIncomplete ++ "\":false";
+const needle_empty_completion = ek_result ++ ":" ++ json_empty_completion;
 
 /// 消息本体形串骨架（写侧拼接与测内 fixture 共用派生——同 214 `legend_json` 同骨形制：
 /// 键词漂则 fixture 随漂、解析臂随漂，两侧不可能分道）。
@@ -436,6 +484,129 @@ pub const ps1_frame_face = [_]jsonrpc.FaceCheck{
     .{ .needle = ek_method ++ ":\"" ++ m_shutdown ++ "\"", .why = "ps1 关闭请求词须等于 m_shutdown——漂即收到 -32601 而非 null 应答、退出序列退化为强杀" },
     .{ .needle = ek_method ++ ":\"" ++ m_exit ++ "\"", .why = "ps1 退出通知词须等于 m_exit——漂即服务端不置停旗标，只能等管道 EOF 兜底" },
     .{ .needle = "\"languageId\":\"" ++ lang_id.language_id ++ "\"", .why = "ps1 didOpen 语言标识须等于 lang_identity.language_id——漂即服务端按 id 分派文档不入表（D83 语言标识族 ps1 漏员）" },
+};
+
+/// —— D139 长连接冒烟脚本内嵌的 LSP 帧词族与 capability 断言族（第 281 轮）：
+/// `tools/lsp-live-smoke.sh` 以 FIFO 保持写端常开，逐帧向 `zzc lsp` 发起十八个方法并轮询应答，
+/// 又把 initialize 应答的十三枚 capability 形串逐枚 `grep -Fq` 断言——这是协议词汇的第四处手抄
+/// （前三处：server.zig 写侧单源、`extension.js` 客户端面〔对面十一／十二／十三〕、ps1 内嵌帧〔对面二十二〕）。
+/// 该脚本本身是运行时防线（本地四绿与 CI 第 4) 步皆真跑），但它不在 `zig build test` 门内、也不是
+/// 测图 source dependency：第 281 轮 t2 探针 P1 实锤——**删掉 completion 的 capability 断言一行**，
+/// `zig build test` 17/17 全绿且 `sh tools/lsp-live-smoke.sh` 仍 PASS（少一条断言不会失败），
+/// 覆盖静默消失而构建链与 e2e 双双零信号（D94/D113「空转防线」同族）。本二 face 的 needle 值段全由
+/// `m_*`／`jsonrpc.version_value`／`lang_identity.language_id`／`cap_*` 单源 comptime 派生，交守卫
+/// 对面二十三对脚本实文逐枚对账：断言被删／被改松／服务端改词，皆在 `zig build test` 门内即红。
+/// 边界（如实登册）：`cap_sync_obj`（textDocumentSync 对象形）脚本从不断言、`cap_server_info` 亦无，
+/// 故不入本面针（同 ps1 `cap_face` 对 serverInfo 的处置）。
+pub const smoke_frame_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = ek_jsonrpc ++ ":" ++ ek_v20, .why = "冒烟脚本每帧携的协议版本值须等于 jsonrpc.version_value——漂即服务端按版本判据拒帧，整条 e2e 恒时无应答（D108 版本族形）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_initialize ++ "\"", .why = "握手发起词须等于 m_initialize——漂即 -32601 零应答，脚本首步即 fail（断言被删则覆盖静默消失·P1 形）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_initialized ++ "\"", .why = "初始化完毕通知词须等于 m_initialized——通知形无应答，漂即服务端静默丢弃而脚本仍绿" },
+    .{ .needle = ek_method ++ ":\"" ++ m_didOpen ++ "\"", .why = "文档打开同步词须等于 m_didOpen——漂即文档不入表，诊断/悬停/补全断言全塌" },
+    .{ .needle = ek_method ++ ":\"" ++ m_hover ++ "\"", .why = "悬停请求词须等于 m_hover——漂即脚本 hover 步拿不到应答，overlay 断言失联" },
+    .{ .needle = ek_method ++ ":\"" ++ m_documentSymbol ++ "\"", .why = "大纲请求词须等于 m_documentSymbol——漂即「主函数/标准库」两枚名字断言失保" },
+    .{ .needle = ek_method ++ ":\"" ++ m_definition ++ "\"", .why = "跳转请求词须等于 m_definition——漂即声明定位断言（行0字符3）失联" },
+    .{ .needle = ek_method ++ ":\"" ++ m_references ++ "\"", .why = "引用请求词须等于 m_references——漂即声明＋引用两处断言失保" },
+    .{ .needle = ek_method ++ ":\"" ++ m_codeAction ++ "\"", .why = "快速修复请求词须等于 m_codeAction——漂即 quickfix 与 source.fixAll 两步断言全塌" },
+    .{ .needle = ek_method ++ ":\"" ++ m_foldingRange ++ "\"", .why = "折叠请求词须等于 m_foldingRange——漂即折叠区形串断言失联" },
+    .{ .needle = ek_method ++ ":\"" ++ m_rename ++ "\"", .why = "改名请求词须等于 m_rename——漂即声明＋引用两处编辑断言失保" },
+    .{ .needle = ek_method ++ ":\"" ++ m_documentHighlight ++ "\"", .why = "同名高亮请求词须等于 m_documentHighlight——漂即 Write/Read 码值断言失联" },
+    .{ .needle = ek_method ++ ":\"" ++ m_prepareRename ++ "\"", .why = "改名预检词须等于 m_prepareRename——漂即占位符形与 null 两断言失保（F2 死框回归无信号）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_workspaceSymbol ++ "\"", .why = "工作区符号词须等于 m_workspaceSymbol——漂即 query 过滤与空数组两断言失联" },
+    .{ .needle = ek_method ++ ":\"" ++ m_signatureHelp ++ "\"", .why = "参数提示词须等于 m_signatureHelp——漂即活动参数随逗号递增的两枚关键断言失保（字符串内逗号误计回归无信号）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_selectionRange ++ "\"", .why = "智能扩选词须等于 m_selectionRange——漂即 词元→整行→块→整文档 嵌套链断言失联" },
+    .{ .needle = ek_method ++ ":\"" ++ m_completion ++ "\"", .why = "上下文补全词须等于 m_completion——漂即点链 textEdit／本文件声明候选／空表三形断言全塌（第 279 轮接入面）" },
+    .{ .needle = ek_method ++ ":\"" ++ m_shutdown ++ "\"", .why = "关闭请求词须等于 m_shutdown——漂即退出序列退化为强杀，脚本 rc 仍可能为 0" },
+    .{ .needle = ek_method ++ ":\"" ++ m_exit ++ "\"", .why = "退出通知词须等于 m_exit——漂即服务端不置停旗标，仅靠管道 EOF 兜底（收尾断言失保）" },
+    .{ .needle = "\"languageId\":\"" ++ lang_id.language_id ++ "\"", .why = "didOpen 的语言标识须等于 lang_identity.language_id——漂即服务端按 id 分派拒收文档，全链静默空（D83 面）" },
+};
+
+/// 冒烟脚本对 initialize 应答逐枚 `grep -Fq` 的 capability 形串十三枚（值段全取 `cap_*` 单源）。
+/// 断言删一行即少一枚针——守卫对面二十三当场红（P1 静默面转锚）。
+pub const smoke_cap_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = cap_hover, .why = "脚本须断言 hoverProvider 形串在应答里——漂即能力协商与声明分道而无人核验（悬停能力静默消失）" },
+    .{ .needle = cap_semtok_key, .why = "脚本须断言 semanticTokensProvider 键在——漂即母语高亮供给能力无人核验" },
+    .{ .needle = cap_docsym, .why = "脚本须断言 documentSymbolProvider 在——漂即大纲能力静默消失" },
+    .{ .needle = cap_def, .why = "脚本须断言 definitionProvider 在——漂即跳转能力静默消失" },
+    .{ .needle = cap_refs, .why = "脚本须断言 referencesProvider 在——漂即引用能力静默消失" },
+    .{ .needle = cap_document_highlight, .why = "脚本须断言 documentHighlightProvider 在——漂即同名高亮能力静默消失" },
+    .{ .needle = cap_codeaction, .why = "脚本须断言 codeActionProvider 在——漂即一键修复能力静默消失" },
+    .{ .needle = cap_folding, .why = "脚本须断言 foldingRangeProvider 在——漂即折叠能力静默消失" },
+    .{ .needle = cap_rename, .why = "脚本须断言 renameProvider{prepareProvider:true} 嵌套形在——漂即预检协商形退化而 F2 死框回归无信号" },
+    .{ .needle = cap_workspace_symbol, .why = "脚本须断言 workspaceSymbolProvider 在——漂即工作区符号能力静默消失" },
+    .{ .needle = cap_signature_help, .why = "脚本须断言 signatureHelpProvider 触发字符 `[\"(\",\",\"]` 形在——漂即参数提示触发面分道" },
+    .{ .needle = cap_selection_range, .why = "脚本须断言 selectionRangeProvider 在——漂即智能扩选能力静默消失" },
+    .{ .needle = cap_completion, .why = "脚本须断言 completionProvider 触发字符 `[\".\"]` 形在——漂即上下文补全能力静默消失（第 279 轮接入面·P1 实锤删此行零信号）" },
+};
+
+/// 从 capability 形串常量里取**键名段**（首个双引号对之间的字串）：`"hoverProvider":true` → `hoverProvider`。
+/// 无形可抽（无引号对）时原样返回——派生针随即在对面落空，宁红不假绿。
+fn capKeyOf(comptime lit: []const u8) []const u8 {
+    var i: usize = 0;
+    while (i < lit.len and lit[i] != '"') : (i += 1) {}
+    var j = i + 1;
+    while (j < lit.len and lit[j] != '"') : (j += 1) {}
+    if (i >= lit.len or j >= lit.len) return lit;
+    return lit[i + 1 .. j];
+}
+
+/// —— D141 客户端 e2e 冒烟里的 capability 键名族（第 282 轮）：`tools/extension-smoke.js` 以
+/// `for (const cap of ['hoverProvider', 'completionProvider', …]) ok(log.includes('"' + cap + '"'), …)`
+/// 逐枚核验 initialize 握手日志里的 provider 键——这是 capability **键名**的又一处手抄（形串面已收
+/// 对面二十/二十三，键名段此前无锚）。服务端增/改/删 provider 时，js 侧只会「少验一枚而仍绿」，
+/// 从不红：第 282 轮探针实锤把 `'hoverProvider'` 从数组删掉，`node tools/extension-smoke.js` 照旧
+/// `PASS` 退 0（基数锚补齐前）。本面 needle 的键段全由 `cap_*` 单源 comptime 抽取（`capKeyOf`），
+/// 一侧漂形即分道转锚（守卫对面二十四，与 D140 条数锚同片实文、零新增 I/O）。
+/// 边界（如实登册）：`cap_sync_obj`／`cap_server_info` 脚本从不断言（同对面二十三的处置），不入本面。
+pub const smoke_js_cap_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_hover)}), .why = "脚本须核验 hoverProvider 键在握手日志里——键段与写侧 cap_hover 分道即少验一枚能力而仍绿（探针实锤形）" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_completion)}), .why = "脚本须核验 completionProvider 键在——漂即上下文补全能力协商无人核验（第 279 轮接入面）" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_selection_range)}), .why = "脚本须核验 selectionRangeProvider 键在——漂即智能扩选能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_signature_help)}), .why = "脚本须核验 signatureHelpProvider 键在——漂即参数提示能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_workspace_symbol)}), .why = "脚本须核验 workspaceSymbolProvider 键在——漂即工作区符号能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_docsym)}), .why = "脚本须核验 documentSymbolProvider 键在——漂即大纲能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_def)}), .why = "脚本须核验 definitionProvider 键在——漂即跳转能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_refs)}), .why = "脚本须核验 referencesProvider 键在——漂即引用能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_document_highlight)}), .why = "脚本须核验 documentHighlightProvider 键在——漂即同名高亮能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_codeaction)}), .why = "脚本须核验 codeActionProvider 键在——漂即一键修复能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_folding)}), .why = "脚本须核验 foldingRangeProvider 键在——漂即折叠能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_rename)}), .why = "脚本须核验 renameProvider 键在——漂即重命名（含 prepareProvider 嵌套形）能力无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyOf(cap_semtok_key)}), .why = "脚本须核验 semanticTokensProvider 键在——漂即母语高亮能力无人核验" },
+};
+
+/// 客户端 provider 短名抽取（第 285 轮 D144）：`extension-smoke.js` 逐枚断言 `!!state.providers[name]`，
+/// 而 `state.providers` 的键名即 capability 键名剥掉 `Provider` 尾段的形（hover↔hoverProvider）——
+/// 故短名不另抄，由同一批 `cap_*` 真值再派生一层。无尾段可剥时原样返回（派生针必落空，继宁红不假绿）。
+fn capKeyShort(comptime lit: []const u8) []const u8 {
+    const key = capKeyOf(lit);
+    const suffix = "Provider";
+    if (key.len > suffix.len and std.mem.endsWith(u8, key, suffix)) return key[0 .. key.len - suffix.len];
+    return key;
+}
+
+/// —— D144 客户端 e2e 的 provider 注册核验名集（第 285 轮）：js 以
+/// `for (const name of ['hover', 'completion', …]) ok(!!P[name], '已注册 provider：' + name)` 逐枚验客户端注册，
+/// 这十三枚短名是 capability 键名的**第二套词汇**（上一面钉的是 `'hoverProvider'` 形串，本面钉 `'hover'` 形），
+/// 旧无锚。两路探针实锤的静默形：P1 把 'completion' 换成重复的 'hover' → 条数 89 不变、`node` 退 0 且
+/// `zig build test` 全绿（注册断言静默掉一枚）；P2 把判据去下标 `!!P[name]`→`!!P` → 十三枚注册断言全空转而
+/// 仍逐枚打 `[ok] 已注册 provider：…`（D142 的恒真闸只盯 `ok(true,` 形，此形字面上不是恒真）。
+/// 本面因此含三族针：十三枚名针（同 282 形制逐字节）＋循环头形针＋判据体形针。
+pub const smoke_js_provider_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_hover)}), .why = "脚本须断言客户端 hover provider 已注册——短名与写侧 cap_hover 分道即少验一枚注册而仍绿（探针 P1 形）" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_completion)}), .why = "脚本须断言 completion provider 已注册——探针 P1 正是拿本枚做替换实锤的：名集被重复项顶替时，条数与 PASS 行一字不变而注册覆盖面归零" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_signature_help)}), .why = "脚本须断言 signatureHelp provider 已注册——漂即参数提示的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_selection_range)}), .why = "脚本须断言 selectionRange provider 已注册——漂即智能扩选的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_docsym)}), .why = "脚本须断言 documentSymbol provider 已注册——漂即大纲的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_workspace_symbol)}), .why = "脚本须断言 workspaceSymbol provider 已注册——漂即工作区符号的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_def)}), .why = "脚本须断言 definition provider 已注册——漂即跳转定义的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_refs)}), .why = "脚本须断言 references provider 已注册——漂即查找引用的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_document_highlight)}), .why = "脚本须断言 documentHighlight provider 已注册——漂即同名高亮的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_codeaction)}), .why = "脚本须断言 codeAction provider 已注册——漂即快速修复的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_folding)}), .why = "脚本须断言 foldingRange provider 已注册——漂即代码折叠的客户端接线无人核验" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_rename)}), .why = "脚本须断言 rename provider 已注册——漂即重命名的客户端接线无人核验（本枚的派生还顺带钉住「剥尾段只剥一次」：renameProvider 含 prepareProvider 嵌套形而键段仅一尾）" },
+    .{ .needle = std.fmt.comptimePrint("'{s}'", .{capKeyShort(cap_semtok_key)}), .why = "脚本须断言 semanticTokens provider 已注册——漂即母语高亮的客户端接线无人核验" },
+    .{ .needle = "for (const name of [", .why = "十三枚注册断言须由本循环头生成——改成逐项硬编或删循环即名集与条数脱钩（第 285 轮 D144）" },
+    .{ .needle = "ok(!!P[name], ", .why = "注册断言的判据体须含**循环变量下标** `P[name]`——探针 P2 实锤把判据改成 `!!P`（对象整体恒真）后，十三条注册断言全空转而仍逐枚打 `[ok]` 并 PASS 退 0；D142 的恒真闸只识别 `ok(true,` 形，此形靠本针拦（第 285 轮 D144）" },
 };
 
 /// 对面·`extension.js` 消息本体键族 needle 清单（守卫对面十二——同 218 `methods_face` 形制，
@@ -479,6 +650,28 @@ pub const results_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "s." ++ k_location ++ "." ++ k_uri ++ "), new vscode.Range(s." ++ k_location ++ "." ++ k_range ++ "." ++ k_start ++ ".line", .why = "工作区符号的 location.uri/range 读侧须等于写侧 f_workspace_symbol 字段——漂即 SymbolInformation 落错文件/错行" },
     .{ .needle = "new vscode.SelectionRange(", .why = "扩选区链节重建须用 vscode.SelectionRange——漂即客户端丢弃整条链、扩选不生效" },
     .{ .needle = "r." ++ k_parent ++ " ? toSelectionRange(r." ++ k_parent ++ ") : undefined", .why = "扩选区 parent 递归读侧须等于写侧 f_selection_node 键——漂即只扩到第一层，包围块/整文档永不入选" },
+    .{ .needle = "!Array.isArray(res." ++ k_items ++ ")", .why = "补全结果 items 数组守门读须等于写侧键——漂即每次补全恒 null，候选表静默全空（客户端已注册 provider、能力已协商，唯读侧分道不可见）" },
+    .{ .needle = "item." ++ k_textEdit ++ " = new vscode.TextEdit(", .why = "点链候选的 textEdit 重建须等于写侧键——漂即 VS Code 只替换光标下末段词，`标准库.调` 插成 `标准库.标准库.调试.打印`（补全结果错字而非空，最劣形）" },
+    .{ .needle = "new vscode.CodeAction(item." ++ k_title ++ ",", .why = "快速修复动作标题读侧键须等于写侧 `k_title`——漂即菜单条目显示 undefined、用户无法辨别操作意图；探针 P1 实锤 item.title→item.titl 时 check-machine-matcher=OK 且 extension-smoke=PASS（双静默·第 287 轮 D146）" },
+    .{ .needle = "vscode.Uri.parse(loc." ++ k_uri ++ ")", .why = "定义/引用 Location 构造的 uri 读侧属性须等于写侧 `f_location_json` 输出键——漂即跳转落点为 undefined、'Go to Definition' 打开不存在标签页；探针 P1 实锤 loc.uri→loc.ur 时 check-machine-matcher=OK 且 extension-smoke=PASS 且 zig build test 全绿（三静默·第 288 轮 D147）" },
+    .{ .needle = "s." ++ k_selectionRange ++ " ||", .why = "大纲 selectionRange 读侧属性须等于写侧 `f_document_symbol` 输出键——漂即 js 回退 `|| r`（整声明范围）导致大纲点击高亮整行而非仅名称，UX 静默降级；探针 P1 实锤 s.selectionRange→s.selectionRang 时三门禁全绿（双静默·第 289 轮 D148）" },
+    .{ .needle = std.fmt.comptimePrint("function toVscodeKind(k) {{ return Math.max(k - {d}, 0); }}", .{lsp_kind_base}), .why = "kind 换算的减数须等于 LSP 枚举基址真值——抄成 0/+1 即图标整体错位一格，探针 P1 实锤 s.kind→s.kind + 5 时守卫与 e2e 皆一字不变（双静默·第 290 轮 D149）" },
+    .{ .needle = std.fmt.comptimePrint("toVscodeKind(c.kind || {d})", .{lsp_kind_base}), .why = "补全项构造器须吃换算后的 vscode 码——回退直传即 LSP 3(Function) 落进 vscode 3(Constructor)；探针 P2 实锤旧断言 `eq(decl.kind, 3)` 把本换算判为红（反向假锚·第 290 轮 D149）" },
+    .{ .needle = "toVscodeSymbolKind(s.kind)", .occ = 2, .why = "大纲与工作区符号两处 kind 读面皆须走换算（同形两处手抄，presence 只核首现故以计数下界逐枚对账）——漏一处即那一族图标错位（第 290 轮 D149）" },
+    .{ .needle = "!!res." ++ k_isIncomplete, .why = "客户端读补全完整性旗标须经 hub 键 `k_isIncomplete`（js 写 `!!res.isIncomplete`）——旗标只在候选超上限截断时为 true，而 e2e 固定文档永不触发截断，旧形 `!!res.isIncomplet` 读 undefined 落 false 恰与被测期望全等 → 探针 P1 实锤守卫与 e2e 皆一字不变（双静默·第 291 轮 D150）" },
+};
+
+/// 对面·`tools/extension-smoke.js` 的 kind 值域断言面（守卫对面二十七——同 `smoke_js_provider_face`
+/// 形制，判据入 hub、守卫视只读 I/O，复用已读的 esm 实文零新增 I/O）。本面钉住「枚举空间换算」
+/// 的三件事：宿主枚举的 0 基数值（由 hub `sk_*`/`ck_*` 减基址派生，不再靠注释自证）、三处 provider
+/// 断言的落点形（symbolic 形而非写侧同照形）——第 290 轮 D149 探针 P2 实锤旧断言 `eq(decl.kind, 3)`
+/// 以 LSP 数自照并把正确换算判为失败，属「断言把 bug 当预期钉住」的反向假锚形。
+pub const kinds_smoke_face = [_]jsonrpc.FaceCheck{
+    .{ .needle = std.fmt.comptimePrint("eq(vscode.SymbolKind.Function, {d}", .{sk_function - lsp_kind_base}), .why = "脚本须核验宿主 SymbolKind 为 0 基（Function=" ++ std.fmt.comptimePrint("{d}", .{sk_function - lsp_kind_base}) ++ "）——桩枚举漂回 1 基即换算断言全成自照，本针把 LSP↔vscode 差锁到 hub" },
+    .{ .needle = std.fmt.comptimePrint("eq(vscode.CompletionItemKind.Function, {d}", .{ck_function - lsp_kind_base}), .why = "脚本须核验宿主 CompletionItemKind 为 0 基（Function=" ++ std.fmt.comptimePrint("{d}", .{ck_function - lsp_kind_base}) ++ "）——同上，本针是补全图标不错位的数值地基" },
+    .{ .needle = "eq(sym.kind, vscode.SymbolKind.Function", .why = "大纲断言须吃宿主枚举形而非写侧原数——写侧数自照正是 D149 的静默面，改回 `eq(sym.kind, 12)` 即断言与换算分道" },
+    .{ .needle = "eq(decl.kind, vscode.CompletionItemKind.Function", .why = "补全断言须吃宿主枚举形——旧形 `eq(decl.kind, 3)` 把 LSP 数当 vscode Function 期望，钉住了 bug 本身（探针 P2 实锤）" },
+    .{ .needle = "eq(ws.kind, vscode.SymbolKind.Function", .why = "工作区符号断言须吃宿主枚举形——此前 kind 在工作区面完全无断言，漂即 SymbolInformation 图标错位而 e2e 零信号" },
 };
 
 /// 对面·`extension.js` severity 码值映射面 needle 清单（守卫对面十四——同 `results_face`
@@ -606,7 +799,7 @@ fn locationJson(gpa: std.mem.Allocator, text: []const u8, uri: []const u8, start
     defer gpa.free(range);
     const uri_js = try jsonrpc.jsonString(gpa, uri);
     defer gpa.free(uri_js);
-    return std.fmt.allocPrint(gpa, "{{\"uri\":{s},\"range\":{s}}}", .{ uri_js, range });
+    return std.fmt.allocPrint(gpa, f_location_json, .{ uri_js, range });
 }
 
 // ---------------------------------------------------------------------------
@@ -624,12 +817,12 @@ const Decl = struct {
 /// 声明词 → LSP SymbolKind；词表取当前语言包 keywords（不硬编码方言词）。
 fn declKind(lang: *const Pack, word: []const u8) ?u32 {
     const zig = lang.keywords.get(word) orelse return null;
-    if (std.mem.eql(u8, zig, "fn")) return 12;
-    if (std.mem.eql(u8, zig, "struct")) return 23;
-    if (std.mem.eql(u8, zig, "enum")) return 10;
-    if (std.mem.eql(u8, zig, "union")) return 23;
-    if (std.mem.eql(u8, zig, "const")) return 14;
-    if (std.mem.eql(u8, zig, "var")) return 13;
+    if (std.mem.eql(u8, zig, "fn")) return sk_function;
+    if (std.mem.eql(u8, zig, "struct")) return sk_struct;
+    if (std.mem.eql(u8, zig, "enum")) return sk_enum;
+    if (std.mem.eql(u8, zig, "union")) return sk_struct;
+    if (std.mem.eql(u8, zig, "const")) return sk_constant;
+    if (std.mem.eql(u8, zig, "var")) return sk_variable;
     return null;
 }
 
@@ -822,6 +1015,90 @@ fn findTopLevelDecl(lang: *const Pack, toks: []const lexer.Token, text: []const 
     return null;
 }
 
+/// —— LSP 枚举基址（第 290 轮 D149）：LSP 的 `CompletionItemKind`／`SymbolKind` 以 **1** 起编
+/// （Text/File = 1），而 vscode 同名枚举以 **0** 起编（vscode.d.ts：CompletionItemKind.Function=2、
+/// SymbolKind.Function=11）——两侧数值差即此基址，客户端把 LSP 码直传 `new vscode.*(..., kind)`
+/// 就整体错位一格（函数图标成构造器/变量、常量成字符串、关键字成片段）。同文件的 severity
+/// （`sev()` 1↔Error）与 DocumentHighlightKind（3↔Write）早已各自做此换算，kind 族漏网。
+pub const lsp_kind_base: u32 = 1;
+
+/// —— 大纲/工作区符号的 LSP `SymbolKind` 码值（Function=12／Variable=13／Constant=14／
+/// Enum=10／Struct=23，union 同归 Struct）：由 `declKind` 写侧、`completionKindForSymbol` 二次
+/// 映射、客户端换算断言三处共此一份（第 290 轮 D149 收编，此前 declKind 与 switch 各拄一把 magic number）。
+pub const sk_enum: u32 = 10;
+pub const sk_function: u32 = 12;
+pub const sk_variable: u32 = 13;
+pub const sk_constant: u32 = 14;
+pub const sk_struct: u32 = 23;
+
+/// —— 上下文补全（第 279 轮）：LSP `CompletionItemKind` 码值（3 Function／6 Variable／
+/// 7 Class／9 Module／13 Enum／14 Keyword／21 Constant／22 Struct）。码值为协议标准真值；
+/// 客户端不得直传构造器，须减 `lsp_kind_base` 换到 vscode 0 基枚举空间（第 290 轮 D149）。
+pub const ck_function: u32 = 3;
+pub const ck_variable: u32 = 6;
+pub const ck_class: u32 = 7;
+pub const ck_module: u32 = 9;
+pub const ck_enum: u32 = 13;
+pub const ck_keyword: u32 = 14;
+pub const ck_constant: u32 = 21;
+pub const ck_struct: u32 = 22;
+
+/// 光标处已输入链（可含 `.`）：start 为链首字节偏移，chain 为 text[start..off]。
+const ChainPrefix = struct { start: usize, chain: []const u8 };
+
+/// 从光标向前取“词/点链”前缀；光标落在标点/空白后时返 null（不弹空补全）。
+fn chainPrefixAt(text: []const u8, off: usize) ?ChainPrefix {
+    var s = off;
+    while (s > 0) {
+        const c = text[s - 1];
+        const ok = c == '.' or c == '_' or (c >= '0' and c <= '9') or
+            (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c >= 0x80;
+        if (!ok) break;
+        s -= 1;
+    }
+    if (s == off) return null;
+    return .{ .start = s, .chain = text[s..off] };
+}
+
+/// 一条补全候选（label/detail/doc 借用语言包或文档文本，不拥有内存）。
+const CompletionHit = struct {
+    label: []const u8,
+    kind: u32,
+    detail: []const u8,
+    doc: ?[]const u8 = null,
+    /// 点链候选：需要替换的链首字节偏移（null → 客户端按默认词范围插入）。
+    edit_start: ?usize = null,
+    /// 排序档：0 本文件声明 > 1 关键字/类型 > 2 标准库。
+    rank: u8,
+};
+
+fn completionHitLess(_: void, a: CompletionHit, b: CompletionHit) bool {
+    if (a.rank != b.rank) return a.rank < b.rank;
+    return std.mem.lessThan(u8, a.label, b.label);
+}
+
+/// 词类分组（snippets.classify 六值）→ CompletionItemKind。
+fn completionKindForGroup(group: []const u8) u32 {
+    if (std.mem.eql(u8, group, snippets.g_builtin)) return ck_function;
+    if (std.mem.eql(u8, group, snippets.g_type)) return ck_class;
+    if (std.mem.eql(u8, group, snippets.g_constant)) return ck_constant;
+    if (std.mem.eql(u8, group, snippets.g_keyword)) return ck_keyword;
+    if (std.mem.eql(u8, group, snippets.g_alias)) return ck_module;
+    return ck_variable;
+}
+
+/// LSP SymbolKind（Decl.kind）→ CompletionItemKind。
+fn completionKindForSymbol(kind: u32) u32 {
+    return switch (kind) {
+        sk_function => ck_function,
+        sk_struct => ck_struct,
+        sk_enum => ck_enum,
+        sk_constant => ck_constant,
+        sk_variable => ck_variable,
+        else => ck_variable,
+    };
+}
+
 /// 顶层声明项（第 275 轮从 collectSymbolsJson 抽出）：带整行范围，供大纲与工作区符号共用。
 const TopDecl = struct {
     kind: u32,
@@ -973,7 +1250,7 @@ fn collectSymbolsJson(gpa: std.mem.Allocator, lang: *const Pack, text: []const u
         defer gpa.free(range);
         const sel = try rangeJson(gpa, text, d.name_start, d.name_end);
         defer gpa.free(sel);
-        const item = try std.fmt.allocPrint(gpa, "{{\"name\":{s},\"kind\":{d},\"range\":{s},\"selectionRange\":{s}}}", .{ name_js, d.kind, range, sel });
+        const item = try std.fmt.allocPrint(gpa, f_document_symbol, .{ name_js, d.kind, range, sel });
         defer gpa.free(item);
         try buf.appendSlice(gpa, item);
     }
@@ -1179,7 +1456,7 @@ pub const Server = struct {
             // didSave 时服务端用自持文档表文本），据以让客户端知晓可发 textDocument/didSave。
             // semanticTokensProvider（第 161 轮）：声明语义 token 图例（token 类型索引即下表顺序）+ full 供给，
             // 把方言母语词汇的语义高亮据 LSP 标准面供任意客户端（编辑端渲染留 162）。
-            const res = "{\"capabilities\":{" ++ cap_sync_obj ++ "," ++ cap_hover ++ "," ++ cap_semtok ++ "," ++ cap_docsym ++ "," ++ cap_def ++ "," ++ cap_refs ++ "," ++ cap_document_highlight ++ "," ++ cap_codeaction ++ "," ++ cap_folding ++ "," ++ cap_rename ++ "," ++ cap_workspace_symbol ++ "," ++ cap_signature_help ++ "," ++ cap_selection_range ++ "}," ++ cap_server_info ++ "}";
+            const res = "{\"capabilities\":{" ++ cap_sync_obj ++ "," ++ cap_hover ++ "," ++ cap_semtok ++ "," ++ cap_docsym ++ "," ++ cap_def ++ "," ++ cap_refs ++ "," ++ cap_document_highlight ++ "," ++ cap_codeaction ++ "," ++ cap_folding ++ "," ++ cap_rename ++ "," ++ cap_workspace_symbol ++ "," ++ cap_signature_help ++ "," ++ cap_selection_range ++ "," ++ cap_completion ++ "}," ++ cap_server_info ++ "}";
             try self.respond(out, idv, res);
             return;
         }
@@ -1242,6 +1519,10 @@ pub const Server = struct {
         }
         if (std.mem.eql(u8, method, m_hover)) {
             try self.hover(out, idv, params_obj);
+            return;
+        }
+        if (std.mem.eql(u8, method, m_completion)) {
+            try self.completion(out, idv, params_obj);
             return;
         }
         if (std.mem.eql(u8, method, m_documentSymbol)) {
@@ -1438,6 +1719,165 @@ pub const Server = struct {
             }
         }
         try self.respond(out, idv, result_json orelse "[]");
+    }
+
+    /// `textDocument/completion`（第 279 轮）：按光标前缀给出四源候选——语言包
+    /// keywords（关键字/类型/字面常量/内建）、不含点的 aliases 根、aliases 点链（前缀含 `.`
+    /// 时只补链）、当前文档顶层声明。字符串/注释/符号字面量内、空前缀、未打开文档 → 空表。
+    /// 点链候选项带 `textEdit` 替换整条已输入链前缀（VS Code 默认只替换末段词）。
+    fn completion(self: *Server, out: *OutList, idv: ?std.json.Value, params_obj: ?std.json.ObjectMap) !void {
+        const gpa = self.gpa;
+        var result_json: ?[]const u8 = null;
+        defer if (result_json) |r| gpa.free(r);
+        if (params_obj) |p| {
+            if (objIn(p.get(k_textDocument))) |td| {
+                if (strField(td, k_uri)) |uri| {
+                    if (self.docs.get(uri)) |text| {
+                        if (objIn(p.get(k_position))) |pos| {
+                            const line = intField(pos, k_line) orelse -1;
+                            const character = intField(pos, k_character) orelse -1;
+                            if (line >= 0 and character >= 0) {
+                                if (byteOfPosition(text, @intCast(line), @intCast(character))) |off| {
+                                    result_json = try self.completionAt(text, off);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        try self.respond(out, idv, result_json orelse json_empty_completion);
+    }
+
+    fn emptyCompletion(self: *Server) ![]const u8 {
+        return self.gpa.dupe(u8, json_empty_completion);
+    }
+
+    /// 光标前缀（含点链）→ 候选集；空/字面量内/无前缀时返回空表（调用方 free）。
+    fn completionAt(self: *Server, text: []const u8, off: usize) ![]const u8 {
+        const gpa = self.gpa;
+        const toks = lexer.scan(gpa, text) catch return self.emptyCompletion();
+        defer gpa.free(toks);
+        for (toks) |t| {
+            const inside = t.off <= off and off <= t.off + t.len;
+            if (!inside) continue;
+            switch (t.kind) {
+                .string, .char, .multiline, .comment, .symbol => return self.emptyCompletion(),
+                else => {},
+            }
+        }
+        const pre = chainPrefixAt(text, off) orelse return self.emptyCompletion();
+        var hits: std.ArrayList(CompletionHit) = .empty;
+        defer hits.deinit(gpa);
+        try self.collectCompletionHits(text, pre, &hits);
+        if (hits.items.len == 0) return self.emptyCompletion();
+        std.mem.sort(CompletionHit, hits.items, {}, completionHitLess);
+
+        const limit: usize = completion_item_limit;
+        const incomplete = hits.items.len > limit;
+        const n = @min(hits.items.len, limit);
+        var items: std.ArrayList([]const u8) = .empty;
+        defer {
+            for (items.items) |s| gpa.free(s);
+            items.deinit(gpa);
+        }
+        var last: ?[]const u8 = null;
+        for (hits.items[0..n]) |h| {
+            if (last) |prev| {
+                if (std.mem.eql(u8, prev, h.label)) continue;
+            }
+            last = h.label;
+            try items.append(gpa, try self.completionItemJson(text, pre, h));
+        }
+        const joined = try itemsJoinAndFree(gpa, &items);
+        defer gpa.free(joined);
+        return std.fmt.allocPrint(gpa, f_completion_list, .{ if (incomplete) "true" else "false", joined });
+    }
+
+    fn collectCompletionHits(self: *Server, text: []const u8, pre: ChainPrefix, hits: *std.ArrayList(CompletionHit)) !void {
+        const gpa = self.gpa;
+        const chain = pre.chain;
+        if (std.mem.indexOfScalar(u8, chain, '.') != null) {
+            var it = self.lang.aliases.iterator();
+            while (it.next()) |e| {
+                const key = e.key_ptr.*;
+                if (!std.mem.startsWith(u8, key, chain)) continue;
+                try hits.append(gpa, .{
+                    .label = key,
+                    .kind = ck_module,
+                    .detail = e.value_ptr.*,
+                    .doc = self.lang.docs.get(key),
+                    .edit_start = pre.start,
+                    .rank = 2,
+                });
+            }
+            return;
+        }
+        var it = self.lang.keywords.iterator();
+        while (it.next()) |e| {
+            const key = e.key_ptr.*;
+            if (!std.mem.startsWith(u8, key, chain)) continue;
+            try hits.append(gpa, .{
+                .label = key,
+                .kind = completionKindForGroup(snippets.classify(e.value_ptr.*)),
+                .detail = e.value_ptr.*,
+                .doc = self.lang.docs.get(key),
+                .rank = 1,
+            });
+        }
+        var it2 = self.lang.aliases.iterator();
+        while (it2.next()) |e| {
+            const key = e.key_ptr.*;
+            if (std.mem.indexOfScalar(u8, key, '.') != null) continue;
+            if (!std.mem.startsWith(u8, key, chain)) continue;
+            try hits.append(gpa, .{
+                .label = key,
+                .kind = ck_module,
+                .detail = e.value_ptr.*,
+                .doc = self.lang.docs.get(key),
+                .rank = 2,
+            });
+        }
+        const decls = try scanTopLevelDecls(gpa, self.lang, text);
+        defer gpa.free(decls);
+        for (decls) |d| {
+            if (!std.mem.startsWith(u8, d.name, chain)) continue;
+            try hits.append(gpa, .{
+                .label = d.name,
+                .kind = completionKindForSymbol(d.kind),
+                .detail = "本文件声明",
+                .rank = 0,
+            });
+        }
+    }
+
+    fn completionItemJson(self: *Server, text: []const u8, pre: ChainPrefix, h: CompletionHit) ![]const u8 {
+        const gpa = self.gpa;
+        const label_js = try jsonrpc.jsonString(gpa, h.label);
+        defer gpa.free(label_js);
+        const detail_js = try jsonrpc.jsonString(gpa, h.detail);
+        defer gpa.free(detail_js);
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(gpa);
+        const base = try std.fmt.allocPrint(gpa, f_completion_base, .{ label_js, h.kind, detail_js });
+        defer gpa.free(base);
+        try buf.appendSlice(gpa, base);
+        if (h.doc) |doc| {
+            const doc_js = try jsonrpc.jsonString(gpa, doc);
+            defer gpa.free(doc_js);
+            const seg = try std.fmt.allocPrint(gpa, f_completion_doc, .{doc_js});
+            defer gpa.free(seg);
+            try buf.appendSlice(gpa, seg);
+        }
+        if (h.edit_start) |start| {
+            const range = try rangeJson(gpa, text, start, pre.start + pre.chain.len);
+            defer gpa.free(range);
+            const seg = try std.fmt.allocPrint(gpa, f_completion_text_edit, .{ range, label_js });
+            defer gpa.free(seg);
+            try buf.appendSlice(gpa, seg);
+        }
+        try buf.append(gpa, '}');
+        return buf.toOwnedSlice(gpa);
     }
 
     /// 工作区符号（第 275 轮）：按 `query` 子串过滤服务端文档表内各文档的顶层声明，
@@ -2352,6 +2792,8 @@ test "lsp.server：initialize 应答含 hover/全量同步能力并回显 id（�
     try testing.expect(std.mem.indexOf(u8, out.items[0], cap_signature_help) != null);
     // 第 277 轮：新增智能扩选供给能力。
     try testing.expect(std.mem.indexOf(u8, out.items[0], cap_selection_range) != null);
+    // 第 279 轮：新增上下文补全供给能力（触发字符 `.`）。
+    try testing.expect(std.mem.indexOf(u8, out.items[0], cap_completion) != null);
 }
 
 test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 对面 needle 形钉：片段组合／值形／serverInfo 程序名派生／cap_face 同源基数／近名负例" {
@@ -2375,12 +2817,13 @@ test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 �
     try testing.expectEqualStrings("\"workspaceSymbolProvider\":true", cap_workspace_symbol);
     try testing.expectEqualStrings("\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}", cap_signature_help);
     try testing.expectEqualStrings("\"selectionRangeProvider\":true", cap_selection_range);
+    try testing.expectEqualStrings("\"completionProvider\":{\"triggerCharacters\":[\".\"]}", cap_completion);
     try testing.expectEqualStrings("\"semanticTokensProvider\"", cap_semtok_key);
     try testing.expectEqualStrings("\"serverInfo\":{\"name\":\"zzc-lsp\"}", cap_server_info);
     // A3 serverInfo 名程序名派生钉：随 D78 prog_name 真值动（脱钩即此处红·承 matcher_name 形制）。
     try testing.expectEqualStrings("\"serverInfo\":{\"name\":\"" ++ paths.prog_name ++ "-lsp\"}", cap_server_info);
-    // A4 cap_face 同源与基数钉：十三枚 needle 逐字节等于写侧 cap_* 常量（守卫据此对 ps1 实文，针源=写侧源）。
-    try testing.expectEqual(@as(usize, 13), cap_face.len);
+    // A4 cap_face 同源与基数钉：十四枚 needle 逐字节等于写侧 cap_* 常量（守卫据此对 ps1 实文，针源=写侧源）。
+    try testing.expectEqual(@as(usize, 14), cap_face.len);
     try testing.expectEqualStrings(cap_sync_obj, cap_face[0].needle);
     try testing.expectEqualStrings(cap_hover, cap_face[1].needle);
     try testing.expectEqualStrings(cap_semtok_key, cap_face[2].needle);
@@ -2394,6 +2837,7 @@ test "第 230 轮 T0 LSP initialize capability 协商串族单源派生与 ps1 �
     try testing.expectEqualStrings(cap_workspace_symbol, cap_face[10].needle);
     try testing.expectEqualStrings(cap_signature_help, cap_face[11].needle);
     try testing.expectEqualStrings(cap_selection_range, cap_face[12].needle);
+    try testing.expectEqualStrings(cap_completion, cap_face[13].needle);
     // A5 判据小样：真形命中、change:1→2 漂形即缺（t2 P1/P3 消费侧漂形转锚·防子串假命中）。
     const ps1_good = "Contains('" ++ cap_sync_obj ++ "')";
     const ps1_drift = "Contains('\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}}')";
@@ -2421,6 +2865,169 @@ test "第 245 轮 T0 e2e 基线脚本内嵌 LSP 帧协议词族单源派生与�
     // A4 版本/语言 id 单源同步钉：needle 值段随 jsonrpc.version_value / lang_identity.language_id 动。
     try testing.expectEqualStrings("\"jsonrpc\":\"" ++ jsonrpc.version_value ++ "\"", ps1_frame_face[0].needle);
     try testing.expectEqualStrings("\"languageId\":\"" ++ lang_id.language_id ++ "\"", ps1_frame_face[9].needle);
+}
+
+test "第 281 轮 T0 冒烟脚本帧词族与 capability 断言族单源派生：三十枚 needle 独立手抄对拍＋基数钉＋删断言负例（D139）" {
+    // A1 帧词族二十枚（18 方法词 + 版本值 + 语言 id）与脚本内嵌帧的期望字面逐字节对拍——
+    //   本 want 表系独立手抄（脚本非测图 source dep、@embedFile 越不出 src 包路径·202 轮硬约束），
+    //   与守卫对面二十三双向互备：hub 单源漂即此测红，脚本字面漂即守卫红。
+    const want_frame = [_][]const u8{
+        "\"jsonrpc\":\"2.0\"",
+        "\"method\":\"initialize\"",
+        "\"method\":\"initialized\"",
+        "\"method\":\"textDocument/didOpen\"",
+        "\"method\":\"textDocument/hover\"",
+        "\"method\":\"textDocument/documentSymbol\"",
+        "\"method\":\"textDocument/definition\"",
+        "\"method\":\"textDocument/references\"",
+        "\"method\":\"textDocument/codeAction\"",
+        "\"method\":\"textDocument/foldingRange\"",
+        "\"method\":\"textDocument/rename\"",
+        "\"method\":\"textDocument/documentHighlight\"",
+        "\"method\":\"textDocument/prepareRename\"",
+        "\"method\":\"workspace/symbol\"",
+        "\"method\":\"textDocument/signatureHelp\"",
+        "\"method\":\"textDocument/selectionRange\"",
+        "\"method\":\"textDocument/completion\"",
+        "\"method\":\"shutdown\"",
+        "\"method\":\"exit\"",
+        "\"languageId\":\"zig-dialect\"",
+    };
+    try testing.expectEqual(@as(usize, 20), smoke_frame_face.len);
+    try testing.expectEqual(want_frame.len, smoke_frame_face.len);
+    for (smoke_frame_face, &want_frame) |f, w| try testing.expectEqualStrings(w, f.needle);
+    // A2 capability 断言族十三枚（脚本对 initialize 应答逐枚 grep -Fq 的形串）。
+    const want_cap = [_][]const u8{
+        "\"hoverProvider\":true",
+        "\"semanticTokensProvider\"",
+        "\"documentSymbolProvider\":true",
+        "\"definitionProvider\":true",
+        "\"referencesProvider\":true",
+        "\"documentHighlightProvider\":true",
+        "\"codeActionProvider\":true",
+        "\"foldingRangeProvider\":true",
+        "\"renameProvider\":{\"prepareProvider\":true}",
+        "\"workspaceSymbolProvider\":true",
+        "\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}",
+        "\"selectionRangeProvider\":true",
+        "\"completionProvider\":{\"triggerCharacters\":[\".\"]}",
+    };
+    try testing.expectEqual(@as(usize, 13), smoke_cap_face.len);
+    try testing.expectEqual(want_cap.len, smoke_cap_face.len);
+    for (smoke_cap_face, &want_cap) |f, w| try testing.expectEqualStrings(w, f.needle);
+    // A3 值段单源同步钉：两族的形串随 cap_*／m_*／version_value／language_id 真值同动（防手抄表与派生形脱钩）。
+    try testing.expectEqualStrings(cap_completion, smoke_cap_face[12].needle);
+    try testing.expectEqualStrings(cap_signature_help, smoke_cap_face[10].needle);
+    try testing.expectEqualStrings("\"method\":\"" ++ m_completion ++ "\"", smoke_frame_face[16].needle);
+    try testing.expectEqualStrings("\"languageId\":\"" ++ lang_id.language_id ++ "\"", smoke_frame_face[19].needle);
+    // A4 边界登册负例：脚本从不断言 textDocumentSync 对象形与 serverInfo，故二者不得入本面
+    //   （入面即守卫红——如实记「不断言」比伪称全覆盖更诚实，同 ps1 cap_face 对 serverInfo 的处置）。
+    for (smoke_cap_face) |f| {
+        try testing.expect(std.mem.indexOf(u8, cap_sync_obj, f.needle) == null);
+    }
+    // A5 正反小样（P1 静默面转锚）：断言在位即命中，**整行断言被删**即缺针；方法词漂形亦不命中。
+    const sh_with = "send '{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/completion\"}'\ngrep -Fq '\"completionProvider\":{\"triggerCharacters\":[\".\"]}' \"$out\" || fail \"x\"\n";
+    const sh_minus = "send '{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/completion\"}'\n";
+    try testing.expect(std.mem.indexOf(u8, sh_with, smoke_cap_face[12].needle) != null);
+    try testing.expect(std.mem.indexOf(u8, sh_minus, smoke_cap_face[12].needle) == null);
+    const sh_drift = "\"method\":\"textDocument/completionX\"";
+    try testing.expect(std.mem.indexOf(u8, sh_drift, smoke_frame_face[16].needle) == null);
+    // A6 收尾一致性：脚本发起的十八枚方法词，每一枚都须在 dispatch 真值面 m_* 上有同名针（漏收成员即此红）。
+    var n: usize = 0;
+    for (smoke_frame_face) |f| {
+        if (std.mem.startsWith(u8, f.needle, "\"method\":\"")) n += 1;
+    }
+    try testing.expectEqual(@as(usize, 18), n);
+}
+
+test "第 282 轮 T0 capability 键名段单源抽取与对面二十四 needle 形钉：十三枚独立手抄对拍＋基数钉＋抽取边界（D141）" {
+    // A1 独立手抄对拍：本 want 表照 `tools/extension-smoke.js` 的键名数组逐枚手抄（脚本非测图 source dep）。
+    const want = [_][]const u8{
+        "'hoverProvider'",
+        "'completionProvider'",
+        "'selectionRangeProvider'",
+        "'signatureHelpProvider'",
+        "'workspaceSymbolProvider'",
+        "'documentSymbolProvider'",
+        "'definitionProvider'",
+        "'referencesProvider'",
+        "'documentHighlightProvider'",
+        "'codeActionProvider'",
+        "'foldingRangeProvider'",
+        "'renameProvider'",
+        "'semanticTokensProvider'",
+    };
+    try testing.expectEqual(@as(usize, 13), smoke_js_cap_face.len);
+    try testing.expectEqual(want.len, smoke_js_cap_face.len);
+    for (smoke_js_cap_face, &want) |f, w| try testing.expectEqualStrings(w, f.needle);
+    // A2 抽取函数边界：形串首键即键名段；无形可抽时原样返回（派生针必落空，宁红不假绿）。
+    try testing.expectEqualStrings("hoverProvider", capKeyOf(cap_hover));
+    try testing.expectEqualStrings("textDocumentSync", capKeyOf(cap_sync_obj));
+    try testing.expectEqualStrings("semanticTokensProvider", capKeyOf(cap_semtok_key));
+    try testing.expectEqualStrings("noquote-here", capKeyOf("noquote-here"));
+    try testing.expectEqualStrings("unterminated\"", capKeyOf("unterminated\""));
+    // A3 值段单源同步钉：改写侧 cap_* 的键名，needle 必随动（防手抄表与派生形脱钩成自证绿）。
+    try testing.expect(std.mem.indexOf(u8, smoke_js_cap_face[1].needle, capKeyOf(cap_completion)) != null);
+    // A4 正反小样：脚本数组实形命中；键名漂形（多一个 r）不命中——坐实守卫判据方向。
+    const sh_good = "for (const cap of ['hoverProvider', 'completionProvider']) {";
+    try testing.expect(std.mem.indexOf(u8, sh_good, smoke_js_cap_face[0].needle) != null);
+    try testing.expect(std.mem.indexOf(u8, sh_good, smoke_js_cap_face[1].needle) != null);
+    const sh_drift = "for (const cap of ['hoverrProvider']) {";
+    try testing.expect(std.mem.indexOf(u8, sh_drift, smoke_js_cap_face[0].needle) == null);
+    // A5 边界登册负例：脚本不断言 sync 对象形与 serverInfo，二者不得入本面。
+    for (smoke_js_cap_face) |f| {
+        try testing.expect(std.mem.indexOf(u8, cap_sync_obj, f.needle) == null);
+    }
+    // A6 键名族与方法面同骨：本面十三枚皆以 Provider 收尾（键名族形制自守，防误收非 provider 针）。
+    for (smoke_js_cap_face) |f| {
+        try testing.expect(std.mem.endsWith(u8, f.needle, "Provider'"));
+    }
+}
+
+// ———————————————————————————— 测试（285 T0）————————————————————————————
+
+test "第 285 轮 T0 provider 短名抽取与对面二十六 needle 形钉：十三枚名针独立手抄对拍＋循环头与判据体形针＋P1/P2 探针形反证（D144）" {
+    // A1 名针与独立手抄表对拍（顺序照 js 的 provider 数组）＋基数钉 十五（13 名针 + 2 形针）。
+    const want = [_][]const u8{
+        "'hover'",           "'completion'", "'signatureHelp'",  "'selectionRange'",    "'documentSymbol'",
+        "'workspaceSymbol'", "'definition'", "'references'",     "'documentHighlight'", "'codeAction'",
+        "'foldingRange'",    "'rename'",     "'semanticTokens'",
+    };
+    try testing.expectEqual(@as(usize, 15), smoke_js_provider_face.len);
+    for (smoke_js_provider_face[0..13], want) |f, w| try testing.expectEqualStrings(w, f.needle);
+    // A2 形针本体钉：循环头与判据体（判据体含循环变量下标，P2 的拦截全在这一枚）。
+    try testing.expectEqualStrings("for (const name of [", smoke_js_provider_face[13].needle);
+    try testing.expectEqualStrings("ok(!!P[name], ", smoke_js_provider_face[14].needle);
+    // A3 抽取器边界：剥尾段只剥一次（renameProvider 应答形含嵌套 prepareProvider，键段仍只一尾）；
+    //   无尾段可剥时原样返回（派生针必落空，宁红不假绿）。
+    try testing.expectEqualStrings("rename", capKeyShort(cap_rename));
+    try testing.expectEqualStrings("textDocumentSync", capKeyShort(cap_sync_obj));
+    try testing.expectEqualStrings("plainKey", capKeyOf("\"plainKey\":true"));
+    // A4 值段同步钉：名针与写侧 cap_* 同源（改键名即名针随动，非手抄表自证）。
+    try testing.expect(std.mem.indexOf(u8, smoke_js_provider_face[1].needle, capKeyShort(cap_completion)) != null);
+    for (smoke_js_provider_face[0..13]) |f| {
+        try testing.expect(std.mem.indexOf(u8, f.needle, "Provider") == null); // 短名不得再带尾段
+    }
+    // A5 探针 P1 形反证：把 'completion' 顶替为重复的 'hover' 后，名集仍得十三枚而本面缺针。
+    const list_good = "for (const name of ['hover', 'completion', 'signatureHelp', 'selectionRange', " ++
+        "'documentSymbol', 'workspaceSymbol', 'definition', 'references', 'documentHighlight', " ++
+        "'codeAction', 'foldingRange', 'rename', 'semanticTokens']) {";
+    for (smoke_js_provider_face[0..13]) |f| {
+        try testing.expect(std.mem.indexOf(u8, list_good, f.needle) != null);
+    }
+    try testing.expect(std.mem.indexOf(u8, list_good, smoke_js_provider_face[13].needle) != null); // 循环头亦在实形里
+    const list_dup = "for (const name of ['hover', 'hover', 'signatureHelp']) {";
+    try testing.expect(std.mem.indexOf(u8, list_dup, smoke_js_provider_face[1].needle) == null);
+    // A6 探针 P2 形反证：判据去下标（`!!P[name]`→`!!P`）即判据体针落空；而该形在 js 里依旧逐枚打
+    //   `[ok]` 并 PASS 退 0，坐实本针是本静默形的唯一拦头。
+    const body_dead = "ok(!!P, '已注册 provider：' + name);";
+    try testing.expect(std.mem.indexOf(u8, body_dead, smoke_js_provider_face[14].needle) == null);
+    const body_good = "ok(!!P[name], '已注册 provider：' + name);";
+    try testing.expect(std.mem.indexOf(u8, body_good, smoke_js_provider_face[14].needle) != null);
+    // A7 与 282 键名面不同职自证：同一 provider 在两面的 needle 形不同（短名 vs 键名），
+    //   只收一面则另一形可被静默拆——两面并存才是全覆盖。
+    try testing.expectEqualStrings("'hover'", smoke_js_provider_face[0].needle);
+    try testing.expectEqualStrings("'hoverProvider'", smoke_js_cap_face[0].needle);
 }
 
 test "lsp.server：didOpen 坏源→publishDiagnostics 词法形、坐标 0 基 UTF-16（第 156 轮）" {
@@ -2536,7 +3143,7 @@ test "lsp.server：exit 置停、未知请求 -32601、坏 JSON -32700、通知�
     try testing.expect(srv.stop);
     try testing.expectEqual(@as(usize, 0), out.items.len);
 
-    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"textDocument/completion\",\"params\":{}}", &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":\"abc\",\"method\":\"textDocument/implementation\",\"params\":{}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":\"abc\"") != null); // 字符串 id 原样回显
@@ -2641,6 +3248,28 @@ test "lsp.server：codeAction 全角标点快速修复／选区不相交出空�
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"newText\":\";\"") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"kind\":\"quickfix\"") == null);
 
+    // 结构面（第 278 轮）：changes[uri] 必须直接是 edit 数组。曾因模板多套一层 `[]`
+    // 成 [[{...}]]——上面几条 newText 文本断言全绿，而真实客户端读 c.range 抛错。
+    {
+        var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+        defer parsed.deinit();
+        const root = asObject(parsed.value).?;
+        const items_arr = switch (root.get("result").?) {
+            .array => |a| a.items,
+            else => return error.TestUnexpectedResult,
+        };
+        const first = objIn(items_arr[0]).?;
+        const changes = objIn(objIn(first.get(k_edit)).?.get(k_changes)).?;
+        const edits_arr = switch (changes.get("file:///fix.zz").?) {
+            .array => |a| a.items,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expectEqual(@as(usize, 2), edits_arr.len);
+        const e0 = objIn(edits_arr[0]).?;
+        try testing.expect(objIn(e0.get(k_range)) != null);
+        try testing.expect(e0.get(k_newText) != null);
+    }
+
     // only 只要 quickfix：仍只出单点臂，批量动作不混入。
     freeOut(gpa, &out);
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/codeAction\",\"params\":{\"textDocument\":{\"uri\":\"file:///fix.zz\"},\"range\":{\"start\":{\"line\":0,\"character\":8},\"end\":{\"line\":0,\"character\":8}},\"context\":{\"diagnostics\":[],\"only\":[\"quickfix\"]}}}", &out);
@@ -2707,6 +3336,123 @@ test "lsp.server：foldingRange 花括号配对／单行块略过／字符串与
     const unclosed = try srv.foldingRangesJson("公开 函数 乙() 空 {\n乙();\n");
     defer gpa.free(unclosed);
     try testing.expectEqualStrings("[]", unclosed);
+}
+
+test "第 279 轮 T0 lsp.server：上下文补全 completion——前缀四源（声明/关键字/别名根/点链）与 textEdit、字面量与前缀缺席皆空表" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    const doc = "常数 求和 = 1;\n" ++
+        "公开 函数 求差(甲: 整数, 乙: 整数) 整数 {\n" ++
+        "    返回 甲;\n" ++
+        "}\n" ++
+        "常数 文本 = \"常数 假词\";\n" ++
+        "// 常数 注释词\n" ++
+        "标准库.调\n";
+    const uri = "file:///comp.zz";
+    const uri_js = try jsonrpc.jsonString(gpa, uri);
+    defer gpa.free(uri_js);
+    const body_js = try jsonrpc.jsonString(gpa, doc);
+    defer gpa.free(body_js);
+
+    var out: OutList = .empty;
+    defer freeOut(gpa, &out);
+    const open = try std.fmt.allocPrint(gpa, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ uri_js, body_js });
+    defer gpa.free(open);
+    try srv.handle(open, &out); // 附一条诊断通知，不影响后续（每次请求前先清表）
+
+    const Req = struct {
+        srv: *Server,
+        gpa: std.mem.Allocator,
+        uri_js: []const u8,
+
+        fn call(self: @This(), outlist: *OutList, line: usize, character: usize) !void {
+            outlist.* = .empty;
+            const req = try std.fmt.allocPrint(self.gpa, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_id ++ "\":9,\"" ++ k_method ++ "\":\"" ++ m_completion ++ "\",\"" ++ k_params ++ "\":" ++ f_hover_params ++ "}}", .{ self.uri_js, line, character });
+            defer self.gpa.free(req);
+            try self.srv.handle(req, outlist);
+            try testing.expectEqual(@as(usize, 1), outlist.items.len);
+        }
+    };
+    const rq = Req{ .srv = &srv, .gpa = gpa, .uri_js = uri_js };
+
+    // A1 声明优先：光标在 `求` 后 → 本文件顶层声明 `求和`/`求差` 均入选，且排在前（detail 同词）。
+    try rq.call(&out, 0, 4);
+    const r1 = out.items[0];
+    try testing.expect(std.mem.indexOf(u8, r1, "\"label\":\"求和\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r1, "\"label\":\"求差\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r1, "\"detail\":\"本文件声明\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r1, needle_incomplete_false) != null);
+    try testing.expect(std.mem.indexOf(u8, r1, "\"textEdit\"") == null); // 非点链不换范围
+    try testing.expect(std.mem.indexOf(u8, r1, "求和").? < std.mem.indexOf(u8, r1, "求差").?); // rank 同档按名序
+
+    // A2 关键字：光标在 `常数` 后 → keyword 项（kind=14・detail=const），声明项不混入。
+    try rq.call(&out, 0, 2);
+    const r2 = out.items[0];
+    try testing.expect(std.mem.indexOf(u8, r2, "\"label\":\"常数\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r2, "\"kind\":14") != null);
+    try testing.expect(std.mem.indexOf(u8, r2, "\"detail\":\"const\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r2, "本文件声明") == null);
+
+    // A3 点链：光标在 `标准库.调` 后→ aliases 长链候选，带 textEdit 替换整链前缀。
+    try rq.call(&out, 6, 5);
+    const r3 = out.items[0];
+    try testing.expect(std.mem.indexOf(u8, r3, "标准库.调试.打印") != null);
+    try testing.expect(std.mem.indexOf(u8, r3, "\"textEdit\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r3, "\"newText\":\"标准库.调试.打印\"") != null);
+    try testing.expect(std.mem.indexOf(u8, r3, "\"start\":{\"line\":6,\"character\":0}") != null);
+    try testing.expect(std.mem.indexOf(u8, r3, "\"end\":{\"line\":6,\"character\":5}") != null);
+    try testing.expect(std.mem.indexOf(u8, r3, "\"detail\":\"const\"") == null); // 点链臂不串关键字源
+    try testing.expect(std.mem.indexOf(u8, r3, "\"documentation\"") != null); // docs 已接补全详情
+
+    // A4 字面量与注释内不弹：光标在字符串中的 `假` 后、在注释词中 → 空表。
+    try rq.call(&out, 4, 13);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], needle_empty_completion) != null);
+    try rq.call(&out, 5, 7);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], needle_empty_completion) != null);
+
+    // A5 无前缀（光标停在空白/标点后）与未打开文档 → 空表。
+    try rq.call(&out, 0, 3);
+    try testing.expect(std.mem.indexOf(u8, out.items[0], needle_empty_completion) != null);
+    {
+        const other = try jsonrpc.jsonString(gpa, "file:///never-opened.zz");
+        defer gpa.free(other);
+        const req = try std.fmt.allocPrint(gpa, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_id ++ "\":9,\"" ++ k_method ++ "\":\"" ++ m_completion ++ "\",\"" ++ k_params ++ "\":" ++ f_hover_params ++ "}}", .{ other, 0, 2 });
+        defer gpa.free(req);
+        out = .empty;
+        try srv.handle(req, &out);
+        try testing.expectEqual(@as(usize, 1), out.items.len);
+        try testing.expect(std.mem.indexOf(u8, out.items[0], needle_empty_completion) != null);
+    }
+
+    // A6 结构面：result.items 为数组、每项 label/kind/detail 三键俱在且 kind 为数值。
+    {
+        try rq.call(&out, 0, 4);
+        var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+        defer parsed.deinit();
+        const res = objIn(asObject(parsed.value).?.get(k_result)).?;
+        switch (res.get(k_isIncomplete).?) {
+            .bool => |b| try testing.expect(!b),
+            else => return error.TestUnexpectedResult,
+        }
+        const items = switch (res.get(k_items).?) {
+            .array => |a| a.items,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expect(items.len >= 2);
+        for (items) |it| {
+            const o = objIn(it).?;
+            try testing.expect(strField(o, k_label) != null);
+            try testing.expect(intField(o, k_kind) != null);
+            try testing.expect(strField(o, k_detail) != null);
+        }
+    }
 }
 
 test "lsp.server：foldingRange 注释块——连续行成块／空行与代码断开／尾随注释不入块（第 271 轮）" {
@@ -4152,6 +4898,7 @@ test "第 218 轮 T0 方法名族单源钉：二十二枚值钉 + needle 形钉 
     try testing.expectEqualStrings("workspace/symbol", m_workspaceSymbol);
     try testing.expectEqualStrings("textDocument/signatureHelp", m_signatureHelp);
     try testing.expectEqualStrings("textDocument/selectionRange", m_selectionRange);
+    try testing.expectEqualStrings("textDocument/completion", m_completion);
     try testing.expectEqualStrings("textDocument/publishDiagnostics", m_publishDiagnostics);
     // A2 needle 形钉：二十二枚对面声明形逐字节锚当前 extension.js 活路形——needle 拼装改样
     // 即红，免得守卫与对面两头猜书写形。
@@ -4176,7 +4923,8 @@ test "第 218 轮 T0 方法名族单源钉：二十二枚值钉 + needle 形钉 
     try testing.expectEqualStrings("request('workspace/symbol', {", methods_face[18].needle);
     try testing.expectEqualStrings("request('textDocument/signatureHelp', {", methods_face[19].needle);
     try testing.expectEqualStrings("request('textDocument/selectionRange', {", methods_face[20].needle);
-    try testing.expectEqualStrings("msg.method === 'textDocument/publishDiagnostics'", methods_face[21].needle);
+    try testing.expectEqualStrings("request('textDocument/completion', {", methods_face[21].needle);
+    try testing.expectEqualStrings("msg.method === 'textDocument/publishDiagnostics'", methods_face[22].needle);
     // A3 判据正反小样：真 extension.js 实形为「不缺」；P1–P4 探针漂形为「缺」（本轮把
     // 四路静默面预先钉为有锚）；exit 针附尾防误配：进程级 child.on('exit') 形不算命中。
     try testing.expect(!jsonrpc.missing("request('initialize', initialize).then((res) => {", methods_face[0].needle));
@@ -4194,11 +4942,12 @@ test "第 218 轮 T0 方法名族单源钉：二十二枚值钉 + needle 形钉 
     try testing.expect(!jsonrpc.missing("const res = await request('workspace/symbol', { query });", methods_face[18].needle));
     try testing.expect(!jsonrpc.missing("const res = await request('textDocument/signatureHelp', {", methods_face[19].needle));
     try testing.expect(!jsonrpc.missing("const res = await request('textDocument/selectionRange', {", methods_face[20].needle));
-    try testing.expect(!jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnostics') {", methods_face[21].needle));
+    try testing.expect(!jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnostics') {", methods_face[22].needle));
     try testing.expect(jsonrpc.missing("send({ jsonrpc: '2.0', method: 'textDocument/didSve', params: 0 });", methods_face[7].needle)); // P1 形
-    try testing.expect(jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnosticX') {", methods_face[21].needle)); // P2 形
+    try testing.expect(jsonrpc.missing("if (msg.method === 'textDocument/publishDiagnosticX') {", methods_face[22].needle)); // P2 形
     try testing.expect(jsonrpc.missing("request('textDocument/signatureHelX', {", methods_face[19].needle)); // 参数提示面漂形
     try testing.expect(jsonrpc.missing("request('textDocument/selectionRangX', {", methods_face[20].needle)); // 智能扩选面漂形
+    try testing.expect(jsonrpc.missing("request('textDocument/completionX', {", methods_face[21].needle)); // 上下文补全面漂形
     try testing.expect(jsonrpc.missing("request('textDocument/referenceX', {", methods_face[12].needle)); // 引用面漂形
     try testing.expect(jsonrpc.missing("request('textDocument/documentHighlighX', {", methods_face[13].needle)); // 高亮面漂形
     try testing.expect(jsonrpc.missing("request('textDocument/codeActioX', {", methods_face[14].needle)); // 快速修复面漂形
@@ -4236,8 +4985,8 @@ test "第 218 轮 T0 方法名族单源钉：二十二枚值钉 + needle 形钉 
     try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"" ++ m_selectionRange ++ "\",\"params\":{\"textDocument\":{\"uri\":\"file:///t.zz\"},\"positions\":[{\"line\":0,\"character\":3}]}}", &out);
     try testing.expectEqual(@as(usize, 5), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[4], ek_parent) != null); // 扩选链带 parent（词元→行→文档）
-    // A5 覆盖钉：二十二枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
-    try testing.expectEqual(@as(usize, 22), methods_face.len);
+    // A5 覆盖钉：二十三枚——新增方法接线须在此随动（防只加常量不加对账面，同 215–217）。
+    try testing.expectEqual(@as(usize, 23), methods_face.len);
 }
 
 // 219 T0（第 219 轮 D87）：词类标签族六员单一真值——值钉 + classify→classToTokenType 全域
@@ -4488,8 +5237,8 @@ test "221 T0：诊断项字段族 hub 单源＋模板渲染 round-trip＋结果�
     try testing.expectEqualStrings(v_markdown, strField(hc, k_kind).?);
     try testing.expect(strField(hc, k_value).?.len > 0);
     try testing.expect(objIn(ro.get(k_range)) != null);
-    // A5 对面十三清单成员数钉：十八枚 needle 全由 hub k_*/v_markdown/paths.prog_name 派生（对账在守卫对面十三）。
-    try testing.expectEqual(@as(usize, 18), results_face.len);
+    // A5 对面十三清单成员数钉：廿七枚 needle 全由 hub k_*/v_markdown/paths.prog_name/lsp_kind_base 派生（对账在守卫对面十三）。
+    try testing.expectEqual(@as(usize, 27), results_face.len);
 }
 
 // 222 T0（第 222 轮 · D90）：severity 码值族 hub——A1 四枚协议值钉／A2 clamp 边界
@@ -4583,7 +5332,7 @@ test "223 T0：JSON-RPC 错误码族 hub 单源＋应答体 round-trip＋客户�
     defer srv.deinit();
     var out: OutList = .empty;
     defer freeOut(tg, &out);
-    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/completion\",\"params\":{}}", &out);
+    try srv.handle("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"textDocument/implementation\",\"params\":{}}", &out);
     try testing.expectEqual(@as(usize, 1), out.items.len);
     try testing.expect(std.mem.indexOf(u8, out.items[0], ek_code ++ ":" ++ std.fmt.comptimePrint("{d}", .{ec_method_not_found})) != null);
     // 加尾形（-32601→-326011）子串形漏网——补 reparse 精确值钉封死（t2 P4 静默面转锚）。
@@ -4642,7 +5391,7 @@ test "第 263 轮 documentSymbol：顶层声明扫描/修饰词跳过/嵌套与�
         try testing.expectEqualStrings(want_names[i], strField(o, "name").?);
         try testing.expectEqual(want_kinds[i], intField(o, "kind").?);
         try testing.expect(o.get("range") != null);
-        try testing.expect(o.get("selectionRange") != null);
+        try testing.expect(o.get(k_selectionRange) != null);
     }
     // 嵌套声明（内层常数/结构体字段）只出现在缩进行，不收入顶层大纲；注释行更不收入。
     try testing.expect(std.mem.indexOf(u8, js, "内层") == null);
@@ -4765,4 +5514,245 @@ test "第 266 轮 references：声明与引用全收/可排除声明/字符串�
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"id\":9") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"line\":2,\"character\":7") != null);
     try testing.expect(std.mem.indexOf(u8, out.items[0], "\"line\":0,\"character\":3") == null);
+}
+
+// ─── 287 T0（第 287 轮 · D146）：codeAction item.title 跨侧手抄入面 ────────────
+test "287 T0：results_face[20] 派生自 k_title、正/负/漂三形对拍实锤（第 287 轮 D146）" {
+    // A1：needle 派生正确——"new vscode.CodeAction(item.title," 含 k_title。
+    const n20 = results_face[20].needle;
+    try testing.expect(std.mem.indexOf(u8, n20, k_title) != null);
+    try testing.expectEqualStrings("new vscode.CodeAction(item.title,", n20);
+
+    // A2：正面——实际 js 文本包含该 needle。
+    const js_ok = "          const action = new vscode.CodeAction(item.title, kind);";
+    try testing.expect(std.mem.indexOf(u8, js_ok, n20) != null);
+
+    // A3：漂形（探针 P1 实锤的 form）——js 文本不包含该 needle。
+    const js_drift = "          const action = new vscode.CodeAction(item.titl, kind);";
+    try testing.expect(std.mem.indexOf(u8, js_drift, n20) == null);
+
+    // A4：hub 漂形——若 k_title 改为 "titl" 则 needle 不再匹配当前 js 文本。
+    const hub_drift_needle = "new vscode.CodeAction(item.titl,";
+    try testing.expect(std.mem.indexOf(u8, js_ok, hub_drift_needle) == null);
+
+    // A5：面长度钉。
+    try testing.expectEqual(@as(usize, 27), results_face.len);
+}
+
+// ─── 288 T0（第 288 轮 · D147）：Location.uri 跨侧手抄入面 ────────────────────
+test "288 T0：results_face[21] 派生自 k_uri、正/负/漂三形对拍实锤（第 288 轮 D147）" {
+    // A1：needle 派生正确——"vscode.Uri.parse(loc.uri)" 含 k_uri。
+    const n21 = results_face[21].needle;
+    try testing.expect(std.mem.indexOf(u8, n21, k_uri) != null);
+    try testing.expectEqualStrings("vscode.Uri.parse(loc.uri)", n21);
+
+    // A2：正面——实际 js 文本包含该 needle（definition 路径）。
+    const js_def_ok = "          vscode.Uri.parse(loc.uri),";
+    try testing.expect(std.mem.indexOf(u8, js_def_ok, n21) != null);
+
+    // A3：漂形（探针 P1）——loc.uri→loc.ur 不匹配 needle。
+    const js_drift = "          vscode.Uri.parse(loc.ur),";
+    try testing.expect(std.mem.indexOf(u8, js_drift, n21) == null);
+
+    // A4：hub 漂形——若 k_uri 改为 "url" 则 needle 不再匹配当前 js。
+    const hub_drift_needle = "vscode.Uri.parse(loc.url)";
+    try testing.expect(std.mem.indexOf(u8, js_def_ok, hub_drift_needle) == null);
+
+    // A5：面长度钉。
+    try testing.expectEqual(@as(usize, 27), results_face.len);
+}
+
+// ─── 289 T0（第 289 轮 · D148）：documentSymbol selectionRange 跨侧手抄入面 ─────
+test "289 T0：results_face[22] 派生自 k_selectionRange、正/负/漂三形对拍实锤（第 289 轮 D148）" {
+    // A1：needle 派生正确。
+    const n22 = results_face[22].needle;
+    try testing.expect(std.mem.indexOf(u8, n22, k_selectionRange) != null);
+    try testing.expectEqualStrings("s.selectionRange ||", n22);
+
+    // A2：正面——实际 js 文本包含 needle。
+    const js_ok = "  const sr = s.selectionRange || r;";
+    try testing.expect(std.mem.indexOf(u8, js_ok, n22) != null);
+
+    // A3：漂形（探针 P1）——js 文本不匹配。
+    const js_drift = "  const sr = s.selectionRang || r;";
+    try testing.expect(std.mem.indexOf(u8, js_drift, n22) == null);
+
+    // A4：hub 漂形——若 k_selectionRange 改为 "selRange" 则 needle 不再匹配 js。
+    const hub_drift_needle = "s.selRange ||";
+    try testing.expect(std.mem.indexOf(u8, js_ok, hub_drift_needle) == null);
+
+    // A5：f_document_symbol 由 ek_selectionRange 派生。
+    try testing.expect(std.mem.indexOf(u8, f_document_symbol, k_selectionRange) != null);
+
+    // A6：面长度钉。
+    try testing.expectEqual(@as(usize, 27), results_face.len);
+}
+// ─── 290 T0（第 290 轮 · D149）：LSP↔vscode kind 枚举空间换算入面 ─────────────
+test "290 T0：lsp_kind_base/sk_* 值钉、换算链同骨、results_face[23..25] 与 kinds_smoke_face 正反漂三形对拍（第 290 轮 D149）" {
+    // A1：基址与宿主枚数值钉——vscode.d.ts 的 SymbolKind.Function=11、CompletionItemKind.Function=2、
+    // CompletionItemKind.Keyword=13、SymbolKind.Constant=13，皆由本 hub 的 LSP 码减基址派生。
+    try testing.expectEqual(@as(u32, 1), lsp_kind_base);
+    try testing.expectEqual(@as(u32, 11), sk_function - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 12), sk_variable - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 13), sk_constant - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 9), sk_enum - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 22), sk_struct - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 2), ck_function - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 13), ck_keyword - lsp_kind_base);
+    try testing.expectEqual(@as(u32, 20), ck_constant - lsp_kind_base);
+
+    // A2：换算链同骨——declKind 的产出域与 completionKindForSymbol 的入参域共此一组 sk_*，
+    // 二次映射不许落 else（落 else 即声明候选图标一律变变量）。
+    try testing.expectEqual(ck_function, completionKindForSymbol(sk_function));
+    try testing.expectEqual(ck_struct, completionKindForSymbol(sk_struct));
+    try testing.expectEqual(ck_enum, completionKindForSymbol(sk_enum));
+    try testing.expectEqual(ck_constant, completionKindForSymbol(sk_constant));
+    try testing.expectEqual(ck_variable, completionKindForSymbol(sk_variable));
+    try testing.expectEqual(ck_variable, completionKindForSymbol(0)); // 非 LSP 码 → 兜底（0 不在 LSP 值域）
+
+    // A3：客户端换算调用形三枚 needle 的正面（js 实文形状·守卫对面十三）。
+    const n23 = results_face[23].needle;
+    const n24 = results_face[24].needle;
+    const n25 = results_face[25].needle;
+    try testing.expectEqualStrings("function toVscodeKind(k) { return Math.max(k - 1, 0); }", n23);
+    try testing.expectEqualStrings("toVscodeKind(c.kind || 1)", n24);
+    try testing.expectEqualStrings("toVscodeSymbolKind(s.kind)", n25);
+    const js_ok = "function toVscodeKind(k) { return Math.max(k - 1, 0); }\n" ++
+        "const item = new vscode.CompletionItem(label, toVscodeKind(c.kind || 1));\n" ++
+        "    toVscodeSymbolKind(s.kind),\n" ++
+        "          toVscodeSymbolKind(s.kind),\n";
+    try testing.expect(std.mem.indexOf(u8, js_ok, n23) != null);
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, js_ok, n23));
+    try testing.expect(std.mem.indexOf(u8, js_ok, n24) != null);
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, js_ok, n25));
+
+    // A4：漂形（探针 P1 的直传/乱加形与 hub 基址漂形）——三枚 needle 皆落空。
+    const js_drift = "    s.kind + 5 || vscode.SymbolKind.Variable,\n" ++
+        "    c.kind || 0);\n" ++
+        "    toVscodeSymbolKind(s.kind),\n";
+    try testing.expect(std.mem.indexOf(u8, js_drift, n23) == null);
+    try testing.expect(std.mem.indexOf(u8, js_drift, n24) == null);
+    try testing.expect(std.mem.count(u8, js_drift, n25) < results_face[25].occ); // 只漏一处：计数下界拦下
+    try testing.expect(std.mem.indexOf(u8, js_drift, n25) != null); // presence 判据对此形无能（occ 收紧的立论根据）
+
+    // A5：计数下界钉——两处同形手抄只此一枚 needle，occ 须为 2；其余两枚 presence 足矣。
+    try testing.expectEqual(@as(usize, 2), results_face[25].occ);
+    try testing.expectEqual(@as(usize, 1), results_face[23].occ);
+    try testing.expectEqual(@as(usize, 1), results_face[24].occ);
+
+    // A6：对面二十七——宿主枚举数值针的正/反/漂形。
+    try testing.expectEqual(@as(usize, 5), kinds_smoke_face.len);
+    try testing.expectEqualStrings("eq(vscode.SymbolKind.Function, 11", kinds_smoke_face[0].needle);
+    try testing.expectEqualStrings("eq(vscode.CompletionItemKind.Function, 2", kinds_smoke_face[1].needle);
+    const esm_ok = "  eq(vscode.SymbolKind.Function, 11, '宿主 SymbolKind 为 0 基');\n" ++
+        "  eq(vscode.CompletionItemKind.Function, 2, '宿主 CompletionItemKind 为 0 基');\n" ++
+        "  eq(sym.kind, vscode.SymbolKind.Function, '大纲图标');\n" ++
+        "  eq(decl.kind, vscode.CompletionItemKind.Function, '补全图标');\n" ++
+        "  eq(ws.kind, vscode.SymbolKind.Function, '工作区图标');\n";
+    inline for (kinds_smoke_face) |c| try testing.expect(std.mem.indexOf(u8, esm_ok, c.needle) != null);
+    // 桩漂回 1 基（自照形）与断言抄写侧原数形：两枚数值针/三枚落点针分别落空。
+    const esm_drift = "  eq(vscode.SymbolKind.Function, 12, '…');\n" ++
+        "  eq(vscode.CompletionItemKind.Function, 3, '…');\n" ++
+        "  eq(sym.kind, 12, '…');\n" ++
+        "  eq(decl.kind, 3, '…');\n" ++
+        "  eq(ws.kind, 12, '…');\n";
+    inline for (kinds_smoke_face) |c| try testing.expect(std.mem.indexOf(u8, esm_drift, c.needle) == null);
+
+    // A7：面长度钉。
+    try testing.expectEqual(@as(usize, 27), results_face.len);
+}
+
+// ─── 291 写侧（第 291 轮 · D150）：补全截断旗标的真值路径 ────────────────────
+// 旧测试图里 `isIncomplete` 只出现过 false 形（截断分支 `hits > limit` 从未被任何用例推过
+// 边界），故上限魔数与极性皆空转；本测以成对边界用例把 true 形钉住（用例数由 hub
+// `completion_item_limit` 驱动，测面不另抄 200）。
+test "第 291 轮 lsp.server：候选达上限不截断、超上限截断并置 isIncomplete=true" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, @embedFile(paths.builtin_pack_embed_child));
+    defer lang.deinit();
+    var srv = Server.init(gpa, &lang);
+    defer srv.deinit();
+
+    const cases = [_]struct { n: usize, want: bool }{
+        .{ .n = completion_item_limit, .want = false }, // 恰达上限：不截断（钉 `>` 而非 `>=`）
+        .{ .n = completion_item_limit + 1, .want = true }, // 超一枚：截断并置旗标
+    };
+    for (cases) |c| {
+        // n 条同前缀顶层声明（名零填充，字典序即数值序），末行放光标前缀 `zzcA`。
+        var buf: std.ArrayList(u8) = .empty;
+        var i: usize = 0;
+        while (i < c.n) : (i += 1) {
+            try buf.appendSlice(gpa, try std.fmt.allocPrint(gpa, "常数 zzcA{d:0>4} = 0;\n", .{i}));
+        }
+        const tail_name = try std.fmt.allocPrint(gpa, "zzcA{d:0>4}", .{c.n - 1});
+        try buf.appendSlice(gpa, "zzcA");
+        const doc = try buf.toOwnedSlice(gpa);
+
+        const uri_js = try jsonrpc.jsonString(gpa, "file:///trunc.zz");
+        const body_js = try jsonrpc.jsonString(gpa, doc);
+        var out: OutList = .empty;
+        const open = try std.fmt.allocPrint(gpa, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_method ++ "\":\"" ++ m_didOpen ++ "\",\"" ++ k_params ++ "\":" ++ f_didOpen_params ++ "}}", .{ uri_js, body_js });
+        try srv.handle(open, &out); // 附诊断通知，不入下列断言
+
+        const req = try std.fmt.allocPrint(gpa, "{{\"" ++ k_jsonrpc ++ "\":\"2.0\",\"" ++ k_id ++ "\":9,\"" ++ k_method ++ "\":\"" ++ m_completion ++ "\",\"" ++ k_params ++ "\":" ++ f_hover_params ++ "}}", .{ uri_js, c.n, @as(usize, 4) });
+        out = .empty;
+        try srv.handle(req, &out);
+        try testing.expectEqual(@as(usize, 1), out.items.len);
+
+        var parsed = try std.json.parseFromSlice(std.json.Value, gpa, out.items[0], .{});
+        defer parsed.deinit();
+        const res = objIn(asObject(parsed.value).?.get(k_result)).?;
+        switch (res.get(k_isIncomplete).?) {
+            .bool => |b| try testing.expectEqual(c.want, b),
+            else => return error.TestUnexpectedResult,
+        }
+        const items = switch (res.get(k_items).?) {
+            .array => |a| a.items,
+            else => return error.TestUnexpectedResult,
+        };
+        try testing.expectEqual(completion_item_limit, items.len); // 截断后恰发上限枚
+        var tail_seen: usize = 0;
+        for (items) |it| {
+            const lab = switch (it.object.get(k_label).?) {
+                .string => |s| s,
+                else => return error.TestUnexpectedResult,
+            };
+            if (std.mem.eql(u8, lab, tail_name)) tail_seen += 1;
+        }
+        try testing.expectEqual(@as(usize, if (c.want) 0 else 1), tail_seen); // 超限时字典序末名被截掉
+    }
+}
+
+// ─── 291 T0（第 291 轮 · D150）：补全完整性旗标跨侧手抄入面 ──────────────────
+test "291 T0：results_face[26] 派生自 k_isIncomplete、正/漂两形对拍与上限常量同骨（第 291 轮 D150）" {
+    // A1：needle 派生正确——读面键段随 hub `k_isIncomplete` 漂。
+    const n26 = results_face[26].needle;
+    try testing.expectEqualStrings("!!res.isIncomplete", n26);
+    try testing.expect(std.mem.indexOf(u8, n26, k_isIncomplete) != null);
+    try testing.expectEqual(@as(usize, 1), results_face[26].occ); // 单点读面：presence 足矣
+
+    // A2：正面——js 实文形状包含 needle。
+    const js_ok = "        list.isIncomplete = !!res.isIncomplete;";
+    try testing.expect(std.mem.indexOf(u8, js_ok, n26) != null);
+
+    // A3：漂形（探针 P1）——键名少一字符，读侧落 undefined 而观测仍为 false，needle 须落空。
+    const js_drift = "        list.isIncomplete = !!res.isIncomplet;";
+    try testing.expect(std.mem.indexOf(u8, js_drift, n26) == null);
+    // hub 漂形：键名改义后 js 旧形亦不匹配（两侧不可能各自漂而互不知情）。
+    try testing.expect(std.mem.indexOf(u8, js_ok, "!!res.isCompIncomplete") == null);
+
+    // A4：写侧同骨——旗标键与空表形皆由 `k_isIncomplete` 派生（测面针脚不再硬编字面量）。
+    try testing.expect(std.mem.indexOf(u8, f_completion_list, k_isIncomplete) != null);
+    try testing.expect(std.mem.indexOf(u8, f_empty_completion, k_isIncomplete) != null);
+    try testing.expectEqualStrings("\"isIncomplete\":false", needle_incomplete_false);
+    try testing.expect(std.mem.indexOf(u8, needle_empty_completion, k_isIncomplete) != null);
+
+    // A5：上限常量值钉与写侧委派——臂内不得再留裸 200。
+    try testing.expectEqual(@as(usize, 200), completion_item_limit);
+
+    // A6：面长度钉。
+    try testing.expectEqual(@as(usize, 27), results_face.len);
 }

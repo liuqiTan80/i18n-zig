@@ -6,7 +6,8 @@
 
 - `.zz` 文件自动关联 `source.zz` 语法
 - 中文方言关键词、内建函数、类型名、标准库别名语法高亮
-- **补全**：方言关键词/别名作为 snippet 补全候选（按前缀召回，附「→ 标准 Zig 形」说明）
+- **补全**：方言关键词/别名作为 snippet 补全候选（按前缀召回，附「→ 标准 Zig 形」说明）；
+  第 279 轮起另接 **LSP 上下文补全**（`textDocument/completion`，四源候选 + 点链 `textEdit`，见下条）
 - `zzc check --machine` 问题匹配器（单行诊断 → Problems 面板）
 - **LSP 服务器**（第 156 轮）：`zzc lsp` 走 JSON-RPC over stdio，提供悬停（方言词/点链别名反查标准形）、
   快路诊断（全角/词法 + 纯母语强制，推送 publishDiagnostics）与文档同步；服务器本体可直接供任何 LSP
@@ -40,6 +41,13 @@
   词元 → 整行 → 包围花括号块（由内到外）→ 整文档；每节只收严格包含前节者（同区去重），
   越界/非法位置只回整文档。扩展注册 `SelectionRangeProvider` 并递归重建
   `vscode.SelectionRange`。仅花括号块，不做语句/表达式级选区。
+- **上下文补全**（第 279 轮）：`textDocument/completion` 按光标前缀（含点链）召回四源候选——
+  同文件顶层声明（`detail`=「本文件声明」，kind 随声明词）、语言包关键词/类型、标准库别名根、
+  点链成员（`标准库.调` → `std.debug.*` 全链，`detail` 给标准形、`documentation` 给用法示例）。
+  点链候选必带 `textEdit` 覆盖整条链前缀（缺它则 VS Code 只替换末段词，`标准库.调` 会插成
+  `标准库.标准库.调试.打印`）；候选超过 200 条截断并标 `isIncomplete:true`；字符串/字符/多行串/
+  注释内与无前缀处返回空表（不灌候选）。扩展注册 `CompletionItemProvider`（触发字符 `.`），
+  把应答重建为 `vscode.CompletionList`/`CompletionItem`。仅按前缀做词法召回，不做作用域/类型推断。
 - **全角标点快速修复**（第 268 轮）：`textDocument/codeAction` 复用快路诊断的全角危险表，对与选区/光标
   相交且有半角建议值的违规返回 `quickfix`（`edit.changes{uri:[{range,newText}]}`）；扩展注册
   `CodeActionProvider` 并落成 `WorkspaceEdit`，于是全角逗号/冒号等可直接一键改对。零宽空格等无建议值者
@@ -59,7 +67,7 @@
 - **LSP 客户端接线**（第 157 轮）：`extension.js` + `client_frames.js` 零 npm 依赖扩展宿主——自行
   spawn `zzc lsp` 并按基座协议（`Content-Length` 字节计长、头名大小写不敏感、10MB 上限与服务端同源）
   收发帧，把 publishDiagnostics 落到 Problems 面板、把悬停接到 hover provider，stderr 转「zzc lsp」输出面板。
-  补全与高亮仍保持声明式（不注册 completion provider）；高亮仍以声明式 tmLanguage（静态 ASCII 模式）为基底，
+  补全自第 279 轮起由 `CompletionItemProvider` 走 LSP（见「上下文补全」条，与声明式 snippet 叠加）；高亮仍以声明式 tmLanguage（静态 ASCII 模式）为基底，
   第 161 轮服务端另开 `semanticTokens/full` **语义 token 供给**面（补方言母语词汇、与 tmLanguage 叠加），
   客户端渲染已于第 162 轮接线（`DocumentSemanticTokensProvider`，见下条）；语义级编译诊断的**服务端 on-save 供给**已于第 159 轮接入
   （见下条），**客户端 `didSave` 端到端触发已于第 160 轮接线**（见下下条）——编辑器内保存即触发服务端语义诊断
@@ -84,7 +92,7 @@
 
 - `zzc.lspPath`：指向 `zzc` 可执行文件的路径（留空则用 PATH 上的 `zzc`）。装到非默认位置或开发态未装入
   PATH 时，此项是扩展能否拉起服务器的唯一开关；拉起失败会有明确错误提示指向此项。
-- `zzc.lang`（第 163 轮）：方言包名（同 `zzc --lang`，如 `繁体`；留空＝内置默认包中文）。修改后经
+- `zzc.lang`（第 163 轮）：方言包名（同 `zzc --lang`，如 `zh` 或第三方包名；内置繁体字形已并入默认包）。修改后经
   `onDidChangeConfiguration` 自动重启语言服务器，悬停/诊断/语义 token 词汇随即按该方言供词。非法值由
   服务端既有报错处理（stderr 落「zzc lsp」输出面板），客户端不重复校验。
 - `zzc.langOverlay`（第 267 轮）：第三方库叠加层文件路径（同 `zzc --lang-overlay`，如
@@ -124,7 +132,9 @@ zig build check-editor-snippets  # CI 守卫：校验 snippets 与包同步
 
 ## 路线图（后续轮次）
 
-- ~~补全（completion provider）~~ 已于第 155 轮以声明式 snippet 落地（从语言包同源取词）
+- ~~补全（completion provider）~~ 声明式 snippet 已于第 155 轮落地（从语言包同源取词）；LSP 上下文补全已于
+  第 279 轮落地（`textDocument/completion` + `CompletionItemProvider`，四源候选、点链带 `textEdit`、200 条截断
+  标 `isIncomplete`，`check-demos` 客户端节四枚正向针 + FIFO smoke id20/21/22 钉住）
 - ~~LSP 协议集成~~ 服务器核已于第 156 轮落地（`zzc lsp`：悬停/快路诊断/文档同步），VS Code 客户端接线
   已于第 157 轮落地（零依赖扩展宿主 spawn `zzc lsp`、接诊断推送与悬停）
 - ~~待办：语义级编译诊断接入 LSP~~ 服务端 on-save 已于第 159 轮落地；客户端翻 `didSave:true`、保存端到端触发

@@ -21,7 +21,7 @@ jobs:
       - name: 检出源码
         uses: checkout-action@0.0.1
 
-      - name: 装 Zig 0.17 并跑全量门禁（fmt / build / test / LSP 长连接 / 跨目标）
+      - name: 装 Zig 0.17 并跑全量门禁（fmt / build / test / LSP 长连接 / 客户端 e2e / 跨目标）
         run: |
           set -e
           cd repo_workspace
@@ -38,11 +38,27 @@ jobs:
           zig build
           # 3) 单元与快照测试（双测试图；5 个跨文件守卫步已挂 test_step，不再重复跑）
           timeout 900 zig build test --summary all
-          # 4) LSP 长连接 e2e（D128/267/268/270/272/273/274/275/276/277）：保持 stdin 打开，断言 initialize/didOpen/hover/
-          #    documentSymbol/definition/references/overlay-hover/codeAction/source-fixAll/foldingRange(comment)/rename/documentHighlight/prepareRename/workspaceSymbol/signatureHelp/selectionRange/shutdown（overlay 用 contrib/packs/httpz-中文.txt）。
+          # 3.5) demo 示例编译/运行冒烟（D156/第 297 轮）：六枚 demo 是用户照抄面（书稿 quickstart
+          #      同源），而 check-demos.ps1 基线因本机 NO_PWSH、运行器亦无 pwsh 步从未被任何通道执行
+          #      （探针实锤 demo 编译坏形后四门禁零信号）——本步为 Linux/CI 常驻编译防线。
+          timeout 120 bash tools/demos-smoke.sh
+          # 4) LSP 长连接 e2e（D128/267/268/270/272/273/274/275/276/277/279）：保持 stdin 打开，断言 initialize/didOpen/hover/
+          #    documentSymbol/definition/references/overlay-hover/codeAction/source-fixAll/foldingRange(comment)/rename/documentHighlight/prepareRename/workspaceSymbol/signatureHelp/selectionRange/completion/shutdown（overlay 用 contrib/packs/httpz-中文.txt）。
           #    既有 ps1 e2e 用文件重定向（启动即 EOF），只覆盖批量路径，覆盖不到真实客户端。
           timeout 30 sh tools/lsp-live-smoke.sh
-          # 5) 优化档与跨目标构建（只验编译，不跑测试；产物落 /tmp，避免污染工作树）
+          # 5) 客户端 e2e（D128/278/279）：node 桩注入 vscode API、真起 zzc lsp 子进程，逐 provider
+          #    断言「客户端重建后的返回值」（含第 279 轮 textDocument/completion）。与 ps1 守卫分工：
+          #    check-demos.ps1 只在 Windows PowerShell 跑，Linux CI 从来吃不到（D98 记为
+          #    NO_PWSH＋GitCode 双盲→静默腐坏判例），本步让同一份 extension.js 在 Linux 上被验。
+          #    运行器若无 node，按 zig 同款做法拉钉死版本（失败即红，绝不静默跳过）。
+          if ! command -v node >/dev/null 2>&1; then
+            curl -sLO "https://nodejs.org/dist/v20.19.2/node-v20.19.2-linux-x64.tar.xz"
+            tar -xf node-v20.19.2-linux-x64.tar.xz
+            export PATH="$PWD/node-v20.19.2-linux-x64/bin:$PATH"
+          fi
+          node --version
+          timeout 300 node tools/extension-smoke.js
+          # 6) 优化档与跨目标构建（只验编译，不跑测试；产物落 /tmp，避免污染工作树）
           zig build -Doptimize=ReleaseSafe --prefix /tmp/zzc-ci-rel
           zig build -Dtarget=x86_64-windows --prefix /tmp/zzc-ci-win
           zig build -Dtarget=aarch64-macos --prefix /tmp/zzc-ci-mac

@@ -109,7 +109,9 @@ pub const builtin_pack_cwd_rel: []const u8 = src_dir ++ "/" ++ builtin_pack_embe
 
 /// 一次对面核对项（needle 与「分道即何为」说明）：`machine_matcher` 的 `checkFace` 以 anytype 只读
 /// `.needle`/`.why` 两字段、跨 hub 复用同一判据（同 `lang_identity.FaceCheck` 形制，不另立第三套搜索逻辑）。
-pub const BuildFace = struct { needle: []const u8, why: []const u8 };
+/// 应现枚数 `occ` 缺省 1（presence 语义不变）；第 321 轮 D180 与 pack.FaceCheck／jsonrpc／lang_identity／
+/// vsix 四面族对齐补上该字段——双址以上之针可显式要 2、3 枚，守卫不再只看「在不在」。
+pub const BuildFace = struct { needle: []const u8, why: []const u8, occ: usize = 1 };
 
 /// 对面二十一·`build.zig` 的内置默认包 `addFileArg` 路径（第 238 轮 D106）：`build.zig` 系构建脚本独立
 /// 编译单元、无法 `@import` 本 hub，故 needle 由 `builtin_pack_cwd_rel` 派生、守卫读 `build.zig` 逐字节对账——
@@ -297,6 +299,337 @@ pub fn zonDeclaresVersion(text: []const u8) bool {
     const needle = ".version = \"" ++ zzc_version ++ "\"";
     return std.mem.indexOf(u8, text, needle) != null;
 }
+
+/// 仓根 README（用户第一眼读的入口文档）的相对路径（第 296 轮 D155）：守卫的 addFileArg
+/// needle 由此派生，文档改名不留第二处手抄。
+pub const readme_path: []const u8 = "README.md";
+
+/// 对面三十二·`README.md` 版本族 needle 清单（第 296 轮 D155）：README 以多点位手抄产品版本
+/// （本模块 `zzc_version`）与工具链版本（`zig_version`/`zig_series`），而全仓门禁从不读 README——
+/// t2 探针（落码前）五形注入（当前版本 0.1.0→0.2.0／基线 0.17.0→0.16.0 两处／环境表行／
+/// `zzc version` 样例行／扩展 `v0.5.0`→`v0.4.0`）后 `zig fmt` 0／`zig build` 0／`zig build test`
+/// 17/17／matcher OK 一律零信号，活体 `zzc version` 与 README 样例行实地分道（文档宣称 0.2.0、
+/// 真跑报 0.1.0）。判据全数在此：needle 由族真值 comptime 派生，升代（改 hub）与文档独漂皆在
+/// 对面转红；守卫只读文件与计枚（承 203/205/210 轮「判据入 hub、守卫只做 I/O」形制）。
+/// 扩展版本族（`v0.5.0`／`zzc-dialect-0.5.0.vsix`）真值在 `package.json`，判据入 `src/vsix.zig`；
+/// `zzc version` 样例行形制入 `cli/args.zig` 的 `version_line_fmt`（皆同属本对面三十二）。
+pub const readme_face = [_]BuildFace{
+    .{ .needle = "当前版本：`" ++ prog_name ++ " " ++ zzc_version ++ "`", .why = "README 首屏宣称的产品版本须等于 `zzc version` 出口真值——分道即用户照文档认代，看到的却是另一版号（第 296 轮 D155）" },
+    .{ .needle = "**Zig `" ++ zig_version ++ "`**", .why = "工具链基线首屏声明须等于标定族真值——漂即用户装错代 zig，回译标定早警失真（D73 同族的文档侧漏员）" },
+    .{ .needle = "minimum_zig_version = \"" ++ zig_version ++ "\"", .why = "README 引用本仓 zon 的声明形须与 zon 面同源——一侧改代另一侧即指错契约" },
+    .{ .needle = "| **" ++ zig_version ++ "** |", .why = "环境要求表版本列——用户照表装机的落点，漂即装到不匹配版本而构建失败" },
+    .{ .needle = "应输出 " ++ zig_version, .why = "`zig version` 确认行注释——自检指引的版本面，漂即自检永远对不上" },
+    .{ .needle = "Zig " ++ zig_series ++ " 实测", .why = "「经本机实测」系列串声明——文档信誉锚，升代而未复测即在此转红" },
+    .{ .needle = "（" ++ zig_series ++ "）", .why = "扩展前置条件里的运行期 zig 系列版本——与 PATH 上真机版本对账的第三形，漂即扩展用户备错工具链" },
+};
+
+/// 对面三十二·`build.zig` 侧命名针：README 须以 `addFileArg(b.path("<readme_path>"))` 声明为
+/// 守卫的文件依赖——不声明即改 README 不触发守卫重跑（203/210/238 轮同族假绿形制）。
+pub const readme_build_face = [_]BuildFace{
+    .{ .needle = "addFileArg(b.path(\"" ++ readme_path ++ "\"))", .why = "README 输入路径须由 hub 的 readme_path 派生并与 build.zig 的 addFileArg 同源——分道即守卫吃旧文件名，改文档不触发重跑（文档侧恒绿静默）" },
+};
+
+/// 对面三十八·工程方案书与语言包贡献指南的路径单源（第 302 轮 D161）：两面命令样例手抄
+/// `sub_*` 真值而从无针入任何通道——t2 探针（方案书 `zzc eject→emit` 全量 3 行＋README 添鬼词
+/// `zzc wizard`）fmt/build/test/matcher/demos-smoke 五通道零信号实锤；守卫新增读物面须同声明
+/// 文件依赖（203/210/238 轮假绿形制）。
+pub const plan_doc_path: []const u8 = "docs/方案书.md";
+pub const contrib_doc_path: []const u8 = "docs/contributing-lang-pack.md";
+
+/// 对面三十八·`build.zig` 侧两枚命名针：两面皆须 `addFileArg(b.path("<hub 路径>"))` 形入 matcher 步
+///——needle 由路径真值 comptime 派生，文档改名/降片两道皆红。
+pub const doc38_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ plan_doc_path ++ "\"))", .why = "方案书须声明为守卫步文件依赖——不声明即改方案书不触发重跑，假绿形制重播（第 302 轮 D161）" },
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ contrib_doc_path ++ "\"))", .why = "contributing 指南同上形制（第 302 轮 D161）" },
+};
+
+/// 对面四十一·VS Code 扩展 README 路径单源（第 305 轮 D164）：全仓守卫从不读本文件，
+/// 包线（vsix 字节同源）只锁「包↔盘」不锁「README↔真值」语义——命令词/配置键/旗标三面零针，
+/// t2 探针漂后重打包即六道全绿实锤。本面新读入守卫：命令/旗标两面逆向普查添第五面。
+pub const ext_readme_path: []const u8 = "editors/vscode/README.md";
+
+/// 对面四十一·`build.zig` 侧命名针：扩展 README 须声明为 matcher 步文件依赖（步名限定形承 D73）。
+pub const doc41_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ ext_readme_path ++ "\"))", .why = "扩展 README 须声明为守卫步文件依赖——不声明即改文档不触发重跑（第 305 轮 D164）" },
+};
+
+/// 对面四十二·AGENTS.md（AI 编码操作手册）路径单源（第 306 轮 D165）：读者是自动化工具，
+/// 命令词/旗标静默漂的代价是 AI 照手册产出不可编译代码——两面九+五枚正向针与命令/旗标逆向第七面。
+pub const agents_doc_path: []const u8 = "AGENTS.md";
+
+/// 对面四十二·`build.zig` 侧命名针：AGENTS.md 须声明为 matcher 步文件依赖（步名限定形承 D73）。
+pub const doc42_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ agents_doc_path ++ "\"))", .why = "AGENTS.md 须声明为守卫步文件依赖——不声明即改手册不触发重跑（第 306 轮 D165）" },
+};
+
+// —— demo 冒烟防线（第 297 轮 D156）——
+//
+// `tools/check-demos.ps1`（1265 行）的 demo↔eject 基线只在 Windows PowerShell 跑：本机
+// NO_PWSH（D98/D104 判例）、GitCode CI（Euler Linux）亦无 pwsh 步——t2 探针实锤把
+// `demo/hello` 的 `常数` 漂成坏词（活体 `zzc run` RC=1）后 fmt/build/test/matcher 四通道
+// 一律零信号。`tools/demos-smoke.sh` 把「六枚 demo 全量可编可跑、输出逐字节对拍」落成
+// bash/CI 常驻防线；下列单源面把脚本的覆盖面钉死（加 demo 忘接线、删断言臂皆转红）。
+
+/// demo 冒烟脚本路径（CI 与守卫步共用单源）。
+pub const demos_smoke_path: []const u8 = "tools/demos-smoke.sh";
+
+/// 六枚 demo 入口全量表。**独立手设**——不可运行时自动枚举 `demo/` 生成：删一枚 demo
+/// 若表随之自动缩，删除面即空转（同 240 轮 pack 护栏下限判例）；盘上目录与表的双向
+/// 对账由守卫对面三十三完成（盘有表无＝ghost，表有盘无＝hidden）。
+pub const demo_entries = [_][]const u8{
+    "demo/hello/src/main.zz",
+    "demo/multi/src/main.zz",
+    "demo/nested/src/main.zz",
+    "demo/syntax/src/main.zz",
+    "demo/errors/src/main.zz",
+    "demo/fullwidth/src/main.zz",
+};
+
+/// demo 枚数下限（独立手设，与 `demo_entries` 基数、脚本 `EXPECT_CHECKS` 锚三处互锁，
+/// 承 D140 条数锚形制——任一分道即红）。
+pub const demo_count_floor: usize = 6;
+
+/// 冒烟脚本断言条数下限（第 307 轮 D166 解耦新设）：断言数与 demo 入口数是两个量——
+/// 本锚 = 六枚 demo 断言（4 run＋2 diag）＋纯母语行为面 1 臂（AGENTS.md 铁律真跑验，
+/// 探针实锤：拆去 main.zig 纯母语强制臂后五通道全绿而混写源报错错位成后端假语法错）
+/// ＋指定语言行为面 1 臂（第 308 轮 D167：选包链被吞则恒落默认包，763 门禁全绿——
+/// r9g 断言只在 ps1 通道、本机/CI 从未验证；三形互验计一臂）。
+/// 加臂/削臂须两处同动；与 `demo_count_floor`（入口表基数）各司两轴。
+pub const smoke_assert_floor: usize = 20;
+
+/// 不入冒烟网的 demo 目录豁免清单（独立手设，第 297 轮 D156 本闸首跑即抓到真 ghost）：
+/// `demo/httpz` 系第 265 轮叠加层真依赖验证工程——`zig fetch` 外析依赖不入库（`.gitignore` 册）、
+/// 直接 `zzc run` 即常驻监听 8801，不宜入 CI 冒烟；其翻译面由 `tools/lsp-live-smoke.sh` 的
+/// `contrib/packs/httpz-中文.txt` overlay 悬停链钉住。本清单只免 ghost 普查，未免入口验在。
+pub const demo_exempt_dirs = [_][]const u8{"httpz"};
+
+/// 对面三十三·脚本面清单：`demo_entries` 逐枚须被冒烟脚本点名——新增 demo 忘接线
+/// （盘上有、脚本无）或脚本改名分道即红；needle 全由 `demo_entries` comptime 派生。
+pub const demos_smoke_face = blk: {
+    var faces: [demo_entries.len]BuildFace = undefined;
+    for (demo_entries, 0..) |entry, i| {
+        faces[i] = .{ .needle = entry, .why = "demo 入口「" ++ entry ++ "」须被冒烟脚本点名接线——盘有表无即新增 demo 静默脱闸（第 297 轮 D156）" };
+    }
+    break :blk faces;
+};
+
+/// 对面三十三·脚本条数锚针：`EXPECT_CHECKS` 的值段由 `demo_entries` 基数 comptime 派生
+/// ——削一条断言臂而锚不动即脚本自身退坡闸红，改锚不改臂亦红（守卫面再交叉对账）。
+pub const demos_smoke_count_face = [_]BuildFace{
+    .{ .needle = "EXPECT_CHECKS=" ++ std.fmt.comptimePrint("{d}", .{smoke_assert_floor}), .why = "脚本条数锚须等于 hub 断言下限——分道即断言臂被削或臂数脱钩（承 D140 空转防线判例，第 297 轮 D156；第 307 轮 D166 解耦：断言数不再等同入口表基数，纯母语行为面添臂）" },
+};
+
+// —— 对面四十四·指定语言行为面 fixture 路径单源（第 308 轮 D167）——
+//
+// 第八臂（语言指定三形互验）须手抄两枚 fixture 路径；r9g 旧形只在 ps1 里写死，而 ps1 本机/CI
+// 从不跑（D156 判例）——Linux 通道首次接此行为面即在 paths 立单源，脚本手抄侧由守卫胶合。
+
+/// 日语最小方言工程源（对应 `ja_fixture_pack_path` 的映射；ps1 r9g 同用此件）。
+pub const ja_fixture_src_path: []const u8 = "tools/fixtures/proj-ja/src/main.zz";
+
+/// 最小合规外部发行包（B6 契约 13 值，`$code = tst-ja`；不入 packs 扫描面）。
+pub const ja_fixture_pack_path: []const u8 = "tools/fixtures/external-min.txt";
+
+/// 第三方库叠加包（`--lang-overlay` 轴真值件；第 309 轮 D168 第九臂正形/映射源；lsp-live 亦用此件）。
+pub const overlay_pack_path: []const u8 = "contrib/packs/httpz-中文.txt";
+
+/// 对面四十五·`build.zig` 侧第 24 片命名针：叠加包须声明为守卫步文件依赖（run 时读盘对映射）。
+pub const doc45_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ overlay_pack_path ++ "\"))", .why = "叠加包须声明为守卫步文件依赖——不声明即改包不触发重跑、对面四十五吃旧文（第 309 轮 D168）" },
+};
+
+/// 第八/九臂手抄路径与 hub 单源胶合：脚本文本须逐枚含三枚路径字面——fixture/叠加包改名而脚本漏随即红。
+pub const lang_smoke_face = [_]BuildFace{
+    .{ .needle = ja_fixture_src_path, .why = "第八臂正形源路径须与 hub 单源同形——分道即 cp 吃旧路径、臂假红/假绿（第 308 轮 D167）" },
+    .{ .needle = ja_fixture_pack_path, .why = "第八臂包文件路径须与 hub 单源同形——同上" },
+    .{ .needle = overlay_pack_path, .why = "第九臂叠加包路径须与 hub 单源同形（第 309 轮 D168）——分道即 eject 吃旧包、四形假绿" },
+};
+
+/// 对面三十三·`build.zig` 侧命名针：脚本须以 `addFileArg(b.path("<demos_smoke_path>"))` 声明
+/// 为守卫步文件依赖（同 202/203/210/238/296 轮跨文件判例）。
+pub const demos_build_face = [_]BuildFace{
+    .{ .needle = "addFileArg(b.path(\"" ++ demos_smoke_path ++ "\"))", .why = "冒烟脚本输入路径须由 hub 的 demos_smoke_path 派生并与 build.zig 的 addFileArg 同源——分道即守卫吃旧文件名，改脚本不触发重跑（第 297 轮 D156）" },
+};
+
+// —— CI 调用面与 README 命令词面（第 298 轮 D157）——
+//
+// `.gitcode/workflows/ci.yml` 以字面路径调用三枚仓内工具脚本，而 ci.yml 此前只被 D73 步（版本
+// 族）读——matcher 步不读它：改脚本名而忘改 ci.yml，盘上文件在、各 addFileArg 皆不触 ci.yml，
+// 本地全绿而 CI 到推即断（`tools/lsp-live-smoke.sh` 顶注自警在册：「改路径不同步 ci.yml＝恒绿
+// 假守卫」）；同理 README 快跑道 29 处命令样例手抄八枚 `cli.sub_*` 真值，改名即指引静默失效。
+
+/// 仓根 CI 工作流（matcher 步新输入·第 18 片）。
+pub const ci_path: []const u8 = ".gitcode/workflows/ci.yml";
+
+/// LSP 长连接冒烟脚本路径（守卫对面二十三输入·此常量收编 matcher fallback 手抄字面）。
+pub const smoke_sh_path: []const u8 = "tools/lsp-live-smoke.sh";
+
+/// 客户端 e2e 套件路径（守卫对面二十四输入·同上收编）。
+pub const esm_js_path: []const u8 = "tools/extension-smoke.js";
+
+/// 对面三十四·ci.yml 调用面：三枚脚本的执行针形（解释器词＋空格＋路径）全由 hub 路径常量
+/// comptime 派生——脚本改名/移位而 ci.yml 不随动（或反之）即分道转红。
+pub const ci_tools_face = [_]BuildFace{
+    .{ .needle = "sh " ++ smoke_sh_path, .why = "CI 须按 hub 路径调用 LSP 长连接冒烟脚本——分道即本地防线与 CI 防线脱钩，CI 到推即断而本地恒绿（281 轮顶注自警在册，第 298 轮 D157）" },
+    .{ .needle = "node " ++ esm_js_path, .why = "CI 须按 hub 路径调用客户端 e2e——同上形制（D98 Linux 盲区的唯一客户端通道，失联即双盲回潮，第 298 轮 D157）" },
+    .{ .needle = "bash " ++ demos_smoke_path, .why = "CI 须按 hub 路径调用 demo 冒烟——上轮（D156）刚落地的编译防线若改名不随动即静默断链（第 298 轮 D157）" },
+};
+
+/// 对面三十四·`build.zig` 侧命名针：ci.yml 须被 **matcher 步**（而非只 D73 步）声明为文件依赖——
+/// 针形含步名限定，防 D73 同路径片顶针而 matcher 步实未挂（addFileArg 逐 step 生效）。
+pub const ci_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ ci_path ++ "\"))", .why = "ci.yml 须对 matcher 步声明文件依赖——改面不触发重跑即假绿形制（202/203/210/238 轮判例，第 298 轮 D157）" },
+};
+
+// —— 书稿图片引用面（第 299 轮 D158）——
+//
+// 《母语编写Zig》以 `![题](images/<名>.svg)` 引用 docs/images 下九插图，全仓门禁从不校引用名与
+// 盘上文件的双向存在——落码前探针实锤：书稿引用改漂名（盘上断链，印刷即破图）＋盘上新增未被
+// 引用的孤立 svg，fmt/build/test/matcher 四道零信号。本面判据为纯关系式双向普查（无名值手抄面），
+// hub 持四枚形态常量＋抽取/判定纯函数，守卫只做 I/O（复用对面三十一已读书稿·零新增读文件）。
+
+/// 书稿图片所在目录（相对仓根，守卫普查 walk 基准）。
+pub const book_images_dir: []const u8 = "docs/images";
+
+/// 书稿 markdown 引用的固定前缀段（抽取器切点；`images/` 是相对书稿所在 docs/ 的子目录路径）。
+pub const book_images_ref_prefix: []const u8 = "](images/";
+
+/// 图片扩展名（盘上普查过滤＋引用名尾验共用）。
+pub const book_images_suffix: []const u8 = ".svg";
+
+/// 独立手设下限（承 D140/297 条数锚形制，禁从书稿或盘运行时抽取）：增删插图须此处同动。
+pub const book_images_floor: usize = 9;
+
+/// 引用抽取上限：超出即视为异常灌入（如误把非图片链接卷入），防静默吞尾。
+pub const book_images_cap: usize = 32;
+
+/// 书稿图片引用收集结果：`names` 为引用名段（含扩展名，指向 `text` 内部切片），`count` 实计，
+/// `overflow` 表示超出上限（此时 names 只填至 cap）。
+pub const BookImageRefs = struct {
+    names: [book_images_cap][]const u8 = undefined,
+    count: usize = 0,
+    overflow: bool = false,
+};
+
+/// 从书稿文本逐处抽取 `](images/<名>)` 引用名段（纯函数、零 I/O；第 299 轮 D158）。
+/// 每处处理后扫描起点推进至闭括号之后；若名段跨入后续文本（引用未闭合的病态形），
+/// 抽出的含空白/括号串将在守卫侧 access 验在时以 hidden 现形——抽取器不自作容错。
+pub fn collectBookImageRefs(text: []const u8) BookImageRefs {
+    var out = BookImageRefs{};
+    var rest = text;
+    var rest_base: usize = 0; // rest 在 text 中的绝对起点，使 names 直指 text 内部切片
+    while (std.mem.indexOf(u8, rest, book_images_ref_prefix)) |pos| {
+        const start = rest_base + pos + book_images_ref_prefix.len;
+        const after = text[start..];
+        const end = std.mem.indexOfScalar(u8, after, ')') orelse break; // 后再无闭括号即止
+        if (out.count < book_images_cap) {
+            out.names[out.count] = after[0..end];
+            out.count += 1;
+        } else {
+            out.overflow = true;
+        }
+        rest_base = start + end + 1;
+        rest = text[rest_base..];
+    }
+    return out;
+}
+
+/// 书稿是否声明了某枚图片引用（盘上→书稿方向的逐枚判定；runtime 名段经 bufPrint 组形，
+/// 承 296 轮 `++` 只吃 comptime 的约束）。形如 `](images/<名>.svg)` 全串命中才算。
+pub fn bookDeclaresImage(text: []const u8, stem: []const u8) bool {
+    var buf: [256]u8 = undefined;
+    const needle = std.fmt.bufPrint(&buf, "{s}{s}{s})", .{ book_images_ref_prefix, stem, book_images_suffix }) catch return false;
+    return std.mem.indexOf(u8, text, needle) != null;
+}
+
+// —— 书稿 demo 引用面（第 300 轮 D159）——
+//
+// 书稿附录 L1477 以反引号点名六枚 demo 目录（`demo/hello` 等）——hub 表与冒烟脚本之外的**第三份手抄**；
+// 快跑道 L100～L134 又逐字节引 hello 源码体与输出串（「数量是：11」）——297 轮冒烟只钉盘上实跑，
+// 书稿侧独漂即印刷变谎。落码前探针实锤：书稿输出改「十一」＋`demo/syntax→synta` 两形同注，
+// fmt/build/test/matcher/demos-smoke 五通道零信号。本面判据：正向 hub 表逐枚反引号形 needle 派生（书稿
+// 须点名）＋逆向抽取器防 ghost 名＋hello 源体（去首行注释）与冒烟期望串逐字节在场。
+
+/// 书稿反引号点名的目录前缀段（抽取器切点：`` `demo/<名>` ``）。
+pub const book_demo_ref_prefix: []const u8 = "`demo/";
+
+/// 书稿 demo 名抽取上限（防异常灌入；现盘上恰六枚）。
+pub const book_demo_cap: usize = 16;
+
+pub const BookDemoRefs = struct {
+    names: [book_demo_cap][]const u8 = undefined,
+    count: usize = 0,
+    overflow: bool = false,
+};
+
+/// 从书稿文本逐处抽取 `` `demo/<名>` `` 反引号形目录名段（纯函数零 I/O；第 300 轮 D159）。
+/// 段为空（`` `demo/` `` 泛引用）或含 '/'、'*'（子路径/通配形）者视为泛指不入集——只集具体目录名。
+pub fn collectBookDemoRefs(text: []const u8) BookDemoRefs {
+    var out = BookDemoRefs{};
+    var rest = text;
+    var rest_base: usize = 0;
+    while (std.mem.indexOf(u8, rest, book_demo_ref_prefix)) |pos| {
+        const start = rest_base + pos + book_demo_ref_prefix.len;
+        const after = text[start..];
+        const end = std.mem.indexOfScalar(u8, after, '`') orelse break;
+        const seg = after[0..end];
+        if (seg.len > 0 and std.mem.indexOfScalar(u8, seg, '/') == null and
+            std.mem.indexOfScalar(u8, seg, '*') == null)
+        {
+            if (out.count < book_demo_cap) {
+                out.names[out.count] = seg;
+                out.count += 1;
+            } else {
+                out.overflow = true;
+            }
+        }
+        rest_base = start + end + 1;
+        rest = text[rest_base..];
+    }
+    return out;
+}
+
+/// 去首行取体（hello 引用对拍用：书稿引文首行为缩短注释、源码首行为指引全注——有意差异面，
+/// 其余行须逐字节同形；无换行符即整文件为一行，回 null）。纯函数零 I/O（第 300 轮 D159）。
+pub fn stripFirstLine(text: []const u8) ?[]const u8 {
+    const nl = std.mem.indexOfScalar(u8, text, '\n') orelse return null;
+    return text[nl + 1 ..];
+}
+
+/// 从冒烟脚本抽 `assert_run <entry> "<期望>"` 行的期望串（双引号间段）——期望真值单源在脚本
+/// 期望表（297 轮独立手抄面），本判据只抽不造；无此行/无成对引号回 null（第 300 轮 D159）。
+pub fn smokeExpectFor(script: []const u8, entry: []const u8) ?[]const u8 {
+    var rest = script;
+    while (std.mem.indexOf(u8, rest, "assert_run ")) |pos| {
+        const line = rest[pos + "assert_run ".len ..];
+        rest = if (std.mem.indexOfScalar(u8, line, '\n')) |nl| line[nl + 1 ..] else "";
+        if (std.mem.startsWith(u8, line, entry)) {
+            const q1 = std.mem.indexOfScalar(u8, line, '"') orelse return null;
+            const q2 = std.mem.indexOfScalar(u8, line[q1 + 1 ..], '"') orelse return null;
+            return line[q1 + 1 .. q1 + 1 + q2];
+        }
+    }
+    return null;
+}
+
+/// 对面三十六·正向点名针：六枚 demo 目录须以反引号形现于书稿——needle 由 `demo_entries` 首两段
+/// comptime 派生（表改名即书稿旧名针落空红；书稿独改名由抽取器 ghost 闸捕——双向互拦）。
+pub const book_demo_face = blk: {
+    var faces: [demo_entries.len]BuildFace = undefined;
+    for (demo_entries, 0..) |entry, i| {
+        const first = std.mem.indexOfScalar(u8, entry, '/').?;
+        const second = std.mem.indexOfScalar(u8, entry[first + 1 ..], '/').?;
+        const dir = entry[0 .. first + 1 + second]; // 「demo/<名>」前两段
+        faces[i] = .{ .needle = "`" ++ dir ++ "`", .why = "书稿附录/推荐面须以反引号点名枚枚 demo 目录（与 hub 表同源）——目录改名/删除而书稿不随动即读者照抄报不存在路径（第 300 轮 D159）" };
+    }
+    break :blk faces;
+};
+
+/// 对面三十六·hello 引用体对拍的盘上读取面：守卫需**全文**读 demo 源（非 297 轮限读 1 字节的验在形），
+/// 故该源文件须对 matcher 步声明文件依赖（承 202/203/210/238 轮跨文件判例）。
+pub const bookdemo_build_face = [_]BuildFace{
+    .{ .needle = "addFileArg(b.path(\"" ++ demo_entries[0] ++ "\"))", .why = "hello 源须被 matcher 步 addFileArg 声明——逐字节对拍读的改面不触发重跑即假绿（第 300 轮 D159）" },
+};
 
 /// 从文本中抽 `.minimum_zig_version = "…"` 引号之间的值段（第 205 轮 D73 的守卫判据，纯函数）。
 /// 字段名缺、值非字符串形（无成对引号）皆 null；本仓只用单层引号形，故不实现转义与多行串。
@@ -638,4 +971,232 @@ test "第 241 轮 T0 母语词字节集单一真值：全 256 字节 iff 穷举 
     try std.testing.expect(isWordByte(0xFF));
     try std.testing.expect(!isWordByte(0x7F));
     try std.testing.expect(!isWordByte('-'));
+}
+
+test "第 296 轮 T0 README 版本族对面：readme_path 值钉＋七枚 needle 独立字面量对拍＋基数钉＋build 针形钉（D155）" {
+    // A1 路径值钉：README 文件名是守卫 addFileArg 与本族 needle 的入口，不复用常量、直接写死（196/197 通则）。
+    try std.testing.expectEqualStrings("README.md", readme_path);
+
+    // A2 七枚 needle 与独立手抄的期望字面逐字节对拍（want 表不引用族常量：族真值漂则 needle 随漂、
+    //    与 want 失配即红；README 侧独漂则由守卫对面三十二红——双向互备，承 227 T0 want 表形制）。
+    const want = [_][]const u8{
+        "当前版本：`zzc 0.1.0`",
+        "**Zig `0.17.0`**",
+        "minimum_zig_version = \"0.17.0\"",
+        "| **0.17.0** |",
+        "应输出 0.17.0",
+        "Zig 0.17 实测",
+        "（0.17）",
+    };
+    try std.testing.expectEqual(want.len, readme_face.len); // A3 基数钉：增删 needle 须同步 want 表与本钉
+    inline for (readme_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want[i], c.needle);
+    }
+
+    // A4 build 侧命名针形钉：addFileArg 声明形由 readme_path 派生，与 build.zig 实文对账在守卫面；
+    //    此处钉住派生形本身——路径拼接改形（漏引号/漏括号）在此现形。
+    try std.testing.expectEqual(@as(usize, 1), readme_build_face.len);
+    try std.testing.expectEqualStrings("addFileArg(b.path(\"README.md\"))", readme_build_face[0].needle);
+}
+
+test "第 297 轮 T0 demo 冒烟防线单源：路径/入口表独立字面量对拍＋三处互锁＋脚本面针形钉（D156）" {
+    // A1 路径与枚数值钉（独立手抄，不从派生式自证）。
+    try std.testing.expectEqualStrings("tools/demos-smoke.sh", demos_smoke_path);
+    try std.testing.expectEqual(@as(usize, 6), demo_count_floor);
+    // A2 入口表与独立手抄 want 表逐字节对拍（增删 demo 须三处同动：表、want、下限）。
+    const want = [_][]const u8{
+        "demo/hello/src/main.zz",
+        "demo/multi/src/main.zz",
+        "demo/nested/src/main.zz",
+        "demo/syntax/src/main.zz",
+        "demo/errors/src/main.zz",
+        "demo/fullwidth/src/main.zz",
+    };
+    try std.testing.expectEqual(want.len, demo_entries.len); // 基数钉
+    inline for (demo_entries, 0..) |entry, i| {
+        try std.testing.expectEqualStrings(want[i], entry);
+    }
+    // A3 三处互锁（承 D140）：表基数 == 独立下限——同删同缩即此钉红，盘上双向对账在守卫面。
+    try std.testing.expectEqual(demo_count_floor, demo_entries.len);
+    // A4 脚本面清单派生钉：逐枚 needle 等于入口表、条数锚针形钉、build 命名针形钉。
+    try std.testing.expectEqual(demo_entries.len, demos_smoke_face.len);
+    inline for (demos_smoke_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(demo_entries[i], c.needle);
+    }
+    try std.testing.expectEqual(@as(usize, 1), demos_smoke_count_face.len);
+    try std.testing.expectEqualStrings("EXPECT_CHECKS=20", demos_smoke_count_face[0].needle); // 逐轮随动：锚跟断言下限（旧值 6→…→19→20）
+    try std.testing.expectEqual(@as(usize, 1), demos_build_face.len);
+    try std.testing.expectEqualStrings("addFileArg(b.path(\"tools/demos-smoke.sh\"))", demos_build_face[0].needle);
+    // A5 豁免清单值钉（独立手抄）：本闸首跑抓到的真 ghost `demo/httpz` 须显式在册未免——
+    //    新增豁免须同时动表与此钉，禁默默扩网。
+    try std.testing.expectEqual(@as(usize, 1), demo_exempt_dirs.len);
+    try std.testing.expectEqualStrings("httpz", demo_exempt_dirs[0]);
+}
+
+test "第 298 轮 T0 CI 调用面：三枚路径值钉＋执行针与独立 want 表对拍＋matcher 步命名针形钉（D157）" {
+    // A1 路径值钉（独立手抄）：ci 工作流与两枚新收编脚本路径——改名须此处同动。
+    try std.testing.expectEqualStrings(".gitcode/workflows/ci.yml", ci_path);
+    try std.testing.expectEqualStrings("tools/lsp-live-smoke.sh", smoke_sh_path);
+    try std.testing.expectEqualStrings("tools/extension-smoke.js", esm_js_path);
+    // A2 执行针派生形对拍：want 表独立手抄（与 ci.yml 盘上调用行同源而不经 hub）——
+    //    hub 路径/解释器词任一分道即此钉红；盘上 ci.yml 独漂由守卫对面三十四捕。
+    const want = [_][]const u8{
+        "sh tools/lsp-live-smoke.sh",
+        "node tools/extension-smoke.js",
+        "bash tools/demos-smoke.sh",
+    };
+    try std.testing.expectEqual(want.len, ci_tools_face.len); // A3 基数钉
+    inline for (ci_tools_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want[i], c.needle);
+    }
+    // A4 matcher 步命名针形钉：含步名限定，防 D73 同路径片顶针而 matcher 步实未挂。
+    try std.testing.expectEqual(@as(usize, 1), ci_build_face.len);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\".gitcode/workflows/ci.yml\"))",
+        ci_build_face[0].needle,
+    );
+}
+
+test "第 299 轮 T0 书稿图片面：形态常量值钉＋抽取器/声明判据合成小样正反形（D158）" {
+    // A1 形态常量值钉（独立手抄）：目录/引用前缀/扩展名/下限/上限——任一改动须此处同动。
+    try std.testing.expectEqualStrings("docs/images", book_images_dir);
+    try std.testing.expectEqualStrings("](images/", book_images_ref_prefix);
+    try std.testing.expectEqualStrings(".svg", book_images_suffix);
+    try std.testing.expectEqual(@as(usize, 9), book_images_floor);
+    try std.testing.expect(book_images_floor < book_images_cap); // A2 关系钉：下限必低于上限，否则溢出闸与下限闸重叠吞形
+    // A3 抽取器正形：合成小样两枚引用，名段含扩展名逐字节钉；非图链接（无 images/ 前缀）不入。
+    const sample = "![甲](images/a.svg) 正文 [跳](other/b.md) ![乙](images/c.svg)";
+    const got = collectBookImageRefs(sample);
+    try std.testing.expectEqual(@as(usize, 2), got.count);
+    try std.testing.expect(!got.overflow);
+    try std.testing.expectEqualStrings("a.svg", got.names[0]);
+    try std.testing.expectEqualStrings("c.svg", got.names[1]);
+    // A4 未闭合跨段正形：首引用缺自身 ')' 时名段跨吸入后续直至下个 ')' 的病态串——抽取器不
+    // 自作容错，该病态名必在守卫侧 access 验在时以 hidden 现形（推进点只认闭括号，不重复卷入）。
+    const broken = "![甲](images/a.svg ![乙](images/c.svg)";
+    const bgot = collectBookImageRefs(broken);
+    try std.testing.expectEqual(@as(usize, 1), bgot.count);
+    try std.testing.expectEqualStrings("a.svg ![乙](images/c.svg", bgot.names[0]);
+    // A5 溢出正形：超过 cap 枚时 overflow 置位且 names 只填至 cap，禁静默吞尾。
+    var many: [1024]u8 = undefined;
+    var mlen: usize = 0;
+    var mi: usize = 0;
+    while (mi < book_images_cap + 2) : (mi += 1) {
+        const seg = std.fmt.bufPrint(many[mlen..], "![x](images/{d}.svg)", .{mi}) catch unreachable;
+        mlen += seg.len;
+    }
+    const mgot = collectBookImageRefs(many[0..mlen]);
+    try std.testing.expect(mgot.overflow);
+    try std.testing.expectEqual(book_images_cap, mgot.count);
+    // A6 声明判据正反形：全串 `](images/<名>.svg)` 命中才算；近似名（前缀包含）不得误命中。
+    try std.testing.expect(bookDeclaresImage(sample, "a"));
+    try std.testing.expect(bookDeclaresImage(sample, "c"));
+    try std.testing.expect(!bookDeclaresImage(sample, "b")); // 非图链接名不入
+    try std.testing.expect(!bookDeclaresImage(sample, "a2")); // 反锚：若引用形改为无名尾验的宽匹配，此钉即红
+}
+
+test "第 300 轮 T0 书稿 demo 引用面：六枚点名针 want 对拍＋三枚纯函数合成小样正反形（D159）" {
+    // A1 点名针派生形对拍：want 表独立手抄（反引号形全串）——hub 表/前两段切形任一改动即此钉红。
+    const want = [_][]const u8{
+        "`demo/hello`",
+        "`demo/multi`",
+        "`demo/nested`",
+        "`demo/syntax`",
+        "`demo/errors`",
+        "`demo/fullwidth`",
+    };
+    try std.testing.expectEqual(want.len, book_demo_face.len); // A2 基数钉：与 hub 入口表同骨
+    inline for (book_demo_face, 0..) |c, i| {
+        try std.testing.expectEqualStrings(want[i], c.needle);
+    }
+    // A3 build 针形钉：hello 源须被 matcher 步 addFileArg（派生形与独立手拄全串对拍）。
+    try std.testing.expectEqual(@as(usize, 1), bookdemo_build_face.len);
+    try std.testing.expectEqualStrings(
+        "addFileArg(b.path(\"demo/hello/src/main.zz\"))",
+        bookdemo_build_face[0].needle,
+    );
+    try std.testing.expectEqual(@as(usize, 16), book_demo_cap);
+    // A4 抽取器正形：具体名入集；泛引用 `demo/`、通配 `demo/*`、子路径 `demo/a/b` 皆不入。
+    const sample = "文本 `demo/hello`、`demo/` 、`demo/*` 与 `demo/a/b` 尾 `demo/multi`";
+    const got = collectBookDemoRefs(sample);
+    try std.testing.expectEqual(@as(usize, 2), got.count);
+    try std.testing.expectEqualStrings("hello", got.names[0]);
+    try std.testing.expectEqualStrings("multi", got.names[1]);
+    // A5 去首行正反形：多行回体（不含首行）；单行无换行回 null。
+    try std.testing.expectEqualStrings("b\nc", stripFirstLine("a\nb\nc").?);
+    try std.testing.expectEqual(null, stripFirstLine("single"));
+    // A6 期望抽取正反形：命中行取双引号间串；非目标 entry/无引号形回 null。
+    const script = "其他行\nassert_run demo/hello/src/main.zz \"数量是：11\"\nassert_run demo/multi/src/main.zz \"结果=42\"\n";
+    try std.testing.expectEqualStrings("数量是：11", smokeExpectFor(script, "demo/hello/src/main.zz").?);
+    try std.testing.expectEqualStrings("结果=42", smokeExpectFor(script, "demo/multi/src/main.zz").?);
+    try std.testing.expectEqual(null, smokeExpectFor(script, "demo/nested/src/main.zz"));
+    try std.testing.expectEqual(null, smokeExpectFor("assert_run x 无引号", "x"));
+}
+
+test "第 302 轮 T0 两面文档路径单源：值钉＋doc38_build_face 基数/形钉（D161）" {
+    // 路径值钉：want 独立手抄——hub 侧改名即红，守卫 fallback 与 build 片同此真值。
+    try std.testing.expectEqualStrings("docs/方案书.md", plan_doc_path);
+    try std.testing.expectEqualStrings("docs/contributing-lang-pack.md", contrib_doc_path);
+    try std.testing.expectEqual(@as(usize, 2), doc38_build_face.len); // 基数钉：两面各一枚，防面膨/降臂
+    // 针形钉：want 逐字节对拍（含步名限定形——D73 同路径片不顶 matcher 步的教训沿形）。
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"docs/方案书.md\"))",
+        doc38_build_face[0].needle,
+    );
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"docs/contributing-lang-pack.md\"))",
+        doc38_build_face[1].needle,
+    );
+}
+
+test "第 305 轮 T0 扩展 README 路径单源：值钉＋doc41 步名针 want 对拍（D164）" {
+    // A1 路径值独立手抄对拍——hub 侧改名即红，守卫 fallback 与 build 第 22 片同此真值。
+    try std.testing.expectEqualStrings("editors/vscode/README.md", ext_readme_path);
+    // A2 一枚针基数＋want 逐字节对拍（步名限定形沿 D73）。
+    try std.testing.expectEqual(@as(usize, 1), doc41_build_face.len);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"editors/vscode/README.md\"))",
+        doc41_build_face[0].needle,
+    );
+}
+
+test "第 306 轮 T0 AGENTS.md 路径单源：值钉＋doc42 步名针 want 对拍（D165）" {
+    try std.testing.expectEqualStrings("AGENTS.md", agents_doc_path);
+    try std.testing.expectEqual(@as(usize, 1), doc42_build_face.len);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"AGENTS.md\"))",
+        doc42_build_face[0].needle,
+    );
+}
+
+test "第 307 轮 T0 断言条数锚解耦：值钉＋两轴关系钉＋count 针随动（D166）" {
+    // A1 独立值钉：断言下限逐轮随臂（8→9 第 309 轮第九臂）与入口下限 6 各司两轴。
+    try std.testing.expectEqual(@as(usize, 20), smoke_assert_floor);
+    try std.testing.expectEqual(@as(usize, 6), demo_count_floor);
+    try std.testing.expectEqual(demo_entries.len, demo_count_floor); // 入口轴仍与表基数同数
+    try std.testing.expect(smoke_assert_floor > demo_entries.len); // 断言轴已解耦：添臂后必大于入口数
+    // A2 条数针随动：needle 值跟断言下限（漂值即脚本对账红）。
+    try std.testing.expectEqualStrings("EXPECT_CHECKS=20", demos_smoke_count_face[0].needle); // 第 321 轮 D180 第二十臂添臂随动（旧值 19）
+}
+
+test "第 308 轮 T0 指定语言行为面：fixture 两路径值钉＋面对账基数（D167）" {
+    // A1 独立手抄对拍：两枚 fixture 路径字面（判据不取自盘上文件，盘上存在性由第八臂真跑坐实）。
+    try std.testing.expectEqualStrings("tools/fixtures/proj-ja/src/main.zz", ja_fixture_src_path);
+    try std.testing.expectEqualStrings("tools/fixtures/external-min.txt", ja_fixture_pack_path);
+    // A2 面基数与 needle 同源钉：三枚（第 309 轮扩叠加包路径），needle 逐枚等对应路径常量。
+    try std.testing.expectEqual(@as(usize, 3), lang_smoke_face.len);
+    try std.testing.expectEqualStrings(ja_fixture_src_path, lang_smoke_face[0].needle);
+    try std.testing.expectEqualStrings(ja_fixture_pack_path, lang_smoke_face[1].needle);
+    try std.testing.expectEqualStrings(overlay_pack_path, lang_smoke_face[2].needle);
+    // A3 反形：臆造改名形不在单源。
+    try std.testing.expect(!std.mem.eql(u8, ja_fixture_pack_path, "tools/fixtures/external-min2.txt"));
+}
+
+test "第 309 轮 T0 叠加包路径单源：值钉＋doc45 步名针 want 对拍（D168）" {
+    try std.testing.expectEqualStrings("contrib/packs/httpz-中文.txt", overlay_pack_path);
+    try std.testing.expectEqual(@as(usize, 1), doc45_build_face.len);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"contrib/packs/httpz-中文.txt\"))",
+        doc45_build_face[0].needle,
+    );
 }

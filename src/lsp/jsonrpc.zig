@@ -151,9 +151,13 @@ pub fn asciiLower(comptime s: []const u8) [s.len]u8 {
 }
 
 /// 一次对面核对项：逐字节 needle 与「分道即何为」说明（与 215/216 轮同形制）。
+/// `occ` 为「该 needle 在对面至少应现的枚数」，缺省 1＝presence 语义（承旧 `!missing`）；>1 用于
+/// 同形多枚 token 的逐枚对账（248 轮 D115 形制，判据本体见 `lang_identity.FaceCheck` 注释）——
+/// 只核首现的 presence 判据在同形两处手抄面上会漏核次现，计数下界把该面转为逐枚对账。
 pub const FaceCheck = struct {
     needle: []const u8,
     why: []const u8,
+    occ: usize = 1,
 };
 
 /// 对面·`client_frames.js`：上限／写侧头名／写侧分隔符／读侧头名／读侧分隔符。

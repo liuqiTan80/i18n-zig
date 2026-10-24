@@ -64,10 +64,10 @@ zzc 做三件事：
 
 ## 特性
 
-- **多语言包**：内置 `中文`、`繁体`；`# @` 头指令声明式注册，新增/改包由构建系统自动刷新。
+- **多语言包**：内置中文（`zh`，简繁字形同包；`繁体.txt` 为叠加层、非独立可选包）；`# @` 头指令声明式注册，新增/改包由构建系统自动刷新。
 - **外部包免重编译**：`zzc lang add <文件>` 把第三方语言包装入当前工程，运行期选包。
 - **母语报错**：错误消息与提示本地化，`--machine` 输出供编辑器 / CI 逐行正则消费。
-- **编辑器集成**：VS Code 扩展提供语法高亮、补全、问题匹配、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 全角标点快速修复（含保存时批量）/ 文档大纲 / 代码折叠（含注释块） / 语义诊断 / 语义 token 着色 / 方言切换。
+- **编辑器集成**：VS Code 扩展提供语法高亮、补全、问题匹配、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 上下文补全 / 全角标点快速修复（含保存时批量）/ 文档大纲 / 代码折叠（含注释块） / 语义诊断 / 语义 token 着色 / 方言切换。
 - **导出毕业**：`zzc eject` 把方言工程导出为一份可独立 `zig build` 的标准 Zig 工程。
 - **工程化**：上万行 Zig、数百个测试、跨文件同步守卫、以「消缺工单 + 演进轮次」记账的持续治理（详见下文与 `docs/`）。
 
@@ -190,9 +190,9 @@ zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认
 
 ## VS Code 插件
 
-扩展位于 [`editors/vscode/`](editors/vscode/)，包名 `zzc-dialect`（`v0.3.0`）。**零 npm 依赖**——扩展宿主（`extension.js` + `client_frames.js`）自行 spawn `zzc lsp` 并按 LSP 基座协议收发帧，无需 `npm install`。
+扩展位于 [`editors/vscode/`](editors/vscode/)，包名 `zzc-dialect`（`v0.5.0`）。**零 npm 依赖**——扩展宿主（`extension.js` + `client_frames.js`）自行 spawn `zzc lsp` 并按 LSP 基座协议收发帧，无需 `npm install`。
 
-提供：`.zz` 语法高亮、方言关键词/别名补全、`zzc check --machine` 问题匹配器、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 全角快速修复（含保存时 source.fixAll）/ 文档大纲 / 代码折叠（含注释块） / 快路诊断 / 保存触发的语义级编译诊断 /  语义 token 着色 / 多方言切换。
+提供：`.zz` 语法高亮、方言关键词/别名补全、`zzc check --machine` 问题匹配器、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 上下文补全 / 全角快速修复（含保存时 source.fixAll）/ 文档大纲 / 代码折叠（含注释块） / 快路诊断 / 保存触发的语义级编译诊断 /  语义 token 着色 / 多方言切换。
 
 ### 前置条件
 
@@ -214,18 +214,31 @@ code editors/vscode          # 用 VS Code 打开扩展目录
 
 ```sh
 cd editors/vscode
-npx @vscode/vsce package                 # 生成 zzc-dialect-0.3.0.vsix
-code --install-extension zzc-dialect-0.3.0.vsix
+npx @vscode/vsce package                 # 生成 zzc-dialect-0.5.0.vsix
+code --install-extension zzc-dialect-0.5.0.vsix
 ```
 
 > `@vscode/vsce` 是官方扩展打包工具，首次运行会经 npm 拉取（需联网）。
+
+无 npm 环境可用仓库自带的确定性打包器：从 `package.json` 单源生成清单、固定时间戳并按名排序，同内容 sha256 可复现：
+
+```sh
+python3 tools/build-vsix.py                # → editors/vscode/zzc-dialect-0.5.0.vsix
+```
+
+打包后可用 `tools/extension-smoke.js` 做客户端 e2e（加载真实 `extension.js`、真起 `zzc lsp`，89 项断言覆盖诊断与 13 个 provider；条数由套件内 `EXPECT_CHECKS` 锚与 `check-machine-matcher` 守卫跨侧对账硬钉——少一条断言即红，绝不允许「少验而绿」）：
+
+```sh
+node tools/extension-smoke.js
+ZZC_EXT_DIR=<扩展安装目录> node tools/extension-smoke.js   # 对已安装副本复测
+```
 
 ### 扩展设置
 
 | 设置项 | 说明 |
 | --- | --- |
 | `zzc.lspPath` | 供 `zzc lsp` 使用的 `zzc` 可执行文件路径；留空表示用 PATH 上的 `zzc` |
-| `zzc.lang` | 方言包名（同 `zzc --lang`，如 `繁体`）；留空 = 内置默认包（中文）。修改后自动重启语言服务器 |
+| `zzc.lang` | 方言包名（同 `zzc --lang`，如 `zh` 或第三方包名）；留空 = 内置默认包（中文，含繁体字形）。修改后自动重启语言服务器 |
 | `zzc.langOverlay` | 第三方库叠加层文件路径（同 `zzc --lang-overlay`，如 `contrib/packs/httpz-中文.txt`；建议绝对路径）；留空 = 不叠加。修改后自动重启语言服务器 |
 
 ### 把 `zzc check` 接成构建任务（可选）
@@ -259,7 +272,7 @@ src/                编译器与工具链（Zig）
   main.zig          CLI 入口与命令分派
   root.zig          zzc_core 模块汇总（供测试与嵌入）
   transpiler/       方言 → 标准 Zig 转码（lexer / translate / mangle / column_map）
-  lang/             语言包与注册表（packs/ 内置中文·繁体、pack_discover 发现内核、userpack 外部包）
+  lang/             语言包与注册表（packs/ 内置中文与繁体叠加层、pack_discover 发现内核、userpack 外部包）
   diag/             报错回译与母语诊断（含全角检测、纯母语过滤）
   check/            五枚跨文件同步守卫的驱动
   editor/           编辑器资产生成器（tmLanguage / snippets / LSP 配置）

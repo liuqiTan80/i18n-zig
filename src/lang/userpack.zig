@@ -16,6 +16,7 @@
 const std = @import("std");
 const Io = std.Io;
 const file_io = @import("../file_io.zig");
+const Pack = @import("pack.zig"); // 第 315 轮 D174：取 meta_name 真值消 "$name" 跨模块手抄
 const zzc = @import("../zzc_paths.zig"); // 第 200 轮 D68：`.zzc` 族单一真值
 
 /// 默认安装目录（相对当前工作目录）。正斜杠形与既有 `.zzc/symbols.txt` 等一致，Windows 亦接受。
@@ -63,6 +64,61 @@ pub fn install(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []const u8,
     defer gpa.free(rel); // 第 255 轮 D122：fileRel/allocPrint 临时串逐枚释放（承 D23/D121 守则·函数返 void 不移交所有权；旧形从不 free、生产 arena+历轮测 arena 包裹双侧掩盖）
     if (file_io.pathExists(io, rel)) return error.AlreadyInstalled;
     try file_io.writeWhole(io, rel, bytes);
+}
+
+/// 已装用户包列播条目（第 315 轮 D174 列播补位）：`key` 为文件名基形（即 `--lang`
+/// 选择名），`name` 为包内 `展示名`（`Pack.meta_name` 键）值；缺失/畸形回落 key——
+/// 列播是只读指引，不做全包 parse，坏包也要让用户看见装了什么名。
+pub const Listed = struct { key: []const u8, name: []const u8 };
+
+/// 枚举工程已装用户包（目录不存在＝从未 add＝空列表非错误）。两切片皆 `gpa` 分配、
+/// 归调用方逐枚释放（`freeListed`）；按 key 升序保证输出确定（列播可被逐字节对拍）。
+pub fn listInstalled(io: Io, gpa: std.mem.Allocator, dir: []const u8) ![]Listed {
+    var out: std.ArrayList(Listed) = .empty; // Zig 0.17 形制：.empty＋逐调用喂 gpa（同 pack.zig L351）
+    errdefer freeListed(gpa, out.items);
+    var d = std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true }) catch |e| switch (e) {
+        error.FileNotFound => return out.items, // 无 .zzc/lang 的工程：空列播
+        else => return e,
+    };
+    defer d.close(io);
+    var it = d.iterate();
+    while (try it.next(io)) |ent| {
+        if (ent.kind != .file) continue; // 子目录/符号链一律跳（只认真身）
+        const base = std.fs.path.stem(ent.name);
+        if (!keyIsSafe(base)) continue; // 隐藏文件/非法名/非包文件封口于白名单
+        const bytes = d.readFileAlloc(io, ent.name, gpa, Io.Limit.limited(1 << 20)) catch continue; // 超限坏包：跳过不拦列播
+        defer gpa.free(bytes);
+        const name: []const u8 = blk: {
+            const at = std.mem.indexOf(u8, bytes, Pack.meta_name) orelse break :blk try gpa.dupe(u8, base);
+            const rest = bytes[at + Pack.meta_name.len ..];
+            const eq = std.mem.indexOfScalar(u8, rest, '=') orelse break :blk try gpa.dupe(u8, base);
+            const v = std.mem.trim(u8, rest[eq + 1 ..], " \t\r\n");
+            const nl = std.mem.indexOfScalar(u8, v, '\n') orelse v.len;
+            const val = std.mem.trim(u8, v[0..nl], " \t\r");
+            if (val.len == 0) break :blk try gpa.dupe(u8, base);
+            break :blk try gpa.dupe(u8, val);
+        };
+        errdefer gpa.free(name);
+        const key = try gpa.dupe(u8, base);
+        errdefer gpa.free(key);
+        try out.append(gpa, .{ .key = key, .name = name });
+    }
+    std.mem.sort(Listed, out.items, {}, struct {
+        fn lt(_: void, a: Listed, b: Listed) bool {
+            return std.mem.order(u8, a.key, b.key) == .lt;
+        }
+    }.lt);
+    return out.toOwnedSlice(gpa);
+}
+
+/// 释放 `listInstalled` 返回切片的三 ownership：两内字符串一枚外层数组（与 D122/D125
+/// 逐枚释放守则同形；列播调用方 defer 一行收口）。
+pub fn freeListed(gpa: std.mem.Allocator, items: []Listed) void {
+    for (items) |*it| {
+        gpa.free(it.key);
+        gpa.free(it.name);
+    }
+    gpa.free(items);
 }
 
 /// 查已装包文件路径：key 不安全（如 `--lang ../evil`）恒 null——**先于磁盘查询**封口，
@@ -251,4 +307,45 @@ test "第 259 轮 T0 installedFile 未命中路径 rel 逐枚释放（D125·裸 
     // keyIsSafe 通过、但文件不存在 → pathExists false → 返回 null → rel 泄漏。
     const result = installedFile(io, std.testing.allocator, dir, "nonexistent_key");
     try std.testing.expect(result == null);
+}
+
+// 第 315 轮 T0（D174）：listInstalled 列播内核——从未 add（目录缺失）＝空列播非错误；
+// 正形（$name 活线提取）；回落形（无 $name 键时 name==key）；封口形（非法名文件/子目录
+// 不入列）；排序确定形（key 升序可逐字节对拍）。裸 testing.allocator 直喂验逐枚释放
+// （承 D122/D125 守则：listInstalled/freeListed 三 ownership 无泄）。
+test "第 315 轮 T0 listInstalled：空目录/正形/回落/封口/排序五形＋无泄（D174）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    const priv = tpriv.Priv.init(io);
+    var db: [96]u8 = undefined;
+    const dir = priv.path(&db, ".zig-cache/tmp/zzc_list315_", "");
+    std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+
+    // 形一：目录不存在 → 空列表、非错误。
+    const empty = try listInstalled(io, std.testing.allocator, dir);
+    try std.testing.expectEqual(@as(usize, 0), empty.len);
+    std.testing.allocator.free(empty);
+
+    // 铺盘：两正装包（b 带 $name、a 无）＋非法名文件＋子目录。
+    try install(io, std.testing.allocator, dir, "b", "$name = 乙包\n$code = kb\n[keywords]\n常数 = const\n");
+    try install(io, std.testing.allocator, dir, "a", "$code = ka\n[keywords]\n常数 = const\n");
+    // 铺盘直写用 allocPrint（runtime slice 不可 `++` 拼）；子目录借 writeWhole 的建父目录能力带出。
+    const hid = try std.fmt.allocPrint(std.testing.allocator, "{s}/.hidden.txt", .{dir});
+    defer std.testing.allocator.free(hid);
+    file_io.writeWhole(io, hid, "$name = 幽灵\n") catch {}; // 非法名直写（install 白名单会拒，正是要验封口）
+    const subf = try std.fmt.allocPrint(std.testing.allocator, "{s}/sub/x.txt", .{dir});
+    defer std.testing.allocator.free(subf);
+    file_io.writeWhole(io, subf, "占位") catch {}; // 子目录条目：kind != .file 应跳
+
+    // 形二～五：枚举 a,b（升序）；b.name=乙包、a.name 回落 "a"；非法名/目录不入。
+    const got = try listInstalled(io, std.testing.allocator, dir);
+    defer freeListed(std.testing.allocator, got);
+    try std.testing.expectEqual(@as(usize, 2), got.len);
+    try std.testing.expectEqualStrings("a", got[0].key);
+    try std.testing.expectEqualStrings("a", got[0].name); // 无 $name 回落 key
+    try std.testing.expectEqualStrings("b", got[1].key);
+    try std.testing.expectEqualStrings("乙包", got[1].name);
 }

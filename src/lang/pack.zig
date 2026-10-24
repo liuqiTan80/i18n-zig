@@ -379,6 +379,643 @@ pub fn embedWordForms(gpa: std.mem.Allocator, lang: Pack) ![]const []const u8 {
     return keywordFormsFor(gpa, lang, zig_embed_file);
 }
 
+// ==================== 第 294 轮 D153：对照表 ↔ 包内映射的两侧手抄（判据面）====================
+//
+// `docs/关键字对照表.md` 是包内 `[keywords]`／`[aliases]` 两段的**第二份手抄**，而包自己的报错文案
+// （`未知标识符` 诊断的第三段提示语）正把用户指向该表——母语关键字拼错的人照表核对，表若过期即核对到
+// 根本不存在的词。旧形制全库零锚：探针 P1 实锤在真表上同时注入三形（值漂 `const`→`konst`、删掉整行
+// `如果 / 否则`、凭空加鬼词 `假键`），`zig fmt`／`zig build test`（17/17 succeeded）／
+// `zig build check-machine-matcher` 三门禁一律零信号、退码皆 0。
+//
+// 治法分两段（沿用 203/210/292 轮形制）：**判据**入本模块（纯函数、零 I/O，可被小样直调），
+// **跨文件覆盖**入 `check-machine-matcher` 的对面三十——表与包皆以 `addFileArg` 声明为文件依赖
+// （表在 `docs/`、越出模块包路径，`@embedFile` 不可达：202 轮硬约束判例；测试内 `cwd()` 偷读又不入
+// 步骤清单＝假绿形制），故只有声明了依赖的守卫步能改一面即转红。
+//
+// 路径与域路由一律单源：表文件名由 `kwtable_ref` 派生（文案词干与文件名不再各写一份）、
+// 「哪一域比对哪一段」由 `kwtable_alias_heading` 一处声明；抽取器只认 hub 声明的形制，
+// 形制漂成 0 行由**独立手设**下限拦（不可从 doc 反抽回填，否则即空转伪锚，同 240/292/293 轮判例）。
+
+/// 报错文案里指向对照表的**路径词干**单源（包内诊断提示语写的就是它，`kwtable_pack_face` 逐字节核）。
+pub const kwtable_ref: []const u8 = "docs/关键字对照表";
+
+/// 对照表的仓根相对路径——由词干派生，全仓第二处手抄自此不存在。
+pub const kwtable_path: []const u8 = kwtable_ref ++ ".md";
+
+/// 域路由标记：markdown 中含此串的 `## ` 二级标题之下，表格行比对 `[aliases]` 段；其余各域比对
+/// `[keywords]` 段。一张表两个域，路由判据必须单源（守卫里另写一份即分道）。
+pub const kwtable_alias_heading: []const u8 = "标准库路径别名";
+
+/// 对照表 `[aliases] 域应列出的最少行数——**独立手设**下限（真值现为 127，本轮探针实测）。
+/// 下限只管一件事：抽取器/路由形制漂成 0 行时不许一路静默。
+pub const kwtable_alias_floor: usize = 127;
+
+/// 一次对面核对项（needle／后果／应现枚数）：与 `lang_identity`／`jsonrpc`／`vsix` 三 hub 同形制，
+/// `machine_matcher.checkFace` 以 `@hasField` 兼容，不另立第四套搜索逻辑。
+pub const FaceCheck = struct { needle: []const u8, why: []const u8, occ: usize = 1 };
+
+/// 对面三十·`build.zig` 侧命名针：对照表须以 `addFileArg(b.path("<kwtable_path>"))` 声明为守卫的
+/// 文件依赖——不声明则改表不触发守卫重跑（203/210/238 轮同族假绿形制）。needle 由 hub 路径派生。
+pub const kwtable_build_face = [_]FaceCheck{
+    .{
+        .needle = "addFileArg(b.path(\"" ++ kwtable_path ++ "\"))",
+        .why = "对照表输入路径须由 hub 的 kwtable_path 派生并与 build.zig 的 addFileArg 同源——分道即守卫吃旧文件名，改表不触发重跑（表侧恒绿静默）",
+    },
+};
+
+/// 对面三十·包侧指针针：报错文案指向本表，故文案里的路径词干须等于 hub 真值。
+pub const kwtable_pack_face = [_]FaceCheck{
+    .{
+        .needle = kwtable_ref,
+        .why = "内置默认包的 `未知标识符` 提示语须以 hub 词干指向对照表——分道即报错把用户指向不存在的文件（指路文案与真表失联）",
+    },
+};
+
+/// markdown 抽出的一枚对照关系：母语名 → ASCII 值，并带该行所属域（`true` 即 `[aliases]` 段）。
+pub const KwRow = struct {
+    name: []const u8,
+    value: []const u8,
+    alias_domain: bool,
+};
+
+/// 值列须是**恰好一对**反引号包裹的代码形（`` `const` `` → `const`）；无反引号、只有一枚、或内部
+/// 还含反引号者皆判「非映射列」返 null（表头行、分隔行、152 轮那张 5 列注表由此自然出局）。
+fn kwBacktick(cell: []const u8) ?[]const u8 {
+    if (cell.len < 3 or cell[0] != '`' or cell[cell.len - 1] != '`') return null;
+    const inner = cell[1 .. cell.len - 1];
+    if (std.mem.indexOfScalar(u8, inner, '`') != null) return null;
+    return inner;
+}
+
+/// 遍历对照表的每一枚 `母语名 → ASCII 值`：`## ` 换域（域标题含 `kwtable_alias_heading` 者归
+/// `[aliases]`），`#`/`###` 等其它标题**继承**当前域；一行的两对单元格（1-2 列、3-4 列）各出对，
+/// 名列容 `甲 / 乙` 同义并列（逐枚出对，故 `变量 / 让` 出两枚）；非四列行整行跳过。
+/// `cb` 取 comptime：与 `eachLine` 族同形制，零堆分配、零闭包捕获。
+pub fn eachKwRow(
+    doc: []const u8,
+    comptime cb: fn (ctx: *anyopaque, row: KwRow) void,
+    ctx: *anyopaque,
+) void {
+    var alias_domain = false;
+    var lines = std.mem.splitScalar(u8, doc, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, "\r"); // 行尾 CR（CRLF 表亦可扫）
+        if (std.mem.startsWith(u8, line, "## ")) {
+            alias_domain = std.mem.indexOf(u8, line, kwtable_alias_heading) != null;
+            continue;
+        }
+        if (line.len == 0 or line[0] == '#') continue; // 其它级标题：继承当前域
+        const t = std.mem.trim(u8, line, " \t");
+        if (t.len == 0 or t[0] != '|') continue;
+        const inner = std.mem.trim(u8, t, "|");
+        var cells: [4][]const u8 = .{ "", "", "", "" };
+        var n: usize = 0;
+        var wide = false; // 多于四列的行不属映射表（152 轮注表即此形）
+        var cit = std.mem.splitScalar(u8, inner, '|');
+        while (cit.next()) |c| {
+            const cell = std.mem.trim(u8, c, " \t");
+            if (n < 4) {
+                cells[n] = cell;
+                n += 1;
+            } else if (cell.len != 0) wide = true;
+        }
+        if (wide or n != 4) continue;
+        for ([_][]const u8{ cells[0], cells[2] }, [_][]const u8{ cells[1], cells[3] }) |name_cell, value_cell| {
+            const value = kwBacktick(value_cell) orelse continue;
+            var names = std.mem.splitScalar(u8, name_cell, '/');
+            while (names.next()) |nm| {
+                const name = std.mem.trim(u8, nm, " \t");
+                if (name.len == 0) continue;
+                cb(ctx, .{ .name = name, .value = value, .alias_domain = alias_domain });
+            }
+        }
+    }
+}
+
+/// 对照表 ↔ 包映射的双向对拍结果（计数 + 每类首个 offender，供守卫把漂形**指名**打印）。
+pub const KwAudit = struct {
+    kw_rows: usize = 0,
+    alias_rows: usize = 0,
+    ghost: usize = 0,
+    wrong: usize = 0,
+    hidden: usize = 0,
+    unpaired: usize = 0, // 仅书稿侧有意义：值枚数与名枚数配不上的槽位数
+    heading_hit: bool = false,
+    first_ghost: []const u8 = "",
+    first_wrong: []const u8 = "",
+    first_wrong_doc: []const u8 = "",
+    first_wrong_pack: []const u8 = "",
+    first_hidden: []const u8 = "",
+};
+
+const KwRowCtx = struct { pack: *const Pack, a: KwAudit };
+
+fn auditRowCb(ctx: *anyopaque, row: KwRow) void {
+    const cx: *KwRowCtx = @ptrCast(@alignCast(ctx));
+    if (row.alias_domain) cx.a.alias_rows += 1 else cx.a.kw_rows += 1;
+    const table = if (row.alias_domain) &cx.pack.aliases else &cx.pack.keywords;
+    const have = table.get(row.name) orelse {
+        cx.a.ghost += 1;
+        if (cx.a.first_ghost.len == 0) cx.a.first_ghost = row.name;
+        return;
+    };
+    if (!std.mem.eql(u8, have, row.value)) {
+        cx.a.wrong += 1;
+        if (cx.a.first_wrong.len == 0) {
+            cx.a.first_wrong = row.name;
+            cx.a.first_wrong_doc = row.value;
+            cx.a.first_wrong_pack = have;
+        }
+    }
+}
+
+const HideCtx = struct { want: []const u8, hit: bool = false };
+
+fn hideRowCb(ctx: *anyopaque, row: KwRow) void {
+    const hc: *HideCtx = @ptrCast(@alignCast(ctx));
+    if (!hc.hit and !row.alias_domain and std.mem.eql(u8, row.name, hc.want)) hc.hit = true;
+}
+
+/// 判据本体（纯、零 I/O）：正向逐枚查「表里有而包内无（ghost）／同名而值漂（wrong）」，
+/// 反向逐枚查「包内 `[keywords]` 有而表全不见（hidden）」。`[aliases]` 侧**只做正向**——表对该段
+/// 是有意精选（头注已册「低频者可用逐段回退 `标准库.<英文>`」），反向即把设计选择判成缺陷（伪锚）。
+pub fn auditKwTable(pack: *const Pack, doc: []const u8) KwAudit {
+    var cx = KwRowCtx{
+        .pack = pack,
+        .a = .{ .heading_hit = std.mem.indexOf(u8, doc, kwtable_alias_heading) != null },
+    };
+    eachKwRow(doc, auditRowCb, @ptrCast(&cx));
+    var it = pack.keywords.iterator();
+    while (it.next()) |e| {
+        var hc = HideCtx{ .want = e.key_ptr.* };
+        eachKwRow(doc, hideRowCb, @ptrCast(&hc));
+        if (!hc.hit) {
+            cx.a.hidden += 1;
+            if (cx.a.first_hidden.len == 0) cx.a.first_hidden = e.key_ptr.*;
+        }
+    }
+    return cx.a;
+}
+
+// ── D154（第 295 轮）：书稿《字典篇》＝包映射面的**第三份手抄**，判据与 294 轮同制 ──────────
+// 《字典篇》头注自称「想知道某个中文词……在这里按主题查」，故它对 `[keywords]` 是**全量**承诺
+// （漏一枚即读者按自己的书查无此词）；`[aliases]` 段则系有意精选（尾注引对照表看全量），只做正向。
+// 区段起止、路径、下限一律 hub 单源。书在 `docs/` 越出模块包路径不可 `@embedFile`（202 轮判例），
+// 覆盖只能走 build.zig 的 addFileArg ＋ 守卫读文件（同 294 轮形制）。
+
+/// 书稿的仓根相对路径：守卫的 addFileArg needle 由此派生，改文件名不留第二处手抄。
+pub const book_path: []const u8 = "docs/母语编写zig-中文版.md";
+
+/// 区段起点：**一级标题**（`# ` 行）中含此串者才开区——正文交叉引用（`### …（详见《字典篇》）`）
+/// 不得开区，否则各章示例表全被当映射面对拍。
+pub const bookdict_heading: []const u8 = "《字典篇》";
+
+/// 区段终点：首个以此串开头的 `## ` 标题即出区——附录 A/B 的表是「坑」与「术语」，非映射表。
+pub const bookdict_stop_heading: []const u8 = "附录";
+
+/// 全量承诺的下限（**独立手设**，真值现为 113＝内置包 `[keywords]` 枚数）：专拦「抽取器或区段
+/// 形制漂成 0 行、却仍自称与包零漂」的空转假绿（同 240/292/293/294 轮判例，不可从书稿反抽回填）。
+pub const bookdict_kw_floor: usize = 113;
+
+/// `aliases` 域下限（**独立手设**，真值现为 11）：该段只做正向对拍，此针只防整段被删空。
+pub const bookdict_alias_floor: usize = 11;
+
+/// 对面三十一·`build.zig` 侧命名针：书稿须以 `addFileArg(b.path("<book_path>"))` 声明为文件依赖
+/// ——不声明即改书不触发守卫重跑（203/210/238 轮同族假绿形制）。
+pub const bookdict_build_face = [_]FaceCheck{
+    .{
+        .needle = "addFileArg(b.path(\"" ++ book_path ++ "\"))",
+        .why = "书稿输入路径须由 hub 的 book_path 派生并与 build.zig 的 addFileArg 同源——分道即守卫吃旧文件名，改书不触发重跑（书侧恒绿静默）",
+    },
+};
+
+/// 对面三十一·书稿侧指针针：书稿共**五处**指向全量对照表（第 555/1135/1325/1428/1475 行），
+/// 逐处皆须写 hub 词干——`occ=5` 即把「五处指路」本身也钉住：改指他处或漏写一处即转红
+/// （新加第六处指路需同步上抬此枚数，属有意识改动而非静默漂）。演漂形⑥实锤：`occ=1` 时
+/// 改掉其中一处仍一路绿，因余下四处同词——针的强度必须匹配手抄的真实份数。
+pub const bookdict_book_face = [_]FaceCheck{
+    .{
+        .needle = kwtable_ref,
+        .occ = 5,
+        .why = "书稿五处指路皆须以 hub 词干指向对照表——分道即书把读者指向不存在的文件，「本篇已列全」的声明也就失去可核对的落点",
+    },
+};
+
+/// 值格须**整体由反引号片段构成**，片段之间只容空白、`/`、「、」；逐枚填入 `out` 并返枚数。
+/// 返 0 即「此格非映射值」——表头行、分隔行、大白话说明、八章符号行由此自然出局；反引号不成对、
+/// 片段为空、枚数越上限亦返 0（宁可不抽：漏抽不静默，由 hidden 全量承诺与下限针转响）。
+fn btTokens(cell: []const u8, out: *[4][]const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < cell.len) {
+        const rest = cell[i..];
+        if (rest[0] == ' ' or rest[0] == '\t' or rest[0] == '/') {
+            i += 1;
+            continue;
+        }
+        if (rest.len >= 3 and std.mem.eql(u8, rest[0..3], "、")) {
+            i += 3;
+            continue;
+        }
+        if (rest[0] != '`') return 0;
+        const end = std.mem.indexOfScalar(u8, rest[1..], '`') orelse return 0;
+        if (end == 0 or n >= out.len) return 0;
+        out[n] = rest[1 .. 1 + end];
+        n += 1;
+        i += end + 2;
+    }
+    return n;
+}
+
+/// 遍历《字典篇》的每一枚 `母语名 → ASCII 值`（沿用上文的 `KwRow`，两侧判据共用同一套回调）。
+/// 与对照表三处形制差：①只认 `bookdict_heading` → `bookdict_stop_heading` 区段内的行；②名列含
+/// 反引号者整槽出局（八章「保留符号」那类讲符号的行不当它是键）；③行格满 6 列者系「一行两对」
+/// 排版（六章 `@` 族两栏并排），除 0-1 列外再取 3-4 列。名列容 `甲 / 乙` 并列：值仅一枚即广播给
+/// 各名，否则枚数须相等——配不出对的行**不静默出局**，计入返回值由审计侧当 FAIL 拦。
+pub fn eachBookRow(
+    book: []const u8,
+    comptime cb: fn (ctx: *anyopaque, row: KwRow) void,
+    ctx: *anyopaque,
+) usize {
+    var odd: usize = 0;
+    var in_region = false;
+    var alias_domain = false;
+    var lines = std.mem.splitScalar(u8, book, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, "\r"); // 行尾 CR（CRLF 书稿亦可扫）
+        if (line.len > 0 and line[0] == '#') {
+            // 起点只认**一级标题**行：正文里的 `### 3.2 常用类型速查（详见《字典篇》）` 也含篇名，
+            // 若任其开区则整本书的示例表都成了手抄面（第 295 轮本闸首跑即抓到此形）。
+            if (std.mem.startsWith(u8, line, "# ") and std.mem.indexOf(u8, line, bookdict_heading) != null) {
+                in_region = true;
+                alias_domain = false;
+            } else if (in_region and std.mem.startsWith(u8, std.mem.trim(u8, line, "# "), bookdict_stop_heading)) {
+                in_region = false; // 附录起，后表皆非映射表
+            } else if (in_region and std.mem.startsWith(u8, line, "## ")) {
+                alias_domain = std.mem.indexOf(u8, line, kwtable_alias_heading) != null; // 域标记与 294 轮同源
+            }
+            continue;
+        }
+        if (!in_region) continue;
+        const t = std.mem.trim(u8, line, " \t");
+        if (t.len == 0 or t[0] != '|') continue;
+        var cells: [6][]const u8 = .{ "", "", "", "", "", "" };
+        var n: usize = 0;
+        var cit = std.mem.splitScalar(u8, std.mem.trim(u8, t, "|"), '|');
+        while (cit.next()) |c| {
+            if (n < cells.len) {
+                cells[n] = std.mem.trim(u8, c, " \t");
+                n += 1;
+            }
+        }
+        var slot: usize = 0;
+        while (slot < 2) : (slot += 1) {
+            if (slot == 1 and n < cells.len) break; // 非「一行两对」形，第二槽不看
+            var vals: [4][]const u8 = undefined;
+            const nv = btTokens(cells[slot * 3 + 1], &vals);
+            if (nv == 0) continue; // 值格不是纯反引号词 → 该行非映射行
+            const name_cell = cells[slot * 3];
+            if (name_cell.len == 0 or std.mem.indexOfScalar(u8, name_cell, '`') != null) continue;
+            var names: [4][]const u8 = undefined;
+            var nn: usize = 0;
+            var nit = std.mem.splitScalar(u8, name_cell, '/');
+            while (nit.next()) |nm| {
+                const name = std.mem.trim(u8, nm, " \t");
+                if (name.len == 0) continue;
+                if (nn >= names.len) {
+                    nn += 1;
+                    continue;
+                }
+                names[nn] = name;
+                nn += 1;
+            }
+            if (nn == 0 or nn > names.len) {
+                odd += 1;
+                continue;
+            }
+            if (nv != nn and nv != 1) {
+                odd += 1; // 看着像映射行却配不出对：静默即盲区，转响交守卫
+                continue;
+            }
+            var k: usize = 0;
+            while (k < nn) : (k += 1) {
+                cb(ctx, .{ .name = names[k], .value = vals[if (nv == 1) 0 else k], .alias_domain = alias_domain });
+            }
+        }
+    }
+    return odd;
+}
+
+/// 书稿 ↔ 包映射对拍（与 `auditKwTable` 同构：正向 ghost/wrong，反向 hidden 即「全量承诺」）。
+/// `unpaired` 为形制异常槽位数；`heading_hit` 为区段起点标记是否命中（书稿改题即在此转红）。
+pub fn auditBookDict(pack: *const Pack, book: []const u8) KwAudit {
+    var cx = KwRowCtx{
+        .pack = pack,
+        .a = .{ .heading_hit = std.mem.indexOf(u8, book, bookdict_heading) != null },
+    };
+    cx.a.unpaired = eachBookRow(book, auditRowCb, @ptrCast(&cx));
+    var it = pack.keywords.iterator();
+    while (it.next()) |e| {
+        var hc = HideCtx{ .want = e.key_ptr.* };
+        _ = eachBookRow(book, hideRowCb, @ptrCast(&hc));
+        if (!hc.hit) {
+            cx.a.hidden += 1;
+            if (cx.a.first_hidden.len == 0) cx.a.first_hidden = e.key_ptr.*;
+        }
+    }
+    return cx.a;
+}
+
+test "294 T0 对照表↔包映射判据：域路由继承、正反三形漂、抽取器形制边界（合成小样独立于真表）" {
+    const gpa = std.testing.allocator;
+    const pack_src =
+        \\$code = zh
+        \\[keywords]
+        \\常数 = const
+        \\变量 = var
+        \\让 = var
+        \\[aliases]
+        \\标准库.调试.打印 = std.debug.print
+        \\标准库.内存.拷贝 = std.mem.copyForwards
+    ;
+    var pack = try parse(gpa, pack_src);
+    defer pack.deinit();
+
+    // 正形：keywords 域三枚名（`变量 / 让` 出两枚）＋ aliases 域两枚，四类计数与三形漂移皆零。
+    const ok_doc =
+        \\# 中文关键字对照表
+        \\
+        \\## 声明与函数
+        \\
+        \\| 中文 | 标准 Zig | 中文 | 标准 Zig |
+        \\|---|---|---|---|
+        \\| 常数 | `const` | 变量 / 让 | `var` |
+        \\
+        \\### 子节继承父域
+        \\
+        \\| Zig 词 | 在关键字表 | ast-check | build-obj | 处置 |
+        \\|---|---|---|---|---|
+        \\| `test` / `packed` | ✅ | 绿 | 绿 | 152 轮补登 |
+        \\
+        \\## 标准库路径别名（点分链贪心最长匹配）
+        \\
+        \\| 中文 | 标准 Zig | 中文 | 标准 Zig |
+        \\|---|---|---|---|
+        \\| 标准库.调试.打印 | `std.debug.print` | 标准库.内存.拷贝 | `std.mem.copyForwards` |
+    ;
+    const a0 = auditKwTable(&pack, ok_doc);
+    try std.testing.expectEqual(@as(usize, 3), a0.kw_rows);
+    try std.testing.expectEqual(@as(usize, 2), a0.alias_rows);
+    try std.testing.expect(a0.heading_hit);
+    try std.testing.expectEqual(@as(usize, 0), a0.ghost);
+    try std.testing.expectEqual(@as(usize, 0), a0.wrong);
+    try std.testing.expectEqual(@as(usize, 0), a0.hidden);
+
+    // 漂形一（值漂）：表把 `const` 写成 `konst` → wrong 恰 1，且指名到名与两侧值。
+    const w_doc =
+        \\## 声明与函数
+        \\| 常数 | `konst` | 变量 / 让 | `var` |
+    ;
+    const a1 = auditKwTable(&pack, w_doc);
+    try std.testing.expectEqual(@as(usize, 1), a1.wrong);
+    try std.testing.expectEqualStrings("常数", a1.first_wrong);
+    try std.testing.expectEqualStrings("konst", a1.first_wrong_doc);
+    try std.testing.expectEqualStrings("const", a1.first_wrong_pack);
+    try std.testing.expectEqual(@as(usize, 0), a1.ghost);
+
+    // 漂形二（表删行）：整行不见 → 包内该名的 hidden 恰 1（这是「照表核对却查无此词」的反侧）。
+    const d_doc =
+        \\## 声明与函数
+        \\| 变量 / 让 | `var` |  |  |
+    ;
+    const a2 = auditKwTable(&pack, d_doc);
+    try std.testing.expectEqual(@as(usize, 1), a2.hidden);
+    try std.testing.expectEqualStrings("常数", a2.first_hidden);
+    try std.testing.expectEqual(@as(usize, 0), a2.ghost);
+    try std.testing.expectEqual(@as(usize, 0), a2.wrong);
+
+    // 漂形三（鬼词）：表里凭空多一枚包内不存在的键 → ghost 恰 1。
+    const g_doc =
+        \\## 声明与函数
+        \\| 常数 | `const` | 假键 | `fn` |
+        \\| 变量 / 让 | `var` |  |  |
+    ;
+    const a3 = auditKwTable(&pack, g_doc);
+    try std.testing.expectEqual(@as(usize, 1), a3.ghost);
+    try std.testing.expectEqualStrings("假键", a3.first_ghost);
+
+    // 形制边界一（域路由漂）：把 aliases 段的标题改名，那些行即落进 keywords 域——alias_rows 归 0、
+    // ghost 起（演漂④在测面的对应形；真表侧另有 heading_hit 与 kwtable_alias_floor 两道）。
+    const r_doc =
+        \\## 声明与函数
+        \\| 常数 | `const` | 变量 / 让 | `var` |
+        \\## 标准库别名表（标题被改，路由判据不再命中）
+        \\| 标准库.调试.打印 | `std.debug.print` | 标准库.内存.拷贝 | `std.mem.copyForwards` |
+    ;
+    const a4 = auditKwTable(&pack, r_doc);
+    try std.testing.expect(!a4.heading_hit);
+    try std.testing.expectEqual(@as(usize, 0), a4.alias_rows);
+    try std.testing.expectEqual(@as(usize, 2), a4.ghost);
+
+    // 形制边界二（抽取器出局形）：表头行／分隔行／值列不带反引号／列数不足或超出／普通段落**皆不出
+    // 对**（全零）——若这些形被误抽，判据就不可能在真表上保持零漂。
+    var nb: usize = 0;
+    eachKwRow(
+        \\## 声明与函数
+        \\| 中文 | 标准 Zig | 中文 | 标准 Zig |
+        \\|---|---|---|---|
+        \\| 常数 | const |  |  |
+        \\| 变量 | `var` |  |
+        \\| a | b | c | d | e |
+        \\普通段落不成行
+    ,
+        struct {
+            fn cb(ctx: *anyopaque, row: KwRow) void {
+                _ = row;
+                const p: *usize = @ptrCast(@alignCast(ctx));
+                p.* += 1;
+            }
+        }.cb,
+        @ptrCast(&nb),
+    );
+    try std.testing.expectEqual(@as(usize, 0), nb); // 六行全出局：4 列但值无反引号、3 列、5 列、段落行
+
+    // 下限值钉：`kwtable_alias_floor` 系独立手设，不可从 doc 反抽——此处以字面量锁死。
+    try std.testing.expectEqual(@as(usize, 127), kwtable_alias_floor);
+}
+
+test "294 T1 对照表路径族单源与真包指路文案：词干/路径/域标记值钉 + 内置包文案确含词干" {
+    // 值钉（判据独立于被校文本，同 240/292/293 轮形制）：三枚字面量漂任一即红。
+    try std.testing.expectEqualStrings("docs/关键字对照表", kwtable_ref);
+    try std.testing.expectEqualStrings("docs/关键字对照表.md", kwtable_path);
+    try std.testing.expectEqualStrings("标准库路径别名", kwtable_alias_heading);
+    try std.testing.expectEqualStrings("docs/关键字对照表.md", kwtable_ref ++ ".md"); // 派生式与手写形同值
+
+    // 指路文案：内置默认包的 `未知标识符` 提示语必须真的指向本表——包是 source dep，
+    // 删掉这句即在此转红（守卫面另有 kwtable_pack_face 同针，两侧不可分道）。
+    const zh = @embedFile(zzc_paths.builtin_pack_embed_lang);
+    try std.testing.expect(std.mem.indexOf(u8, zh, kwtable_ref) != null);
+    try std.testing.expect(std.mem.indexOf(u8, zh, "对照表") != null);
+
+    // 面清单形制钉：两面对各 1 枚 needle，且 needle 由 hub 路径/词干派生（非第二处手抄字面量）。
+    try std.testing.expectEqual(@as(usize, 1), kwtable_build_face.len);
+    try std.testing.expectEqualStrings("addFileArg(b.path(\"" ++ kwtable_path ++ "\"))", kwtable_build_face[0].needle);
+    try std.testing.expectEqual(@as(usize, 1), kwtable_pack_face.len);
+    try std.testing.expectEqualStrings(kwtable_ref, kwtable_pack_face[0].needle);
+}
+
+test "295 T0 字典篇↔包映射判据：区段起止、一行两对、广播与出局形、四形漂＋形制异常（合成小样独立于真书）" {
+    const gpa = std.testing.allocator;
+    var pack = try parse(gpa,
+        \\$code = zh
+        \\[keywords]
+        \\甲 = a
+        \\乙 = b
+        \\丙 = b
+        \\丁 = d
+        \\正弦 = s
+        \\余弦 = c
+        \\[aliases]
+        \\标准库 = std
+    );
+    defer pack.deinit();
+
+    // 正形：区段外一行不入对；三/四列行、六列「一行两对」、`甲 / 乙` 广播一名值、符号行出局皆中；
+    // 附录起的表不入对（末两行若误入即 ghost 非 0）。
+    const ok_src =
+        \\# 前言
+        \\| 甲 | `zzz` | 区段外，不入对 |
+        \\### 3.2 常用类型速查（详见《字典篇》）
+        \\| 甲 | `nope` | 三级标题不开区，不入对 |
+        \\# 《字典篇》——像查字典一样查每个中文词
+        \\## 一、声明与函数
+        \\| 中文 | 标准 Zig | 大白话/比喻 | 小例 |
+        \\|---|---|---|---|
+        \\| 甲 | `a` | 说 | `甲;` |
+        \\| 乙 / 丙 | `b` | 两名同值 | 进阶 |
+        \\| 丁 | `d` | 说 | 进阶 |
+        \\| 符号 | 大白话 |
+        \\| `;` | 句号：一句话说完 |
+        \\## 六、内置函数（`@` 系）
+        \\| 中文 | 标准 | 作用 | 中文 | 标准 | 作用 |
+        \\|---|---|---|---|---|---|
+        \\| 正弦/余弦 | `s`/`c` | 三角 | 丁 | `d` | 重复一枚 |
+        \\## 七、标准库路径别名（点分链、贪心最长匹配）
+        \\| 中文长名 | 标准 Zig | 常用度 |
+        \\|---|---|---|
+        \\| 标准库 | `std` | 极高 |
+        \\## 附录 A：新手最容易踩的坑
+        \\| 甲 | `zzz` | 出区，不入对 |
+        \\| 戊 | `e` | 出区，不入对 |
+    ;
+    const a0 = auditBookDict(&pack, ok_src);
+    try std.testing.expect(a0.heading_hit);
+    try std.testing.expectEqual(@as(usize, 7), a0.kw_rows);
+    try std.testing.expectEqual(@as(usize, 1), a0.alias_rows);
+    try std.testing.expectEqual(@as(usize, 0), a0.ghost);
+    try std.testing.expectEqual(@as(usize, 0), a0.wrong);
+    try std.testing.expectEqual(@as(usize, 0), a0.hidden);
+    try std.testing.expectEqual(@as(usize, 0), a0.unpaired);
+
+    // 漂形一（值漂）：书把 `const` 形写作 `z` → wrong 恰 1，指名两侧值。
+    const w_src =
+        \\# 《字典篇》
+        \\## 一、声明与函数
+        \\| 甲 | `z` | 说 | 进阶 |
+    ;
+    const a1 = auditBookDict(&pack, w_src);
+    try std.testing.expectEqual(@as(usize, 1), a1.wrong);
+    try std.testing.expectEqualStrings("甲", a1.first_wrong);
+    try std.testing.expectEqualStrings("z", a1.first_wrong_doc);
+    try std.testing.expectEqualStrings("a", a1.first_wrong_pack);
+
+    // 漂形二（书删行）：全量承诺反侧——包内有名而书查无 → hidden 计数并指名（本轮真书即此形，缺 27 枚）。
+    const d_src =
+        \\# 《字典篇》
+        \\## 一、声明与函数
+        \\| 乙 / 丙 | `b` | 说 | 进阶 |
+    ;
+    const a2 = auditBookDict(&pack, d_src);
+    try std.testing.expectEqual(@as(usize, 4), a2.hidden);
+    try std.testing.expect(std.mem.indexOf(u8, "甲丁正弦余弦", a2.first_hidden) != null); // 名必属缺席集；hash 序不锁（锁序即伪钉）
+    try std.testing.expectEqual(@as(usize, 0), a2.ghost);
+    try std.testing.expectEqual(@as(usize, 0), a2.wrong);
+
+    // 漂形三（鬼词）：书里凭空一枚包内不存在的键 → ghost 恰 1。
+    const g_src =
+        \\# 《字典篇》
+        \\## 一、声明与函数
+        \\| 甲 | `a` | 说 | 进阶 |
+        \\| 假键 | `fn` | 说 | 进阶 |
+    ;
+    const a3 = auditBookDict(&pack, g_src);
+    try std.testing.expectEqual(@as(usize, 1), a3.ghost);
+    try std.testing.expectEqualStrings("假键", a3.first_ghost);
+
+    // 漂形四（区段漂）：篇名改掉，整区不认——hidden 起而抽取器一行不抽（下限针即为此设）。
+    const r_src =
+        \\# 词汇表（篇名已改）
+        \\## 一、声明与函数
+        \\| 甲 | `a` | 说 | 进阶 |
+    ;
+    const a4 = auditBookDict(&pack, r_src);
+    try std.testing.expect(!a4.heading_hit);
+    try std.testing.expectEqual(@as(usize, 0), a4.kw_rows);
+    try std.testing.expectEqual(@as(usize, 6), a4.hidden);
+
+    // 形制异常：值枚数与名枚数不等且非「一值广播」→ 不静默出局，转 unpaired 由守卫拦。
+    const u_src =
+        \\# 《字典篇》
+        \\## 六、内置函数
+        \\| 甲 | `a` `b` `c` | 三角 | 乙 | `b` | 说 |
+    ;
+    const a5 = auditBookDict(&pack, u_src);
+    try std.testing.expectEqual(@as(usize, 1), a5.unpaired);
+    try std.testing.expectEqual(@as(usize, 1), a5.kw_rows);
+
+    // 出局形复钉：表头行／分隔行／值格无反引号／名格带反引号／区段外 一律不出对。
+    var nb: usize = 0;
+    _ = eachBookRow(
+        \\# 《字典篇》
+        \\## 三、错误与可选
+        \\| 中文 | 标准 Zig | 意思 |
+        \\|---|---|---|
+        \\| 甲 | a | 值格无反引号 |
+        \\| `?` | `x` | 名格带反引号
+        \\正文一句 `甲`
+    ,
+        struct {
+            fn cb(ctx: *anyopaque, row: KwRow) void {
+                _ = row;
+                const p: *usize = @ptrCast(@alignCast(ctx));
+                p.* += 1;
+            }
+        }.cb,
+        @ptrCast(&nb),
+    );
+    try std.testing.expectEqual(@as(usize, 0), nb);
+
+    // 下限值钉：两枚皆**独立手设**，不可从书稿反抽回填——此处以字面量锁死。
+    try std.testing.expectEqual(@as(usize, 113), bookdict_kw_floor);
+    try std.testing.expectEqual(@as(usize, 11), bookdict_alias_floor);
+}
+
+test "295 T1 书稿路径族与两面对单源：路径/区段标记值钉 + needle 派生式等值钉" {
+    try std.testing.expectEqualStrings("docs/母语编写zig-中文版.md", book_path);
+    try std.testing.expectEqualStrings("《字典篇》", bookdict_heading);
+    try std.testing.expectEqualStrings("附录", bookdict_stop_heading);
+    // 书与对照表同栖 docs/，且书侧指路针必须复用 294 轮的词干（另写一份即第四处手抄）。
+    try std.testing.expect(std.mem.startsWith(u8, book_path, "docs/"));
+    try std.testing.expectEqualStrings(kwtable_ref, bookdict_book_face[0].needle);
+
+    // 面清单形制钉：两面对各 1 枚 needle，build 侧 needle 由 hub 路径派生。
+    try std.testing.expectEqual(@as(usize, 1), bookdict_build_face.len);
+    try std.testing.expectEqualStrings("addFileArg(b.path(\"" ++ book_path ++ "\"))", bookdict_build_face[0].needle);
+    try std.testing.expectEqual(@as(usize, 1), bookdict_book_face.len);
+    // 指路枚数钉：书稿对对照表的指路实为五处（演漂形⑥），逐处皆须同词干。
+    try std.testing.expectEqual(@as(usize, 5), bookdict_book_face[0].occ);
+}
+
 test "firstKeywordFor（第 142 轮模板按包组词的地基）：keywords 优先、aliases 兼容多段链键、未命中 null" {
     const gpa = std.testing.allocator;
     var lang = try parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_lang));
