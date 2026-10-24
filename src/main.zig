@@ -7,6 +7,8 @@
 //!   zzc run   [文件.zz]     编译并运行，`--` 之后为程序参数
 //!   zzc test  [文件.zz]     翻译 -> zig test
 //!   zzc eject [目录]        导出标准 Zig 工程（毕业路径）
+//!   zzc relocalize --to <包> [目录]
+//!                           把本工程重生为另一语言包词形的孪生工程（双向道的回程）
 //!   zzc lsp                 启动 LSP 服务器（JSON-RPC over stdio，第 156 轮）
 //!   zzc lang                列出当前语言包与可注册包；`lang add` 装入外部包（R9g 第二档）
 //!   zzc version             版本信息
@@ -18,6 +20,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Io = std.Io;
 const translate = @import("transpiler/translate.zig");
+const relocalize = @import("transpiler/relocalize.zig");
 const Mangle = @import("transpiler/mangle.zig");
 const ColumnMap = @import("transpiler/column_map.zig");
 const Pack = @import("lang/pack.zig").Pack;
@@ -218,12 +221,31 @@ fn printErr(comptime fmt: []const u8, args: anytype) void {
 /// 恢复失败向上传播（台账 D16）：丢映射即破坏跨会话稳定、可能后续撞号；
 /// 仅“文件不存在”（首次运行尚无符号表）仍为正常路径。
 /// 超限（error.Failed，已在 readWhole 源头母语报出）不可静默跳过：照旧传播。
-fn loadSymbols(table: *Mangle) !void {
+// 第 332 轮 D191：符号缓存必须与「写入时的词表」绑定。改前真值：`.zzc/symbols.txt` 里留着
+// 上次运行把 `變量` 当未知标识符记下的 `變量 = z_4`；语言包/叠加层后来补上 `變量 = var` 后，
+// translate 的 `ident_first`（用户标识符优先于词表）照样成立，于是该词永远被 mangle 成 z_4。
+// 真跑铁证：删掉 `.zzc` 后同一份源码立刻翻成 `var`。现以首行 `# @pack <指纹>` 对账：
+// 指纹不符或无头（旧格式）= 整表作废，本次运行末以新指纹重写。作废是安全的——同一次运行
+// 会重新扫描全部源文件、在声明位重新 intern，编号依旧自洽（.zzc/gen 亦随之重生成）。
+fn loadSymbols(table: *Mangle, pack_fp: u64) !void {
+    // 先记下当前指纹：无论缓存是否可用，后续 saveSymbols 都按当前词表重写头行。
+    table.pack_fp = pack_fp;
     const bytes = readWhole(symbols_path) catch |e| switch (e) {
         error.FileNotFound => return, // 首次运行：尚无符号表，正常
         else => return e,
     };
+    if (!cacheMatchesPack(bytes, pack_fp)) return;
     try table.parseSymbolText(bytes);
+}
+
+/// 缓存首行是否绑定到同一份词表（`# @pack <hex>`）。无头/坏头/异值一律 false。
+fn cacheMatchesPack(bytes: []const u8, pack_fp: u64) bool {
+    var it = std.mem.splitScalar(u8, bytes, '\n');
+    const first = std.mem.trim(u8, it.next() orelse "", " \t\r");
+    if (!std.mem.startsWith(u8, first, zzc.symbols_pack_head)) return false;
+    const hex = std.mem.trim(u8, first[zzc.symbols_pack_head.len..], " \t\r");
+    const got = std.fmt.parseInt(u64, hex, 16) catch return false;
+    return got == pack_fp;
 }
 
 fn saveSymbols(table: Mangle) void {
@@ -232,6 +254,14 @@ fn saveSymbols(table: Mangle) void {
     // return 同样不回收）——每次落盘泄一只；生产 gpa_ 为进程 arena 故长期无感、属累积面
     // （与 D58 同族）。单手 defer 无条件回收（deinit 对空表零副作用、失败臂亦覆盖）。
     defer out.deinit(gpa_);
+    // 首行头：词表指纹（D191）。`parseSymbolText` 本就跳过 `#` 行，故旧读侧兼容；
+    // 写侧一律带，读侧凭它判「缓存还配不配当前词表」。
+    var head_buf: [64]u8 = undefined;
+    const head = std.fmt.bufPrint(&head_buf, "{s}{x}\n", .{ zzc.symbols_pack_head, table.pack_fp }) catch unreachable;
+    out.appendSlice(gpa_, head) catch |e| {
+        printErr(zzc.prog_prefix ++ "保存符号表失败（写入头）：{s}", .{@errorName(e)});
+        return;
+    };
     for (table.symbols.items) |s| {
         out.appendSlice(gpa_, s.native) catch |e| {
             printErr(zzc.prog_prefix ++ "保存符号表失败（写入符号名）：{s}", .{@errorName(e)});
@@ -614,6 +644,46 @@ fn cmdLangAdd(args: []const []const u8) void {
     printOut("✔ " ++ cli.np_installed ++ cli.np_pack_word ++ "「{s}({s})」→ {s}/{s}" ++ zzc.pack_ext ++ "；用 `--lang {s}` 选用（免重编译，仅本工程可见）。", .{ pk.name, key, userpack.default_dir, key, key });
 }
 
+/// `zzc lang remove <注册名>`（第 330 轮 D189）：卸载用户包。三类拒绝各自成话术——缺名（用法）、
+/// 坏名（穿越/非 ASCII，与 add 同一白名单）、内置包（永远删不掉，若不先判会误报「未安装」）。
+fn cmdLangRemove(args: []const []const u8) void {
+    const key = if (args.len > 0) args[0] else {
+        printErr(zzc.prog_prefix ++ cli.msg_lang_remove_usage, .{});
+        werr.flush() catch {};
+        std.process.exit(cli.usage_exit_code);
+    };
+    // 内置优先序的镜像：内置包不在用户目录里，先查注册表才能说清「它删不掉」，而不是「未安装」。
+    // 查询摆在坏名闸之前：`lang remove 简体` 是 zh 的别名，属「内置不可删」而非「注册名非法」——
+    // 别名命中给的是能用的信息，白名单拒绝只会把人引向「这名是不是打错了」。
+    if (registry.lookup(key)) |p| {
+        printErr(zzc.prog_prefix ++ cli.msg_lang_remove_builtin, .{ p.key, p.key });
+        werr.flush() catch {};
+        std.process.exit(cli.usage_exit_code);
+    }
+    // 叠加层名（`繁体`/`繁體`…）不在 entries 里、也不在用户目录：说清「随基包提供」才是能用的信息，
+    // 否则白名单会把它拒成「注册名打错了」（与 D187 的 `--lang 繁體` 同一判据）。
+    if (registry.overlayHint(key)) |h| {
+        printErr(zzc.prog_prefix ++ cli.msg_lang_remove_overlay, .{ key, h.base_key, h.label });
+        werr.flush() catch {};
+        std.process.exit(cli.usage_exit_code);
+    }
+    if (!userpack.keyIsSafe(key)) {
+        printErr(zzc.prog_prefix ++ cli.msg_reg_key_bad, .{key}); // 与 add 同一条坏名话术
+        werr.flush() catch {};
+        std.process.exit(cli.usage_exit_code);
+    }
+    userpack.remove(io_, gpa_, userpack.default_dir, key) catch |e| switch (e) {
+        error.BadKey => unreachable, // 上面已拦
+        error.NotInstalled => {
+            printErr(zzc.prog_prefix ++ cli.msg_lang_remove_absent, .{key});
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code); // 与 add 撞名同码：没做成就不退 0
+        },
+        else => bail(e), // 权限/只读等：bail 的 localizeFsErr 母语兜底
+    };
+    printOut(cli.msg_lang_remove_ok, .{ key, userpack.default_dir, key });
+}
+
 fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
     const entry = cli.pickEntry(args).entry;
     const proj = try collectAndTranslate(entry, lang, table);
@@ -989,6 +1059,141 @@ fn verifyBuild(dest: []const u8) BuildVerify {
     return if (res.term.success()) .ok else .fail;
 }
 
+// ---------------------------------------------------------------- relocalize（双向道的回程）
+//
+// 正向 `translate` 把母语词形译成标准 Zig（`check`/`build` 消费），`eject` 把它毕业成纯 Zig
+// 交付面——两者都是**出口**。本条是回程：同一工程的另一方言副本，源树一字不改。之所以能成，
+// 只因方言与 Zig 逐 token 同构（方案书原则 1）：结构/缩进原样搬，只把词元按目标包换回去
+// （实现在 `transpiler/relocalize.zig`，本段只做包解析、落盘与自检）。
+//
+// 验收判据是机读的：产出树再由 `zzc check --lang <目标包>` 走一遍正向链判绿——同一条正向链既是
+// 产出的定义，也是产出的检验，不存在两套判据。
+
+/// 重生完成话术：件数/换形数/自检结论三段可核对（数字全来自本轮实跑，不写死）。
+const relocalize_ok_msg: []const u8 = "已重生为「{s}」方言工程：{s}/（{d} 个方言文件、换形 {d} 处）；`" ++ zzc.prog_name ++ " " ++ cli.sub_check ++ " " ++ cli.flag_lang ++ " {s}` 自检" ++ cli.np_pass ++ "。";
+
+/// 自检不可用的两形分开说：拿不到自身路径（环境面）与被检树真的不纯（目标包面）不可混为一谈。
+const relocalize_noverify_msg: []const u8 = "已重生为「{s}」方言工程：{s}/（{d} 个方言文件、换形 {d} 处）；" ++ cli.np_not_detected ++ "自身可执行路径，未做自检。";
+const relocalize_fail_msg: []const u8 = "重生产出面自检未通过（目标语言包「{s}」缺少本工程用到的词形时即如此）；可先补齐该包后重跑，产出树在 {s}/。";
+
+/// 撞名告警（行列为**产出**内位置）：反解出的原名恰是目标包的关键字/别名词形——渲染面读不出
+/// 「这是名字不是关键字」，交给自检去否，但必须先告诉人位置，否则报错只指向一个看起来没问题的词。
+const relocalize_collide_msg: []const u8 = "提示：{s} 第 {d} 行第 {d} 列的名字「{s}」与目标包「{s}」的关键字/别名词形同名；若自检报此处，请先改名再重生。";
+
+/// 整枚 `--to` 未给（缺值/重复已由 `flag_value_takers` 闸挡在更前）：用法错而非包名错。
+const relocalize_need_to_msg: []const u8 = "relocalize 缺少目标语言包；用法：" ++ zzc.prog_name ++ " " ++ cli.sub_relocalize ++ " " ++ cli.flag_to ++ " <语言包名> [目录]（" ++ cli.flag_lang ++ " 选源包，缺省中文）。";
+
+/// `--to` 出现在其它子命令上的话术：不拦就会静默剔离而用户以为生效（与 320 轮笔误族同因）。
+const relocalize_to_elsewhere_msg: []const u8 = "旗标「{s}」只属于 " ++ cli.sub_relocalize ++ "（当前子命令是 {s}）；若想在 {s} 里选目标包，请把 " ++ cli.flag_lang ++ " 指向它。";
+
+/// `--to` 命中内置叠加层名的话术：**不**照搬 `--lang` 的「默认已叠加、请改用 --lang」——那条指引
+/// 在 relocalize 语境是错的（`--lang` 是源包，指过去等于让人拿它当目标）。叠加层是等价字形并集、
+/// 不是可选基包：目标必须是基包，要产出该字形得先把层另存为独立包。
+const relocalize_to_overlay_msg: []const u8 = "目标包「{s}」是基包「{s}」的内置叠加层（{s}）——叠加层只是等价字形并集、不是可选基包，不能单独作目标；要产出该字形，请把叠加层另存为独立语言包（" ++ zzc.prog_name ++ " " ++ cli.sub_lang ++ " add <文件> " ++ cli.flag_as ++ " <名>）后以 " ++ cli.flag_to ++ " <名> 重试。";
+
+/// `--to <名>` 的目标包解析：与 `--lang` 同一条链（内置注册表 → 工程级已装包 → 叠加层名提示 →
+/// 未知包点可用集），差别只在失败**回错误而非 exit**——此刻已在命令臂内、翻译表已就位，交 bail 收尾
+/// （同 `loadExternalPack` 形制；活体真值：此处 exit 会跳过符号表补位）。因此包名解析失败退的是
+/// 失败码（与自检未过同码）而非用法码：同一子命令内的失败只有一个码，用法码留给缺/重复旗标那种
+/// 「还没开工」的形。
+fn loadTargetPack(name: []const u8) !Pack {
+    const chosen: registry.Entry = registry.lookup(name) orelse {
+        if (userpack.installedFile(io_, gpa_, userpack.default_dir, name)) |ip|
+            return loadExternalPack(ip);
+        if (registry.overlayHint(name)) |h| {
+            printErr(zzc.prog_prefix ++ relocalize_to_overlay_msg, .{ name, h.base_key, h.label });
+            return error.Failed;
+        }
+        printErr(zzc.prog_prefix ++ cli.np_unknown_pack ++ "「{s}」。当前可用：", .{name});
+        for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
+        printErr("\n", .{});
+        return error.Failed;
+    };
+    return Pack.loadWithOverlays(gpa_, chosen.bytes, chosen.overlays) catch |e| {
+        printErr(zzc.prog_prefix ++ "语言包解析失败（{s}），这属于工具自身缺陷，请反馈。", .{@errorName(e)});
+        return error.Failed;
+    };
+}
+
+const RelocalizeVerify = enum { ok, fail, no_zig };
+
+/// 用**正向链**验收产出：起一个短命 `zzc check --lang <目标> <产出入口>` 子进程。判据与被检物
+/// 同源（产出本就是正向链的产物），不另立一套「像不像某方言」的松散判准；子进程的母语报错原样转出。
+fn verifyRelocalized(dest: []const u8, to_name: []const u8) RelocalizeVerify {
+    const exe = std.process.executablePathAlloc(io_, gpa_) catch return .no_zig;
+    defer gpa_.free(exe);
+    const entry = std.fmt.allocPrint(gpa_, "{s}/{s}", .{ dest, zzc.default_entry }) catch return .no_zig;
+    defer gpa_.free(entry);
+    const argv = [_][]const u8{ exe, cli.sub_check, cli.flag_lang, to_name, entry };
+    const res = std.process.run(gpa_, io_, .{ .argv = &argv, .create_no_window = true }) catch return .no_zig;
+    defer gpa_.free(res.stdout);
+    defer gpa_.free(res.stderr);
+    if (res.term.success()) return .ok;
+    printOut("{s}", .{res.stdout});
+    printErr("{s}", .{res.stderr});
+    return .fail;
+}
+
+fn cmdRelocalize(src_lang: Pack, table: *Mangle, args: []const []const u8, to_name: []const u8) !void {
+    // 先解目标包再算落点：未知名/`..` 之类在包解析处即被拒，不会变成一条带路径段的目录名
+    // （落点守卫 `ejectDestHitsSourceTree` 是第二道闸，不是唯一一道）。
+    var target = try loadTargetPack(to_name);
+    defer target.deinit();
+    target.validate() catch |e| {
+        printErr(zzc.prog_prefix ++ cli.msg_pack_incomplete, .{ to_name, describePackError(e) });
+        return error.Failed;
+    };
+    var rev = try relocalize.RevIndex.init(gpa_, target);
+    defer rev.deinit();
+
+    const dest = if (args.len > 0)
+        args[0]
+    else
+        try std.fmt.allocPrint(gpa_, "{s}/{s}", .{ zzc.relocalize_default_dest, to_name });
+    // 防毁源：与 eject 同一道闸（清空 `dest/src` 前先拒与源码树重叠/越出的目标）。
+    if (cli.ejectDestHitsSourceTree(dest)) {
+        printErr(zzc.prog_prefix ++ "relocalize 目标 `{s}` 会与方言源码目录 `" ++ zzc.src_dir ++ "` 重叠或越出工程根，可能误删源码；请指定一个独立的子目录。", .{dest});
+        return error.Failed;
+    }
+
+    const proj = try collectAndTranslate(zzc.default_entry, src_lang, table);
+
+    // 陈旧清理（承 eject 同因）：产出树完全由本工程派生，上次重生后改名/删除的模块不能靠逐文件
+    // 覆写留下孤儿 `.zz`——它会被下次 `check` 当编译单元收进工程。
+    const dest_src = try zzc.ejectPathFor(gpa_, dest, zzc.src_dir);
+    if (pathExists(dest_src)) {
+        std.Io.Dir.cwd().deleteTree(io_, dest_src) catch |e| {
+            printErr(zzc.prog_prefix ++ "清理旧产出目录 `{s}/{s}` 失败（{s}）；请手动删除后重试。", .{ dest, zzc.src_dir, @errorName(e) });
+            return error.Failed;
+        };
+    }
+
+    var rendered: usize = 0;
+    for (proj.units.items) |u| {
+        const res = try relocalize.render(gpa_, u.zig_str, target, &rev, table.*);
+        defer gpa_.free(res.text);
+        defer gpa_.free(res.warnings);
+        const out_zz = try std.fmt.allocPrint(gpa_, "{s}/{s}", .{ dest, u.native_rel });
+        try writeWhole(out_zz, res.text);
+        // `@embedFile` 的被引资源不随词形变（渲染只改导入实参），原件拷进镜像目录即可。
+        stageEmbedAssets(u.native_rel, u.zig_str, out_zz, dest);
+        rendered += res.rendered;
+        for (res.warnings) |w| {
+            printErr(zzc.prog_prefix ++ relocalize_collide_msg, .{ out_zz, w.line, w.col, w.name, to_name });
+        }
+        gpa_.free(out_zz);
+    }
+
+    switch (verifyRelocalized(dest, to_name)) {
+        .ok => printOut(relocalize_ok_msg, .{ to_name, dest, proj.units.items.len, rendered, to_name }),
+        .no_zig => printOut(relocalize_noverify_msg, .{ to_name, dest, proj.units.items.len, rendered }),
+        .fail => {
+            printErr(zzc.prog_prefix ++ relocalize_fail_msg, .{ to_name, dest });
+            return error.Failed;
+        },
+    }
+}
+
 /// 统一失败退出：把已缓冲的输出刷出后静默退出，
 /// 避免把 zzc 自身的 Zig 错误返回跟踪（stderr 栈帧）暴露给方言用户。
 fn bail(e: anyerror) noreturn {
@@ -1320,9 +1525,77 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    // 第 325 轮 D184 闸①：子命令位被自有旗标占据。活体真值：`zzc --lang zh check`／`--lang=zh check`
+    // ／`--machine check`／`--fuzz check` 一律报「未知或不完整的子命令」——用户给的是旗标，诊断却指
+    // 向子命令（误诊）；且 nearZzcFlag 只扫 args、不扫 cmd，`--lang=zh` 这种合法旗标等号形也漏网。
+    // 这里按自有旗标全形集点名改报「旗标须写在子命令之后」。仍退 usage 码（位置错属用法错）。
+    // 第 326 轮 D185：子命令位四分类（自有旗标／近似名／`--`／其余旗标形）。D184 只覆盖自有旗标，
+    // `--fuzz check`／`--unknown check`／`--langx zh check`／`-O check`／`--`／`-x` 仍落通用兜底
+    // 「未知或不完整的子命令」——八形实测同一句误导话术；分类判据在 hub，此处只分派话术与退出。
+    switch (cli.classifyCmdSlot(cmd)) {
+        .ok => {},
+        .own => |f| {
+            printErr(zzc.prog_prefix ++ cli.msg_flag_before_cmd, .{ f, f });
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code);
+        },
+        .near => |n| {
+            printErr(zzc.prog_prefix ++ cli.msg_flag_near_before_cmd, .{ cmd, n, n });
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code);
+        },
+        .separator => {
+            printErr(zzc.prog_prefix ++ cli.msg_dashdash_first, .{});
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code);
+        },
+        .flag_shaped => {
+            printErr(zzc.prog_prefix ++ cli.msg_not_subcmd_flag, .{cmd});
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code);
+        },
+    }
+
     // R9（第 52 轮）：`--lang` 选包——cli 解旗标 + registry 按名取包；缺省用注册表默认（中文）。
     // R9g（第 103 轮）：新增 `--lang-file` 外部发行包文件源（免重编译），与 `--lang` 互斥。
     // 旗标从透传参数中剔离，不会进入 zig（check/build/run/test/eject 只看 argv）。
+    // 第 325 轮 D184 闸②③：取值旗标「缺值」与「重复」即拒。旧形四条静默/误诊路（活体实测）：
+    //   `check --lang`（末尾缺值）      → RC=0 全绿，按默认包跑，用户以为选包生效；
+    //   `check --lang-file`            → 同上，外部包根本没加载；
+    //   `check --lang=`（空取值）       → 「未知语言包「」」，话术把人引向包名而非空值；
+    //   `check --lang --machine`       → 「未知语言包「--machine」」，把旗标吞成取值；
+    //   `check --lang zh --lang 繁体`   → RC=0 全绿，前者胜、后者静默丢弃。
+    // 判据全在 hub（`scanFlag` 三态／`countFlag`），此处只做 I/O 与退出。
+    for (cli.flag_value_takers) |taker| {
+        switch (cli.scanFlag(args, taker.flag)) {
+            .missing => {
+                printErr(zzc.prog_prefix ++ cli.msg_flag_missing_value, .{ taker.flag, taker.flag, taker.hint });
+                werr.flush() catch {};
+                std.process.exit(cli.usage_exit_code);
+            },
+            else => {},
+        }
+        const seen = cli.countFlag(args, taker.flag);
+        if (seen > 1) {
+            printErr(zzc.prog_prefix ++ cli.msg_flag_repeat, .{ taker.flag, seen });
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code);
+        }
+    }
+    // `--to` 只属于 relocalize：其它子命令上出现即拒。旧形制会把它当 zig 透传参数静默吞下（错**旗标**
+    // 位置/归属无任何反馈，与 320 轮笔误族同因），而用户以为「目标包选好了」。`--` 之后属程序透传区不判。
+    if (!std.mem.eql(u8, cmd, cli.sub_relocalize)) {
+        for (args) |a| {
+            if (std.mem.eql(u8, a, "--")) break;
+            if (std.mem.eql(u8, a, cli.flag_to) or
+                (a.len > cli.flag_to.len and a[cli.flag_to.len] == '=' and std.mem.startsWith(u8, a, cli.flag_to)))
+            {
+                printErr(zzc.prog_prefix ++ relocalize_to_elsewhere_msg, .{ cli.flag_to, cmd, cli.sub_relocalize });
+                werr.flush() catch {};
+                std.process.exit(cli.usage_exit_code);
+            }
+        }
+    }
     const lang_name = cli.findLangFlag(args);
     const lang_file = cli.findLangFileFlag(args);
     if (lang_name != null and lang_file != null) {
@@ -1345,6 +1618,13 @@ pub fn main(init: std.process.Init) !void {
                 if (userpack.installedFile(io_, gpa_, userpack.default_dir, n)) |ip| {
                     installed_src = ip;
                     break :blk loadExternalPack(ip) catch |e| bail(e);
+                }
+                // 第 328 轮 D187：输入名命中内置叠加层名族（繁体/繁體/繁体中文/…）时，说清「默认已
+                // 叠加、无需选择」，而不是只说「未知语言包」——后者会把人引向「另装/另选」的错路。
+                if (registry.overlayHint(n)) |h| {
+                    printErr(zzc.prog_prefix ++ cli.msg_pack_is_overlay, .{ n, h.base_key, h.label, h.base_key });
+                    werr.flush() catch {};
+                    std.process.exit(cli.usage_exit_code);
                 }
                 printErr(zzc.prog_prefix ++ cli.np_unknown_pack ++ "「{s}」。当前可用：", .{n});
                 for (registry.entries) |p| printErr("{s}({s}) ", .{ p.key, p.display });
@@ -1431,11 +1711,21 @@ pub fn main(init: std.process.Init) !void {
             printOut("\n", .{});
             return;
         }
-        if (std.mem.eql(u8, verb, "add")) {
+        if (std.mem.eql(u8, verb, cli.lang_verb_add)) { // 第 329 轮 D188：动词字面量收编进 hub 词表
             cmdLangAdd(argv[1..]);
             return;
         }
-        printErr(zzc.prog_prefix ++ cli.msg_lang_bad_verb, .{verb}); // 第 313 轮 D172：话术取 hub 单一真值（承 311 形制）
+        // 第 330 轮 D189：卸载动词。此前只有 add——装上的用户包「装上即隐形、想撤只能猜路径删文件」。
+        if (std.mem.eql(u8, verb, cli.lang_verb_remove)) {
+            cmdLangRemove(argv[1..]);
+            return;
+        }
+        // 第 329 轮 D188：二级动词也点名并给最近似（`lang ad` → add）；距离 ≥2 才落原泛称。
+        if (cli.nearWord(verb, &cli.lang_verbs)) |n| {
+            printErr(zzc.prog_prefix ++ cli.msg_lang_verb_near, .{ verb, n });
+        } else {
+            printErr(zzc.prog_prefix ++ cli.msg_lang_bad_verb, .{verb}); // 第 313 轮 D172：话术取 hub 单一真值（承 311 形制）
+        }
         werr.flush() catch {};
         std.process.exit(cli.usage_exit_code); // 与 --lang 未知包/用法错同码；此刻表未建、无派生状态待落盘（D46 形安全）
     }
@@ -1453,7 +1743,7 @@ pub fn main(init: std.process.Init) !void {
 
     var table = Mangle.init(gpa_);
     defer table.deinit();
-    loadSymbols(&table) catch |e| bail(e); // 此线之前 bail_table 为 null：半解析表不落盘（D46）
+    loadSymbols(&table, lang.fingerprint()) catch |e| bail(e); // 此线之前 bail_table 为 null：半解析表不落盘（D46）
     bail_table = &table; // D46：自此表已全量就位，任何失败 bail 前补位持久化
 
     // R11（第 164 轮）：版本漂移早警只挂编译类四入口（check/build/run/test）——这些路径消费
@@ -1474,10 +1764,32 @@ pub fn main(init: std.process.Init) !void {
         cmdBuild(lang, &table, .test_, argv) catch |e| bail(e);
     } else if (std.mem.eql(u8, cmd, cli.sub_eject)) {
         cmdEject(lang, &table, argv) catch |e| bail(e);
+    } else if (std.mem.eql(u8, cmd, cli.sub_relocalize)) {
+        // `--to` 的缺值/重复已在 `flag_value_takers` 闸被拦；此处只管「整枚未给」——那属用法错，
+        // 与「包名打错」（后面的未知包话术）是两回事，不可合并。
+        const to_name = cli.findFlag(argv, cli.flag_to) orelse {
+            printErr(zzc.prog_prefix ++ relocalize_need_to_msg, .{});
+            werr.flush() catch {};
+            std.process.exit(cli.usage_exit_code);
+        };
+        var to_stripped = cli.stripFlag(gpa_, argv, cli.flag_to) catch |e| {
+            printErr(zzc.prog_prefix ++ "参数处理失败（{s}）。", .{@errorName(e)});
+            return e;
+        };
+        defer to_stripped.deinit(gpa_);
+        cmdRelocalize(lang, &table, to_stripped.items, to_name) catch |e| bail(e);
     } else {
         // 显式给出未知/拼错的子命令（如 `zzc runn`）必须以非零码失败：旧行为只把用法打到
         // stdout 并 return→exit 0，会让 CI/脚本把拼错的命令误判为成功。走 error.Usage 统一提示并 exit 2。
-        bail(error.Usage);
+        // 第 327 轮 D186：不再用泛称「未知或不完整的子命令」——点名原词；编辑距离 ≤1（含相邻换位）
+        // 时给最近似建议（`chek`→check、`biuld`→build、`ejct`→eject），否则给可用子命令全集。
+        if (cli.nearSubcmd(cmd)) |n| {
+            printErr(zzc.prog_prefix ++ cli.msg_subcmd_near, .{ cmd, n });
+        } else {
+            printErr(zzc.prog_prefix ++ cli.msg_unknown_subcmd, .{cmd});
+        }
+        werr.flush() catch {};
+        std.process.exit(cli.usage_exit_code);
     }
     saveSymbols(table);
 }
@@ -2177,20 +2489,25 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     std.Io.Dir.cwd().deleteTree(io_, sym_root) catch {};
     defer std.Io.Dir.cwd().deleteTree(io_, sym_root) catch {};
 
+    // 第 332 轮 D191：本块样本一律用**非零**指纹 `fp`——头行对账若退化成「只认前缀不认值」，
+    //   A6 必红；用 0 则「无头」与「带 0 头」不可分辨，机制空转也无测知。
+    const fp: u64 = 0xC0FF_EE12;
+    const fp_tail = "c0ffee12\n"; // = `{x}` 形的 fp（小写无前导零），写头与断言同源
     // A1 首次运行形：FileNotFound → 静默正常返回、表零变化（唯一豁免臂）。
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
-        try loadSymbols(&t);
+        try loadSymbols(&t, fp);
         try std.testing.expectEqual(@as(usize, 0), t.count());
+        try std.testing.expectEqual(fp, t.pack_fp); // 无缓存也先记指纹：保存时头行才写得对
     }
     // A2 恢复端到端：writeWhole 落盘 → loadSymbols 完整透传 parseSymbolText——
     //   既有映射命中不复派生、新名续接已恢复最大编号之后（D16 跨会话稳定契约）。
-    try writeWhole(symbols_path, "甲 = z_1\n乙 = z_2\n");
+    try writeWhole(symbols_path, zzc.symbols_pack_head ++ fp_tail ++ "甲 = z_1\n乙 = z_2\n");
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
-        try loadSymbols(&t);
+        try loadSymbols(&t, fp);
         try std.testing.expectEqual(@as(usize, 2), t.count());
         const a = try t.intern("甲"); // 缓存命中：不消耗新编号
         try std.testing.expectEqualStrings("z_1", a);
@@ -2207,15 +2524,47 @@ test "第 191 轮 T2 loadSymbols：三向决策臂钉（FileNotFound 静默/恢�
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
-        try std.testing.expectError(error.Failed, loadSymbols(&t));
+        try std.testing.expectError(error.Failed, loadSymbols(&t, t.pack_fp));
     }
     // A4 撞号传播臂（D36 形透传）：同一 z_1 归两名 → parseSymbolText 抛
     //   DuplicateSymbol → try 传播（源头拒并点名语义贯穿 wrapper）。
-    try writeWhole(symbols_path, "甲 = z_1\n乙 = z_1\n");
+    try writeWhole(symbols_path, zzc.symbols_pack_head ++ fp_tail ++ "甲 = z_1\n乙 = z_1\n");
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
-        try std.testing.expectError(error.DuplicateSymbol, loadSymbols(&t));
+        try std.testing.expectError(error.DuplicateSymbol, loadSymbols(&t, fp));
+    }
+    // A5 无头旧格式（D191 之前落盘的缓存）：整表作废而非照单全收——否则当年把 `變量` 当未知
+    //   标识符记下的 `變量 = z_4` 会永久压住后补的词表（translate 的 ident_first 让位用户标识符），
+    //   真跑铁证：只删 `.zzc` 同一份源码立刻翻成 `var`。
+    try writeWhole(symbols_path, "甲 = z_1\n乙 = z_2\n");
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t, fp);
+        try std.testing.expectEqual(@as(usize, 0), t.count());
+    }
+    // A6 指纹不符（换语言包/加叠加层/词表改版）：同样整表作废。若把比对写成恒真（只认前缀
+    //   `# @pack ` 不认值），本臂立红——这正是 D191 机制的判据本体。
+    try writeWhole(symbols_path, zzc.symbols_pack_head ++ "0000dead\n甲 = z_1\n乙 = z_2\n");
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t, fp);
+        try std.testing.expectEqual(@as(usize, 0), t.count());
+    }
+    // A7 自愈闭环：作废后本次运行重新 intern 并落盘，首行换成当前指纹——下次运行即可复用。
+    //   （作废只付一次重扫；不许留下「永远对不上头」的坏缓存，故本臂连写出的字节一并钉。）
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        try loadSymbols(&t, fp);
+        const a = try t.intern("甲"); // 作废后自 z_1 起算：不与已丢弃的编号纠缠
+        try std.testing.expectEqualStrings("z_1", a);
+        saveSymbols(t);
+        const b = try readWhole(symbols_path);
+        defer gpa_.free(b); // 本块 gpa_ 为 arena：free 是其空操作，勿混用 testing.allocator
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ fp_tail ++ "甲 = z_1\n", b);
     }
 }
 
@@ -2649,7 +2998,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         try std.testing.expect(pathExists(symbols_path));
         const b = try readFileRaw(symbols_path);
         defer std.testing.allocator.free(b);
-        try std.testing.expectEqual(@as(usize, 0), b.len);
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ "0\n", b);
     }
     // A1 序列化字节面 + 端到端往返：intern 两名 → `甲 = z_1\n乙 = z_2\n` 逐字节钉，再喂回
     //   loadSymbols（D16 契约：写侧格式漂移＝读侧静默丢映射；改分隔符/换行/次序即红）。
@@ -2661,7 +3010,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         saveSymbols(t);
         const b = try readWhole(symbols_path);
         defer std.testing.allocator.free(b);
-        try std.testing.expectEqualStrings("甲 = z_1\n乙 = z_2\n", b);
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ "0\n甲 = z_1\n乙 = z_2\n", b);
         var t2 = Mangle.init(std.testing.allocator);
         defer t2.deinit();
         // 自捕（三跑）：loadSymbols 的文件缓冲被符号表**借用视图**长按（parseSymbolText 走
@@ -2672,7 +3021,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         var arena_rt = std.heap.ArenaAllocator.init(std.testing.allocator);
         defer arena_rt.deinit(); // LIFO：先 t2.deinit（只处自有 ascii）后处 arena
         gpa_ = arena_rt.allocator();
-        try loadSymbols(&t2); // 同一盘上文件回读：写读两壳经本钉咬合成闭环
+        try loadSymbols(&t2, t2.pack_fp); // 同一盘上文件回读：写读两壳经本钉咬合成闭环
         gpa_ = std.testing.allocator;
         try std.testing.expectEqual(@as(usize, 2), t2.count());
         const c = try t2.intern("丙"); // next_index 已推过恢复值：新名续接 z_3
@@ -2687,7 +3036,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         saveSymbols(t);
         const b = try readWhole(symbols_path);
         defer std.testing.allocator.free(b);
-        try std.testing.expectEqualStrings("b = z_1\na = z_2\n", b);
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ "0\nb = z_1\na = z_2\n", b);
     }
     // A3 借用形（owned=false）：putExisting 载入的映射（ascii 为入参借用视图）同样逐字节落盘
     //   且 t.deinit 不误 free 借用名——序列化不分支 owned，写侧分支即红。
@@ -2698,7 +3047,7 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         saveSymbols(t);
         const b = try readWhole(symbols_path);
         defer std.testing.allocator.free(b);
-        try std.testing.expectEqualStrings("丁 = z_9\n", b);
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ "0\n丁 = z_9\n", b);
     }
     // A4 写失败静面：落盘路径预建为目录 → createFile 报 IsDir → printErr 点名
     //   「保存符号表失败（写入文件）」，void 签名不改主流程出码（改 try 传播则编译期自守）。
@@ -2717,9 +3066,11 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         defer std.testing.allocator.free(wraw);
         try std.testing.expect(std.mem.indexOf(u8, wraw, "保存符号表失败（写入文件）") != null);
     }
-    // A5 append 首臂（OOM 面）：fail_index=0 → 写符号名即失败 → 母语点名 + 提前 return
+    // A5 append 首臂（OOM 面）：fail_index=0 → 连**头行**都写不进 → 母语点名 + 提前 return
     //   **不落盘**（坏包不留半个文件；把 return 改 continue 即红——后续 append 成功、
-    //   writeWhole 写出截断内容）。本臂 out 零分配，计数 0/0 仅作形制对照。
+    //   writeWhole 写出截断内容）。注：D191 起落盘首笔分配是符号表头行，故首臂文案为「写入头」；
+    //   符号名臂由 A5b 的 resize 靶覆盖（两条臂都须在册：只留一条则另一条改 return 为 continue
+    //   无人抓）。本臂 out 零分配，计数 0/0 仅作形制对照。
     {
         std.Io.Dir.cwd().deleteFile(io_, symbols_path) catch {};
         try std.testing.expect(!pathExists(symbols_path));
@@ -2734,8 +3085,28 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         wf.interface.flush() catch {};
         const wraw = try readFileRaw(werr_path);
         defer std.testing.allocator.free(wraw);
-        try std.testing.expect(std.mem.indexOf(u8, wraw, "保存符号表失败（写入符号名）") != null);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "保存符号表失败（写入头）") != null);
         try std.testing.expectEqual(fa.deallocations, fa.allocations); // 零分配臂：0/0 形制对照
+    }
+    // A5b 符号名 append 臂（扩容面）：头行已成功（alloc #0），首枚 300 字节长名**必**撑破余量
+    //   → 扩容先试 remap（resize 靶打空）再回退 alloc（fail_index=1 打空）→ 母语点名「写入
+    //   符号名」且不落盘。长名非装饰：容量按 growCapacity 倍增，短名可能整段落进头行余量而
+    //   根本不扩容，本臂就退化成「什么都没失败」的假绿（300 字节 ≫ 任何头行余量）。
+    {
+        var t = Mangle.init(std.testing.allocator);
+        defer t.deinit();
+        const LONG_NATIVE: [300]u8 = @splat('x');
+        try t.putExisting(&LONG_NATIVE, "z_1");
+        var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{ .fail_index = 1, .resize_fail_index = 0 });
+        gpa_ = fa.allocator();
+        saveSymbols(t);
+        gpa_ = std.testing.allocator;
+        try std.testing.expect(!pathExists(symbols_path));
+        wf.interface.flush() catch {};
+        const wraw = try readFileRaw(werr_path);
+        defer std.testing.allocator.free(wraw);
+        try std.testing.expect(std.mem.indexOf(u8, wraw, "保存符号表失败（写入符号名）") != null);
+        try std.testing.expectEqual(fa.deallocations, fa.allocations); // 头行块已回收：1/1
     }
     // A6 D59 计数钉（无失败点纯计数形）：FailingAllocator 不设 fail/resize 靶，正常落盘一条
     //   长名——allocations=1（out 首块容量）且与 deallocations 齐平：原码（从不回收）必为
@@ -2747,7 +3118,8 @@ test "第 194 轮 T1 saveSymbols：空表落盘/序列化往返/顺序面/借用
         defer t.deinit();
         const LONG_NATIVE: [300]u8 = @splat('x'); // 300 字节长母语名（自捕：`"x" ** 300` 被 0.17
         //   zig fmt 判为「`*` 单侧空格」硬拒、两种空格形制皆不录——改 @splat 定长数组形避开）
-        const EXPECT_LONG = LONG_NATIVE ++ " = z_1\n"; // ++ 结果带哨兵（[307:0]u8），不可标注为定长数组类型
+        // D191 起落盘首行是符号表头（包指纹 0），期望形必须同源拼接。
+        const EXPECT_LONG = zzc.symbols_pack_head ++ "0\n" ++ LONG_NATIVE ++ " = z_1\n"; // ++ 结果带哨兵（[307:0]u8），不可标注为定长数组类型
         try t.putExisting(&LONG_NATIVE, "z_1");
         var fa = std.testing.FailingAllocator.init(std.testing.allocator, .{});
         gpa_ = fa.allocator();
@@ -2821,20 +3193,20 @@ test "第 198 轮 T1 状态路径 seam 契约：起始态/默认真值字面量�
     // A2 读侧覆写生效：p1 有内容、p2 从未写过—— seam 指 p1 则恢复到 2 条，指 p2 则走
     //   FileNotFound 静默臂、表零变化。 seam 被改回编译期字面量（或 readWhole 硬编路径）则第一段即红；
     //   两径相互波及（拼接漏了尾段、两次 init 撞名）则第二段即红。
-    try writeWhole(p1, "甲 = z_1\n乙 = z_2\n");
+    try writeWhole(p1, zzc.symbols_pack_head ++ "0\n甲 = z_1\n乙 = z_2\n");
     symbols_path = p1;
     defer symbols_path = symbols_path_default;
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
-        try loadSymbols(&t);
+        try loadSymbols(&t, t.pack_fp);
         try std.testing.expectEqual(@as(usize, 2), t.count());
     }
     symbols_path = p2;
     {
         var t = Mangle.init(std.testing.allocator);
         defer t.deinit();
-        try loadSymbols(&t);
+        try loadSymbols(&t, t.pack_fp);
         try std.testing.expectEqual(@as(usize, 0), t.count());
     }
     // 写侧同理：saveSymbols 只落当前 seam 指向的 p2，p1 字节面不被改写（落点硬编则 p1 被覆盖、本钉红）。
@@ -2843,8 +3215,8 @@ test "第 198 轮 T1 状态路径 seam 契约：起始态/默认真值字面量�
         defer t.deinit();
         _ = try t.intern("丙");
         saveSymbols(t);
-        try std.testing.expectEqualStrings("丙 = z_1\n", try readWhole(p2));
-        try std.testing.expectEqualStrings("甲 = z_1\n乙 = z_2\n", try readWhole(p1));
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ "0\n丙 = z_1\n", try readWhole(p2));
+        try std.testing.expectEqualStrings(zzc.symbols_pack_head ++ "0\n甲 = z_1\n乙 = z_2\n", try readWhole(p1));
     }
 
     // A3 复原臂：另开嵌套块自证「覆写 → 回置」闭环，块外用**字面量**判据钉回真值——判据若复用
@@ -3000,9 +3372,9 @@ test "main dispatch 路由名与 cli 子命令单一真值表同源（第 206 �
     // 本测把这份编译期同源显式钉住：九枚路由名皆在表内且判据为真；旧态改臂名（P2 探针把
     // eject→export）曾使运行期 `zzc eject` 落未知兜底而 527/527 恒绿，如今一名一处即转红。
     const routed = [_][]const u8{
-        cli.sub_init,    cli.sub_check, cli.sub_build, cli.sub_run,
-        cli.sub_test,    cli.sub_eject, cli.sub_lsp,   cli.sub_lang,
-        cli.sub_version,
+        cli.sub_init, cli.sub_check,   cli.sub_build,      cli.sub_run,
+        cli.sub_test, cli.sub_eject,   cli.sub_relocalize, cli.sub_lsp,
+        cli.sub_lang, cli.sub_version,
     };
     try std.testing.expectEqual(cli.subcommands.len, routed.len);
     for (routed) |name| {
@@ -3017,4 +3389,38 @@ test "main dispatch 路由名与 cli 子命令单一真值表同源（第 206 �
     try std.testing.expect(!cli.isKnownSubcommand("export"));
     // check 臂与机读契约 hub 逐字节同源（跨模块第三面对账）。
     try std.testing.expectEqualStrings(mcon.sub_check, cli.sub_check);
+}
+
+test "第 331 轮 T0 relocalize 七条话术：可插值且点名关键实体（D190）" {
+    // 回程话术全在命令臂里跑：占位符与实参不符在编译期就红（`allocPrint` 的 comptime 校验）；
+    // 此处钉的是**插值后仍点名关键实体**——话术漂成不含目标包名/旗标/位置的泛化形时，
+    // 用户与 AI 都无从自修（同 302/306 文档面同一理由：静默漂比报错更贵）。
+    const gpa = std.testing.allocator;
+    const ok = try std.fmt.allocPrint(gpa, relocalize_ok_msg, .{ "ja", "out", @as(usize, 2), @as(usize, 7), "ja" });
+    defer gpa.free(ok);
+    try std.testing.expect(std.mem.indexOf(u8, ok, "out") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ok, cli.sub_check) != null);
+    try std.testing.expect(std.mem.indexOf(u8, ok, "7") != null); // 换形数不得漏注
+    const nv = try std.fmt.allocPrint(gpa, relocalize_noverify_msg, .{ "ja", "out", @as(usize, 2), @as(usize, 7) });
+    defer gpa.free(nv);
+    try std.testing.expect(std.mem.indexOf(u8, nv, cli.np_not_detected) != null);
+    const fl = try std.fmt.allocPrint(gpa, relocalize_fail_msg, .{ "ja", "out" });
+    defer gpa.free(fl);
+    try std.testing.expect(std.mem.indexOf(u8, fl, "ja") != null);
+    const co = try std.fmt.allocPrint(gpa, relocalize_collide_msg, .{ "out/src/main.zz", @as(usize, 3), @as(usize, 11), "甲", "ja" });
+    defer gpa.free(co);
+    try std.testing.expect(std.mem.indexOf(u8, co, "11") != null); // 行列是「产物内位置」，漏注即无从定位
+    try std.testing.expect(std.mem.indexOf(u8, co, "甲") != null);
+    try std.testing.expect(std.mem.indexOf(u8, relocalize_need_to_msg, cli.sub_relocalize) != null);
+    try std.testing.expect(std.mem.indexOf(u8, relocalize_need_to_msg, cli.flag_to) != null);
+    const el = try std.fmt.allocPrint(gpa, relocalize_to_elsewhere_msg, .{ cli.flag_to, cli.sub_check, cli.sub_relocalize });
+    defer gpa.free(el);
+    try std.testing.expect(std.mem.indexOf(u8, el, cli.sub_check) != null); // 须点名「当前子命令」
+    try std.testing.expect(std.mem.indexOf(u8, el, cli.flag_lang) != null); // 须给出可行替代（源包旗标）
+    const ov = try std.fmt.allocPrint(gpa, relocalize_to_overlay_msg, .{ "繁体", "zh", "繁体字形" });
+    defer gpa.free(ov);
+    try std.testing.expect(std.mem.indexOf(u8, ov, "繁体字形") != null);
+    try std.testing.expect(std.mem.indexOf(u8, ov, cli.flag_to) != null);
+    // 错指引禁回流：relocalize 的叠加层话术**不得**照搬 `--lang` 的「默认已叠加」形（--lang 是源包）。
+    try std.testing.expect(std.mem.indexOf(u8, ov, "默认已叠加") == null);
 }

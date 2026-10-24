@@ -404,6 +404,11 @@ const runner_pairs = [_][2][]const u8{
     // 用一对短语保住格式符 'd' 与类型操作数 'X'（整句模板反而会丢这两个关键信息）。
     .{ "invalid format string ", "无效格式串 " },
     .{ " for type '", " 对" ++ clihub.np_type ++ " '" },
+    // 非 void 值被当语句丢掉（`value of type 'i64' ignored`，AstGen 主报错）：用一对短语把操作数 'X' 包进中文语序
+    // “值（类型 X）”，闭括号搭在第二段开头——同下条 `variable of type ` 的成对手法。旧表只有 `type '` 单段，
+    // 产出 `value of 类型 'i64' ignored` 这种中英混排（第 333 轮真跑 c1 坐实，半吊子译文比纯英文更难读）。
+    .{ "value of type '", "值（" ++ clihub.np_type ++ " '" },
+    .{ "' ignored", "'）被忽略" },
     .{ "type '", clihub.np_type ++ " '" },
     // 枚举 `匹配` 非穷尽时逐条列出的说明行 `unhandled enumeration value: 'X'`——保住未处理的枚举成员名 'X'（主错 `switch must handle` 已由 packs `匹配不穷尽` 接住）。
     .{ "unhandled enumeration value", "未处理的枚举取值" },
@@ -423,6 +428,17 @@ const runner_pairs = [_][2][]const u8{
     .{ " is invalid", " 无效" }, // `'struct X' is invalid` 之类：保住被引号包裹的操作数（类型/名字），仅译尾部谓语；配套的 `说明: 声明容器…` 走 packs 给正确写法。
     .{ "length ", "长度 " },
     .{ " here", " 在此处" },
+    // 局部绑定遮蔽外层同名绑定（AstGen 族，第 333 轮真跑 c5/s2/s3/s5/s6/s10/s11 逐形枚举出 7 形）：
+    // 报文里带着具体变量名（`local variable 'x' shadows local constant from outer scope`），整句模板会丢掉
+    // 名字；故拆成「左侧种类短语 + 右侧关系短语」两段，名字原样夹在中间。前缀竞争：`local constant shadows
+    // declaration of '`（无引号夹名）与 `local constant '` 互不为前缀（撇号 vs 空格），表序无约束。
+    .{ "local constant shadows declaration of '", "局部常数遮蔽了已声明的 '" },
+    .{ "local variable shadows declaration of '", "局部变量遮蔽了已声明的 '" },
+    .{ "local constant '", "局部常数 '" },
+    .{ "local variable '", "局部变量 '" },
+    .{ "shadows local constant from outer scope", "遮蔽了外层同名常数" },
+    .{ "shadows local variable from outer scope", "遮蔽了外层同名变量" },
+    .{ "shadows function parameter from outer scope", "遮蔽了外层同名函数参数" },
 };
 
 /// 测试运行器专有英文短语、以及无位置的 CLI 级裸诊断前缀的母语替换（仅涉及已知串，
@@ -2632,7 +2648,8 @@ test "matchDiag 真消息命中矩阵（D50 方法论·探针实捕真形样本�
 // R11（第 164 轮）：真形快照矩阵数据 + 豁免表（文件级、供快照测与覆盖率测共用）。
 // 承 D50「先登矩阵再提交」规约的机械化——把「每条 [diagnostics] 都须有真形样本命中并归属、
 // 否则显式豁免」从人工纪律升为常驻测：新增/改包条目若未同步登记样本或豁免即红（防回译词条
-// 静默不可达的译链回归面）。真形来源（不臆造）：本机真 zig 实跑（_probe/diag/raw_*.txt）、既有
+// 静默不可达的译链回归面）。真形来源（不臆造）：本机真 zig 实跑（历史探针语料，
+// 已于第 333 轮随 `_probe/` 清理出库——真形已逐条固化进下方快照表，不依赖盘上探针件）、既有
 // 回译测与 D50/D41 历史探针实录；基线行以「包内登记的匹配短语」为真形——该短语本身即从真 zig
 // 报错逐字摘取的子串（见 中文.txt [diagnostics] 段头注）。归属判据用「身份」：matchDiag(真形) 命中
 // 条目的 message/tip 须逐字等于「按该 pattern 在表里查得的条目」，被更靠前条目劫持则 message 立即
@@ -2698,6 +2715,68 @@ const r11_snaps = [_]R11Snap{
     .{ .eng = "is redundant", .pattern = "is redundant", .msg_key = "冗余", .tip_key = "隐含" },
     .{ .eng = "consider omitting 'try'", .pattern = "consider omitting 'try'", .msg_key = "省略", .tip_key = "去掉" },
     .{ .eng = "declared here", .pattern = "declared here", .msg_key = "定义在此处", .tip_key = "定位" },
+    // 第 331 轮 D190：zig 0.17 parser 错误族全 27 条（`Ast.zig` 的 writeAll 全集对账后的缺口）。
+    // 331 D190 parser 族（歧义逻辑与）
+    .{ .eng = "ambiguous use of '&&'; use 'and' for logical AND, or change whitespace to ' & &' for bitwise AND", .pattern = "ambiguous use of '&&'; use 'and' for logical AND, or change whitespace to ' & &' for bitwise AND", .msg_key = "`&&` ", .tip_key = "Zig 没有 `" },
+    // 331 D190 parser 族（位区间限单项指针）
+    .{ .eng = "bit range only allowed on single item pointers", .pattern = "bit range only allowed on single item pointers", .msg_key = "位区间只能", .tip_key = "`x[起..宽]" },
+    // 331 D190 parser 族（比较不可连写）
+    .{ .eng = "comparison operators cannot be chained", .pattern = "comparison operators cannot be chained", .msg_key = "比较运算符", .tip_key = "`甲 < 乙 <" },
+    // 331 D190 parser 族（字段间禁声明）
+    .{ .eng = "declarations are not allowed between container fields", .pattern = "declarations are not allowed between container fields", .msg_key = "容器字段之", .tip_key = "结构/联合/枚举" },
+    // 331 D190 parser 族（文档注释挂编译期块）
+    .{ .eng = "documentation comments cannot be attached to comptime blocks", .pattern = "documentation comments cannot be attached to comptime blocks", .msg_key = "文档注释不", .tip_key = "`///` 只能" },
+    // 331 D190 parser 族（文档注释挂测试）
+    .{ .eng = "documentation comments cannot be attached to tests", .pattern = "documentation comments cannot be attached to tests", .msg_key = "文档注释不", .tip_key = "`///` 不能" },
+    // 331 D190 parser 族（声明后缺分号）
+    .{ .eng = "expected ';' after declaration", .pattern = "expected ';' after declaration", .msg_key = "声明后缺少", .tip_key = "检查上一行声明是" },
+    // 331 D190 parser 族（字段后缺逗号）
+    .{ .eng = "expected ',' after field", .pattern = "expected ',' after field", .msg_key = "字段后缺少", .tip_key = "容器字段之间用 " },
+    // 331 D190 parser 族（循环捕获后缺逗号）
+    .{ .eng = "expected ',' after for capture", .pattern = "expected ',' after for capture", .msg_key = "`对于` ", .tip_key = "多值循环的捕获形" },
+    // 331 D190 parser 族（循环操作数后缺逗号）
+    .{ .eng = "expected ',' after for operand", .pattern = "expected ',' after for operand", .msg_key = "`对于` ", .tip_key = "`对于 (…, " },
+    // 331 D190 parser 族（初始值后缺逗号）
+    .{ .eng = "expected ',' after initializer", .pattern = "expected ',' after initializer", .msg_key = "初始值之后", .tip_key = "结构体/数组字面" },
+    // 331 D190 parser 族（参数后缺逗号）
+    .{ .eng = "expected ',' after parameter", .pattern = "expected ',' after parameter", .msg_key = "参数之间缺", .tip_key = "`函数 名(甲:" },
+    // 331 D190 parser 族（匹配分支后缺逗号）
+    .{ .eng = "expected ',' after switch prong", .pattern = "expected ',' after switch prong", .msg_key = "`匹配` ", .tip_key = "分支形如 `值 " },
+    // 331 D190 parser 族（字段缺初始值）
+    .{ .eng = "expected field initializer", .pattern = "expected field initializer", .msg_key = "字段缺少初", .tip_key = "结构体字面量里写" },
+    // 331 D190 parser 族（公开后应为声明）
+    .{ .eng = "expected function or variable declaration after pub", .pattern = "expected function or variable declaration after pub", .msg_key = "`公开` ", .tip_key = "`公开` 是可见" },
+    // 331 D190 parser 族（原型后应分号或块）
+    .{ .eng = "expected ';' or block after function prototype", .pattern = "expected ';' or block after function prototype", .msg_key = "函数原型后", .tip_key = "`外部 函数 名" },
+    // 331 D190 parser 族（变量声明缺限定）
+    .{ .eng = "expected 'var' or 'const' before variable declaration", .pattern = "expected 'var' or 'const' before variable declaration", .msg_key = "变量声明前", .tip_key = "Zig 没有独立" },
+    // 331 D190 parser 族（外部函数不能有体）
+    .{ .eng = "extern functions have no body", .pattern = "extern functions have no body", .msg_key = "`外部` ", .tip_key = "`外部 函数` " },
+    // 331 D190 parser 族（重复地址空间）
+    .{ .eng = "extra addrspace qualifier", .pattern = "extra addrspace qualifier", .msg_key = "地址空间修", .tip_key = "一个指针只能有一" },
+    // 331 D190 parser 族（重复对齐）
+    .{ .eng = "extra align qualifier", .pattern = "extra align qualifier", .msg_key = "对齐修饰重", .tip_key = "一个指针/变量只" },
+    // 331 D190 parser 族（字段在声明之后）
+    .{ .eng = "field after declarations here", .pattern = "field after declarations here", .msg_key = "字段不能写", .tip_key = "容器里字段须成组" },
+    // 331 D190 parser 族（字段在声明之前）
+    .{ .eng = "field before declarations here", .pattern = "field before declarations here", .msg_key = "字段不能写", .tip_key = "容器开头不能先来" },
+    // 331 D190 parser 族（可变参数后禁参数）
+    .{ .eng = "function prototype has parameter after varargs", .pattern = "function prototype has parameter after varargs", .msg_key = "`可变参数", .tip_key = "`...` 必须" },
+    // 331 D190 parser 族（文档注释须独占行）
+    .{ .eng = "same line documentation comment", .pattern = "same line documentation comment", .msg_key = "文档注释必", .tip_key = "`///` 不能" },
+    // 331 D190 parser 族（文档注释未挂载）
+    .{ .eng = "unattached documentation comment", .pattern = "unattached documentation comment", .msg_key = "文档注释没", .tip_key = "`///` 之后" },
+    // 331 D190 parser 族（声明变量须限定）
+    .{ .eng = "use 'var' or 'const' to declare variable", .pattern = "use 'var' or 'const' to declare variable", .msg_key = "声明变量要", .tip_key = "先用 `变量 x" },
+    // 331 D190 parser 族（初始化误用比较）
+    .{ .eng = "variable initialized with '==' instead of '='", .pattern = "variable initialized with '==' instead of '='", .msg_key = "初始化误用", .tip_key = "`变量 x ==" },
+    // 第 333 轮 D192：AstGen 「未使用值/丢弃值」与「局部遮蔽」两族（真跑 /tmp/p c1..v5 逐形枚举后的缺口）。
+    // 333 D192 未使用值族（非 void 值当语句丢掉，主报错）
+    .{ .eng = "all non-void values must be used", .pattern = "all non-void values must be used", .msg_key = "结果未被使用", .tip_key = "_ = 表达式" },
+    // 333 D192 未使用值族（配套说明：显式丢弃写法）
+    .{ .eng = "to discard the value, assign it to '_'", .pattern = "to discard the value, assign it to '_'", .msg_key = "显式赋给", .tip_key = "配套说明" },
+    // 333 D192 未使用捕获族（for/if/switch/catch 的 |名| 绑定未读）
+    .{ .eng = "unused capture", .pattern = "unused capture", .msg_key = "捕获的取值", .tip_key = "下划线" },
 };
 
 const R11Waiver = struct { pattern: []const u8, why: []const u8 };
@@ -2778,7 +2857,7 @@ test "快照矩阵覆盖率守卫（R11·全条 pattern 须有样本或豁免，
         }
     }
     // 基数锚防静默空转（103 轮教训）：样本/豁免下限；且覆盖计数须恰等于全表条目数。
-    try std.testing.expect(r11_snaps.len >= 45);
+    try std.testing.expect(r11_snaps.len >= 75); // 第 333 轮 D192：72→75（未使用值/丢弃值/未使用捕获 +3）
     try std.testing.expect(r11_waivers.len >= 10);
     try std.testing.expectEqual(items.len, covered);
     std.debug.print("[R11 覆盖率] 条目={d} 覆盖={d} 样本={d} 豁免={d}\n", .{ items.len, covered, r11_snaps.len, r11_waivers.len });
@@ -3155,4 +3234,188 @@ test "第 200 轮 T1 隐藏判据与 .zzc 族同源：写侧产物→组合锚 +
     // A4 粗粒度真形（坐实真行为、非期望）：判据是子串匹配，故 `.zzcfoo` 这类同前缀名也被隐藏——
     //    隐藏多一个不存在的路径无害、漏隐藏才泄密，此处钉住「宁宽勿严」的设计取向；判据改段边界匹配即本钉红。
     try std.testing.expect(isInternalPath(".zzcfoo/x.zig"));
+}
+
+// 第 331 轮 T0（D190）：zig 0.17 parser 错误族全覆盖钉。
+// 真值来源：本机 `lib/std/zig/Ast.zig` 的 `w.writeAll("…")` 全集（30 条，可枚举——这是本仓
+// 首个「不靠抽样、靠源码枚举」的诊断覆盖钉）。改前实测：30 条里仅 3 条有着落，其余一律落到
+// 「[未翻译] 此报错暂未提供中文翻译」——母语用户写错一个逗号，也读不到「哪个逗号」。
+// 硬编全集（不读外部 zig 安装路径：测试须自足）；升版后 zig 若改措辞，本钉仍是 0.17 快照，
+// 真形漂移由既有 R11 观察面 + `cli.zigDriftNote` 版本告警兜（与 D50 规约同一边界）。
+const parser_errs_017 = [_][]const u8{
+    "ambiguous use of '&&'; use 'and' for logical AND, or change whitespace to ' & &' for bitwise AND",
+    "bit range only allowed on single item pointers",
+    "comparison operators cannot be chained",
+    "declarations are not allowed between container fields",
+    "documentation comments cannot be attached to comptime blocks",
+    "documentation comments cannot be attached to tests",
+    "expected ',' after argument",
+    "expected ';' after declaration",
+    "expected ',' after field",
+    "expected ',' after for capture",
+    "expected ',' after for operand",
+    "expected ',' after initializer",
+    "expected ',' after parameter",
+    "expected ';' after statement",
+    "expected ',' after switch prong",
+    "expected field initializer",
+    "expected function or variable declaration after pub",
+    "expected ';' or block after function prototype",
+    "expected ';' or 'else' after statement",
+    "expected 'var' or 'const' before variable declaration",
+    "extern functions have no body",
+    "extra addrspace qualifier",
+    "extra align qualifier",
+    "field after declarations here",
+    "field before declarations here",
+    "function prototype has parameter after varargs",
+    "same line documentation comment",
+    "unattached documentation comment",
+    "use 'var' or 'const' to declare variable",
+    "variable initialized with '==' instead of '='",
+};
+
+test "第 331 轮 T0 zig 0.17 parser 错误族全覆盖（D190）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // A1 基数：全集 30 条（与 `Ast.zig` 对账后的数；少一条即说明谁把硬编表剪了）。
+    try std.testing.expectEqual(@as(usize, 30), parser_errs_017.len);
+
+    // A2 逐条必译：每条真形经 matchDiag 都必须命中某条目，且译文不等于原英文。
+    var translated: usize = 0;
+    for (parser_errs_017) |eng| {
+        const r = matchDiag(lang, eng);
+        if (!r.matched) {
+            std.debug.print("[331 缺口] parser 错误未译：{s}\n", .{eng});
+            continue;
+        }
+        if (std.mem.eql(u8, r.message, eng)) {
+            std.debug.print("[331 未改] 命中却原样返回：{s}\n", .{eng});
+            continue;
+        }
+        translated += 1;
+    }
+    try std.testing.expectEqual(parser_errs_017.len, translated);
+
+    // A3 无英文残留：parser 族译文是给母语读者看的，`expected`／`cannot` 等英文词不得留在译文里
+    // （教学提示可以引 zig 原文与 ASCII 标识符，故只查 message 槽）。
+    const leak_words = [_][]const u8{ "expected", "cannot", "unattached", "qualifier", "initializer" };
+    for (parser_errs_017) |eng| {
+        const r = matchDiag(lang, eng);
+        for (leak_words) |w| {
+            if (std.mem.indexOf(u8, r.message, w) != null) {
+                std.debug.print("[331 英泄] {s} → {s}\n", .{ eng, r.message });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+
+    // A4 教学提示同在：至少八成条目带提示（新增条目若只给译文、不给「怎么改」，等于只报错不指路）。
+    var with_tip: usize = 0;
+    for (parser_errs_017) |eng| {
+        if (matchDiag(lang, eng).tip.len > 0) with_tip += 1;
+    }
+    try std.testing.expect(with_tip >= 27);
+}
+
+// ---------------------------------------------------------------------------
+// 第 333 轮 D192：AstGen「未使用值/丢弃值/未使用捕获」三族（packs 整句）与
+// 「局部遮蔽」族（短语保名）——两族的真形均由真跑 /tmp/p 的 c1..v5／s2..s11
+// 逐形枚举得到：先造形态、再抄 zig 0.17 吐出的英文原文，不凭印象手写
+// （D150 教训：抽样语料只覆盖高频，全集须按编译器实吐对账）。
+// ---------------------------------------------------------------------------
+
+const unused_value_017 = [_][]const u8{
+    "all non-void values must be used", // 非 `空` 值当语句丢掉的主报错
+    "to discard the value, assign it to '_'", // 同上的配套说明行
+    "unused capture", // `|名|` 捕获绑定后未读（`对于`/`如果`/`匹配`/`捕获` 同形）
+};
+
+/// 遮蔽八形：内层绑定（常数/变量）× 外层（常数/变量/函数参数），外加遮蔽容器级声明（两种内层种类）。
+/// 名字一律用「甲」：整句模板会把操作数丢在译文之外（旧形是直接给英文），故此处把「保名」一并钉死。
+const shadow_017 = [_]struct { eng: []const u8, want: []const u8 }{
+    .{ .eng = "local constant '甲' shadows local constant from outer scope", .want = "局部常数 '甲' 遮蔽了外层同名常数" },
+    .{ .eng = "local variable '甲' shadows local variable from outer scope", .want = "局部变量 '甲' 遮蔽了外层同名变量" },
+    .{ .eng = "local variable '甲' shadows local constant from outer scope", .want = "局部变量 '甲' 遮蔽了外层同名常数" },
+    .{ .eng = "local constant '甲' shadows local variable from outer scope", .want = "局部常数 '甲' 遮蔽了外层同名变量" },
+    .{ .eng = "local constant '甲' shadows function parameter from outer scope", .want = "局部常数 '甲' 遮蔽了外层同名函数参数" },
+    .{ .eng = "local variable '甲' shadows function parameter from outer scope", .want = "局部变量 '甲' 遮蔽了外层同名函数参数" },
+    .{ .eng = "local constant shadows declaration of '甲'", .want = "局部常数遮蔽了已声明的 '甲'" },
+    .{ .eng = "local variable shadows declaration of '甲'", .want = "局部变量遮蔽了已声明的 '甲'" },
+};
+
+test "第 333 轮 T0 未使用值/丢弃值/未使用捕获：packs 整句命中且译文无英文残留（D192）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // A1 三族逐条走 packs 整句（`matched` 必须为真）：若有人删条目，则这三形退化成纯英文/半吊子，
+    // 而 `真跑仍能编译通过`——本臂是这三条译文唯一的行为锚。
+    for (unused_value_017) |eng| {
+        const r = matchDiag(lang, eng);
+        if (!r.matched) {
+            std.debug.print("[333 未命中] {s}\n", .{eng});
+            return error.TestUnexpectedResult;
+        }
+        // A2 译文槽无英文原文词（提示槽允许引 zig 原文与 ASCII 标识符，故不查）。
+        for ([_][]const u8{ "unused", "must be used", "discard" }) |w| {
+            if (std.mem.indexOf(u8, r.message, w) != null) {
+                std.debug.print("[333 英泄] {s} → {s}\n", .{ eng, r.message });
+                return error.TestUnexpectedResult;
+            }
+        }
+        // A3 每条都得给出「怎么改」，否则只报错不指路。
+        try std.testing.expect(r.tip.len > 0);
+    }
+
+    // A4 真形整行渲染：`说明` 行与主报错同走一条渲染路径，断言读者看到的中文串在位。
+    const table = Mangle.init(gpa);
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+    for (unused_value_017) |eng| {
+        const line = try renderDiag(gpa, lang, table, &.{}, "src/main.zz", 3, 5, "error", eng, &filter);
+        defer gpa.free(line);
+        const want = matchDiag(lang, eng).message;
+        try hasSub(line, want);
+        try noSub(line, "此报错暂未提供中文翻译"); // 落到「未翻译」兜底就是回归
+    }
+}
+
+test "第 333 轮 T0 局部遮蔽八形：短语保名且无中英混排（D192）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    // A1 八形逐字节全等 + 保名 + 无英文残留。
+    for (shadow_017) |c| {
+        // 遮蔽族刻意不登 packs 整句（模板丢名）：若将来有人改成整句模板，本行先红，提醒把 want 一并改成丢名的形。
+        try std.testing.expect(!matchDiag(lang, c.eng).matched);
+        const got = try localizeRunner(std.testing.allocator, c.eng);
+        defer std.testing.allocator.free(got);
+        try std.testing.expectEqualStrings(c.want, got);
+        try hasSub(got, "甲");
+        for ([_][]const u8{ "local ", "shadows", "outer scope", "declaration of" }) |w| try noSub(got, w);
+    }
+
+    // A2 混排消除：旧表只有 `type '` 单段，把 `value of type 'i64' ignored` 译成
+    // `value of 类型 'i64' ignored`（半中半英比纯英文更难读）——第 333 轮真跑 c1 实见。
+    const mixed = try localizeRunner(std.testing.allocator, "value of type 'i64' ignored");
+    defer std.testing.allocator.free(mixed);
+    try std.testing.expectEqualStrings("值（类型 'i64'）被忽略", mixed);
+
+    // A3 反形：既有的 `type '`/` is invalid` 用法不得被新短语抢走（同一张表，插入即可能改道）。
+    const fmt = try localizeRunner(std.testing.allocator, "invalid format string 'd' for type 'X'");
+    defer std.testing.allocator.free(fmt);
+    try std.testing.expectEqualStrings("无效格式串 'd' 对类型 'X'", fmt);
+    const inv = try localizeRunner(std.testing.allocator, "'struct 甲' is invalid");
+    defer std.testing.allocator.free(inv);
+    try std.testing.expectEqualStrings("'struct 甲' 无效", inv);
 }

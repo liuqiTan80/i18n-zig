@@ -24,6 +24,97 @@
 - **第三方库母语翻译叠加包 `--lang-overlay`（第 265 轮）**：新增运行期「外部叠加层语言包」接缝——`zzc run/build/check <源> --lang-overlay <包.txt>` 把一份只带自身 `[aliases]/[docs]` 的第三方库叠加层（形如 `contrib/packs/httpz-中文.txt`）经 `Pack.parseInto` **累积并入所选基包之上**（缺省即中文），合并后统一 `validate`（叠加层无须自含 B6 13 契约，由基包撑），与 `--lang`/`--lang-file` 可组合、旗标不透传 zig。首个赞助库叠加包 `contrib/packs/httpz-中文.txt`：把网络/服务端库 `httpz`（karlseguin/http.zig）的公共类型/静态函数限定路径译为中文（`网络服务=httpz`、`网络服务.请求=httpz.Request` 等 11 条，一一对应 `[docs]`）；沿用既有保守翻译边界——模块根/类型限定路径/静态函数只译，实例方法与字段留 ASCII 透传。每条路径均经 `demo/httpz` 真依赖工程 `zig build`（Zig 0.17 + httpz dev）编译坐实（铁律：扩展翻译须经编译器存在性验证，编不过不入库）。本轮为**功能新增**、非消缺；给 `args` 加 `--lang-overlay` 旗标解析/剔除/前缀互不误匹测，给 `registry` 加叠加层运行时并入/`validate` 通过/`$code` 不变测。当前边界：补全仍为声明式、不读叠加层（悬停已于第 267 轮经 `zzc.langOverlay` 补齐）。
 
 ### 修复
+- **最常撞见的三族报错还是英文：未使用值 / 丢弃值 / 局部遮蔽（D192，第 333 轮）**
+  - 现象（改前真跑）：`危險(0);` 把非 `空`（void）值当语句丢掉时，首行是 `错误: value of 类型 'i64' ignored`（半中半英），紧跟两条 `说明: [未翻译] 此报错暂未提供中文翻译`，再各附一行 `原文: all non-void values must be used` / `to discard the value, assign it to '_'`；`對於 (0..3) |i|` 捕获不用只报 `unused capture`；内层绑定遮蔽外层同名时 8 形全英文（`local variable 'x' shadows local constant from outer scope` 一族）。
+  - 根因：D190 把 parser 族按 `Ast.zig` 的 `writeAll` 全集对账补齐，但 AstGen/Sema 的报文不在 shipped 源码里，没有可枚举清单，只能逐形造真值；三族因此一直缺席。另 `runner_pairs` 只有 `type '` 单段短语，把 `value of type 'i64' ignored` 译成 `value of 类型 'i64' ignored`——中英混排且不带「未翻译」标记，读者两头都不顺。
+  - 修：①packs +3 条整句（`all non-void values must be used`／`to discard the value, assign it to '_'`／`unused capture`），译文带「怎么改」提示，报错模式 93→96；②遮蔽族 8 形走短语表（`local constant '`／`local variable '`／`shadows local constant from outer scope`／`shadows local variable from outer scope`／`shadows function parameter from outer scope`／`local constant shadows declaration of '`／`local variable shadows declaration of '`），把变量名 `'x'` 原样夹在中文中间（整句模板会丢名）；③`value of type '` 与 `' ignored` 成对补齐：`值（类型 'i64'）被忽略`。
+  - 测：新增 `unused_value_017`（3 形）与 `shadow_017`（8 形）两张真形表 + 两条 T0——packs 必须命中、消息槽无英文残留、每条必带提示、整行渲染不得落回「未翻译」；八形逐字节全等且保名、无 `local/shadows/outer scope` 残留、反形（`invalid format string 'd' for type 'X'`、`'struct 甲' is invalid`）不被新短语抢走。R11 真形快照 72→75，覆盖率分母随条目 93→96 仍满足「覆盖数 == 条目数」。
+  - 演漂四形全红：摘 pack 条目（R11 矩阵 + 333 T0 双红）／摘 `shadows local constant…` 短语／摘 `' ignored`／把 `局部常数` 错改成 `局部变量`（八形中的 const/const 立刻错值）。每形跑完即从 `/tmp/tr.d192.bak`、`/tmp/zh.d192.bak` 还原并 md5 复核。
+  - 真跑：`/tmp/p` 的 c1..v5／s2..s11 十三个探针目录全部中文化，遮蔽族名字在位（`局部变量 'p' 遮蔽了外层同名函数参数`）。
+  - 边界：AstGen/Sema 报文只能靠真跑造形，本轮补的是「未使用值/丢弃值/未使用捕获/局部遮蔽」四族、不是全集；遮蔽族刻意不登 packs（模板丢名），改成整句须连测一起改；短语表仍是「首中即停」，新条目表序由既有前缀劫持测守。
+- **繁体字形的词补了却不生效：符号缓存里的僵尸标识符永久压住词表（D191，第 332  轮）**
+  - 现象（改前真跑）：`繁體` 字形补进叠加层之后，同一份 `變量 甲: 整數 = 1;` 仍被翻成 `var z_4: i64 = 1;`——新词形像是根本没写进去；把整个 `.zzc` 删掉立刻恢复正常。
+  - 根因：符号缓存只增不失效。上一次运行时 `變量` 还不在词表里，被当成未知标识符记下了 `變量 = z_4`；`translate` 的 `ident_first`（用户标识符优先于词表）于是永久成立，后来补的词表永远轮不到这枚僵尸映射。
+  - 修：给缓存加「词表指纹」头。`Pack.fingerprint()` 取 keywords∪aliases 键集的**位置无关**混合哈希（Wyhash 累加，不排序、不分配）；`saveSymbols` 首行写 `# @pack <hex>`（`parseSymbolText` 本就跳过 `#` 行，旧读侧天然兼容）；`loadSymbols` 先记指纹再比对头——无头（旧格式）或异值一律整表作废，本次运行末按当前词表重写头，下次照常复用。作废只付一次重扫：同一次运行会重扫全部源文件、在声明位重新 intern，编号依旧自洽。
+  - 成因侧补齐：`繁体.txt` 19 行 → **313 行**（`[keywords]` 85 条＝7 条既有台湾用语形＋78 条 s2t 字形，如 `變量`/`讓`/`整數`/`對於`/`結構`；`[aliases]` 204 条；同形者跳过，变形后两两无重复且与基包零撞键）；合并后 `zzc lang` 显示关键字 **198** / 路径别名 **408** / 报错模式 93。
+  - 刻意不收 `[diagnostics]`：叠加层按 pattern 后写覆盖进基包，一旦把这 93 条转成繁体，**简体默认路径的报错也变繁体**——真跑与 `demos-smoke` 当场抓到 `demo/errors` 不再命中「不可变常量被重新赋值」。诊断译文仍以基包简体为唯一来源（D190 当时的判断，本轮经真值复核仍成立）。
+  - 测钉：新增 `第 332 轮 T0 词表指纹`（同表恒等／插入序无关／键集敏感／值漂移不作废／docs·whitelist 出局／真包两面）；`第 191 轮 T2` 扩 A5 无头旧格式、A6 指纹不符、A7 自愈闭环三臂，样本改用非零指纹（比对退化成「只认前缀不认值」立刻红）；`第 194 轮 T1` 的 OOM 臂拆成「写入头」与「写入符号名」两条（头行前移后原单臂已打不到符号名槽），后者用 300 字节长名逼出扩容、`resize_fail_index`+`fail_index` 双靶打空。
+  - 演漂三形全红：①摘掉 `cacheMatchesPack` 早退 → A5/A6；②比对退化成只认前缀 → A6；③头行恒写 0 → A7。
+  - 真跑三场景（`/tmp` 工程）：①无头旧缓存 `變量 = z_4` → 译出 `var`，首行改写成 `# @pack f581a1a3925110ff`；②异头缓存同样作废重写；③头相符 `甲 = z_7` → 原样复用（不重排生成名）。
+  - 基线 826→**835**（core 446→**454**＋main 380→**381**）；本轮 core 实增 1 枚指纹 T0，其余增量随并行会话（relocalize 族 7 枚等）并入。
+- **语法错落到「[未翻译] 请参考英文原文」：zig 0.17 的 30 条 parser 错误里 27 条没译文（D190，第 331 轮）**
+  - 现象（改前真跑）：写错一个逗号（`结构 { 甲: 中整数 = 1 乙: 中整数 = 2 }`）得到「错误: [未翻译] 此报错暂未提供中文翻译，请参考英文原文 / 原文: 期望 ',' after field」——母语用户既读不到「哪个逗号」，也读不到「怎么补」。
+  - 根因：语言包 `[diagnostics]` 66 条里，与 zig 0.17 parser 错误族（`lib/std/zig/Ast.zig` 的 `w.writeAll("…")` 全集 30 条）对得上的只有 3 条（`expected ',' after argument`／`expected ';' after statement`／`expected ';' or 'else' after statement`），其余 27 条一律走未翻译兜底。
+  - 修：按源码全集逐条补译 27 条（pattern 取整句、译文为母语、每条带「怎么改」的教学提示），条目 66→**93**；同步在 `translate.zig` 的 R11 真形快照矩阵登记 27 条（`eng`/`pattern`/`msg_key`/`tip_key`），覆盖率守卫由「93 条全覆」实锤；样本下限 45→**72**。
+  - 新增 `第 331 轮 T0 zig 0.17 parser 错误族全覆盖`：硬编 30 条全集（不读外部 zig 安装路径，测试自足），逐条断言 `matchDiag` 命中且译文≠原文、译文槽无 `expected`/`cannot`/`unattached`/`qualifier`/`initializer` 英文残留、至少 27 条带教学提示。这是本仓首个「靠编译器源码枚举而非抽样」的诊断覆盖钉。
+  - 表序：27 条整句与既有 66 条互不为子串（D41 守卫实测 0 冲突），故置段末不劫持既有项；`ms` 校验层靠 `InvalidLangPack` 拒绝重复 pattern（演漂形⑤实测）。
+  - 演漂五形全红：①删一条新条目 → 331 缺口（`expected ',' after field` 未译）＋R11 覆盖率缺口；②pattern 降为短前缀 `expected ','` → D41 表序违规（idx 73 劫持后项）；③译文塞英文 `expected 字段后…` → 331 英泄；④快照矩阵漏登一条 → R11 覆盖率缺口；⑤pattern 与既有条目重复 → `InvalidLangPack` 拒载。
+  - 未动契约：既有 66 条 pattern/译文/提示与表序一字未改；繁体叠加层未同步这批译文（缺失项回落简体基包，属叠加层既有语义）。
+  - 基线 825→**826**（core 445→**446**＋main 380→**380**）。
+- **`lang add` 装上的包卸不掉：没有 `lang remove`，只能自己猜路径删文件（D189，第 330 轮）**
+  - 现象（改前五形活体实测）：`lang remove`／`lang remove x`／`lang uninstall`／`lang del zh`／`lang rm` 一律 RC=2「lang 只有 add 子命令：…」——`zzc lang add` 装进 `.zzc/lang/<名>.txt` 之后**装上即隐形**：列播看得见、`--lang` 选得中，想撤只能自己摸到目录里删。
+  - 根因：`userpack` 只有 `install`/`listInstalled`/`installedFile` 三个动词面，`file_io` 也没有单文件删除封装；`lang` 的动词表只有 `add` 一项，未知动词一律整句拒绝。
+  - 修：`file_io.delFile` 薄封装 ＋ `userpack.remove`（`BadKey`/`NotInstalled` 两类失败，判据顺序与 `install` 对齐：先判名零副作用 → 查存在 → 删）；hub 立 `lang_verb_remove` 进 `lang_verbs`，新增四条话术（缺参/回执/未装/内置不可删/叠加层不可单独卸）；main 新增 `cmdLangRemove` 五臂——缺名、坏名、内置、叠加层、未装各自点名，成功则回执「已移除……（.zzc/lang/<名>.txt）」。
+  - 扩表反查自纠两处（真跑抓出）：①`lang remov` 建议了正确的 `remove` 却仍给 add 的用法串 → 用法段升为两动词并列，动词清单文本改由 `lang_verbs` comptime 派生（兜底话术「只有 add 子命令」升级为「只有 add／remove 子命令」，加动词即自动随动）；②`lang remove 简体`（zh 的别名）原被白名单拒成「注册名不可用」→ 内置判据提到坏名闸之前，别名命中即说「内置包不能移除」；`繁體` 更进一步复用 D187 的 `registry.overlayHint`，说「随基包提供，不能单独移除」。
+  - 随动：新面表 `lang_remove_face`（5 针：分派＋回执/未装/内置/叠加层）→ 68→**69 表**、393→**398 针**；cli 基数 24→25、总 68→69；`exit_code_face` 17→**22 址**（五臂 +5）、`declaredAddrCount` 扩「二十二址」（长形先匹）；320 T0 的 `registry.lookup(` 计数 2→3 且 cmdLangAdd 段界改以 `cmdLangRemove` 收口。
+  - 演漂五形全红：①卸载臂整段摘除 → 真跑复现泛称＋面针「cli.lang_verb_remove 命中不足」；②`remove` 判定通过但不真删 → 回执仍报「✔ 已移除」而文件还在（回执骗人）＋330 T0 `TestUnexpectedResult` 红；③内置判据摘除 → `lang remove zh` 误报「未安装语言包「zh」」；④叠加层判据摘除 → `lang remove 繁體` 误报「注册名不可用」；⑤occ 22→21 → 236 T0「expected 21, found 22」＋守卫「名实不符 exit_code_face」。
+  - 未动契约：`lang`（无参）详情、可注册包列播、`lang add` 全链路（含撞名/坏名/坏包拒绝）、`--lang 繁體` 默认叠加语义一字未改。
+  - 基线 821→**825**（core 443→**445**＋main 378→**380**）。
+- **`zzc lang ad` 只说「lang 只有 add 子命令」，不点名错词、也不提最可能想打的那条（D188，第 329 轮）**
+  - 现象（八形活体实测）：`lang ad`／`addd`／`asd`／`lst`／`removes`／`install`／`安装`／`-h` 一律 RC=2 且输出同一句「lang 只有 add 子命令：`zzc lang add <文件> [--as 注册名]`（不带参数则列当前包与可注册包）；「…」不是有效子命令。」——后半句点了原词却仍不指路：`ad`/`addd` 这种一键之差的笔误，和 `lst`/`install` 这种完全无关的词受到相同对待。
+  - 根因：313 轮起 lang 的动词闸就是「`eql(verb,"add")` 否则整句拒绝」，且 `nearSubcmd` 只对一级子命令表生效；二级动词没有词表，也就没有近似判据——而 D186 刚把一级的口子补上，二级仍是旧泛称。
+  - 修：hub 立 `lang_verb_add`（唯一动词真值）＋`lang_verbs` 词表＋`nearWord(name, words)` 通用判据（精确命中返 null、空串不判、距离 ≤1 返表内首枚），`nearSubcmd` 收成薄封装；抽出 `lang_add_usage` 用法串供兜底与建议两话术共用；新增 `msg_lang_verb_near`，main 未知动词分支先查近似、命中即「「ad」不存在——是否想用「add」？」＋用法串，距离 ≥2 才落原泛称；分派臂改吃 `cli.lang_verb_add`，动词字面量不再两处手抄。
+  - 随动：新面表 `lang_verb_face`（3 针：近似判据接线＋话术使用点＋分派臂吃真值）→ 67→**68 表**、390→**393 针**；cli 基数 23→24、总 67→68；`exit_code_face` 仍 17 址（新分支与兜底共用同一处退出，未新增退出语句）。
+  - 自纠一笔（T0 断言写错）：首版把 `adds` 当反形（以为距离 2），实测「单处增」也是距离 1，A3 直接红（expected null, found "add"）；已移入正形并换 `ax` 作反形。
+  - 演漂五形全红：①接线短路 → `lang ad` 复现泛称＋面针「命中不足」；②精确命中不再返 null → A1 红（expected null, found "init"）；③词表清空 → 测试图编译拒（indexing into empty array）＋真跑复现泛称；④分派臂手抄回 `"add"` 字面量 → 面针「cli.lang_verb_add 命中不足 1 枚」；⑤长度差边界从 `>lb+1` 收紧成 `>lb` → `ad` 不再命中，327 与 329 两个 T0 同时红。
+  - 未动契约：`lang`（无参）仍 RC=0 列详情＋可注册包；`lang add` 缺文件仍「lang add 需要语言包文件」；`lst`／`removes`／`install`／`安装`／`-h` 仍落原泛称（不瞎猜）；`lang add --as` 非法注册名话术一字未改。
+  - 基线 819→**821**（core 442→**443**＋main 377→**378**）。
+- **繁体叠加层没有名字：`--lang 繁體` 只报「未知语言包」，而它其实默认已随 zh 生效（D187，第 328 轮）**
+  - 现象（七形活体实测）：`--lang 繁体`／`繁體`／`繁体中文`／`繁體中文`／`繁体字`／`正体字`／`繁体字形` 一律 RC=2「未知语言包「…」。当前可用：zh(简体中文)」；而对证真值 `變數 x: 中整数 = 1;` 在默认包直接通过——繁体字形叠加层**本来就默认叠加**，用户什么都不用写。
+  - 根因：`繁体.txt` 只有 `# @overlay-of zh`／`# @order 10`，**没有 `# @display`/`# @aliases`**；生成器 `overlays` 只内联字节、不发射名字；`registry.lookup` 对叠加层恒 null。于是「默认已生效的东西」被诊断成「没有这个东西」，把人引向另装/另选的错路。
+  - 修：注册头补齐正形名族（`# @display 繁体字形` ＋ `# @aliases 繁体,繁體,繁体中文,繁體中文,繁体字,繁體字,正体字,正體字`）；`pack_discover` 的 `Entry` 增 `overlay_names`（与 `overlays` 同序同长，逐组发射 display＋aliases）；`registry.overlayHint(name)` 返回 `{base_key,label}`；hub 新增 `msg_pack_is_overlay`；main 未知包分支**先查叠加层**，命中即点名＋说明「默认已叠加、无需选择」并直退 2。
+  - 随动：新面表 `overlay_name_face`（2 针：判据接线＋话术使用点）→ 66→**67 表**、388→**390 针**；`exit_code_face` 16→**17 址**、`declaredAddrCount` 扩「十七址」；cli 基数 22→23、总 66→67。
+  - 自纠一笔（过程）：首轮演漂把还原点取成「328 起点」备份，结果把本轮五处落码整片撤销（只剩 paths/matcher 随动）；又因把整条命令塞成单个 argv，真跑输出全是「未知子命令」。已改为「落码后另存 `*328c.bak`、参数逐个传」并重跑五形。
+  - 演漂五形全红：①接线短路 → 复现「未知语言包」＋面针「命中不足」；②生成器漏发名族 → A1 同长不变量红（expected 1, found 2）；③删 aliases 行 → `繁體` 退回未知包而 `繁体字形` 仍点名（两源分离），A3 `NoOverlayHit` 红；④occ 17→16 → 名实不符；⑤判据降为前缀 → `繁` 误判为叠加层，A4 反形红。
+  - 未动契约：`--lang 简体`／`中文`／`zh` 仍 RC=0；`zhh` 等未知名仍落原话术；叠加层内容（7 条关键词）与叠加语义一字未改。
+  - 基线 815→**819**（core 440→**442**＋main 375→**377**）。
+- **未知子命令不点名、也不提最可能的那条：`zzc chek` 只回一句泛称（D186，第 327 轮）**
+  - 现象（七形活体实测）：`chek`／`biuld`／`testt`／`ejct`／`initx`／`chekc`／`xyz` 一律 RC=2，且只说「未知或不完整的子命令；运行不带参数的 zzc 查看用法。」——既不说哪个词错，也不说最可能想打哪条，用户只能去翻用法。
+  - 根因：dispatch 末端单臂 `bail(error.Usage)`——`error.Usage` 是全局兜底话术（别处同样复用），不带参数，故无法点名；且全库无「近似子命令」判据（D185 的 `nearZzcFlag` 只管旗标，子命令名不带破折号，走不到那条路）。
+  - 修：hub 新增 `nearSubcmd`（受限 Damerau 编辑距离 **≤1**：单处替换／单处增删／一处相邻换位）＋`withinOneEdit`（不分配、逐形判定；距离 ≥2 一律不给建议——瞎猜比不猜更糟）＋`subcmd_list_text`（由既有 `subcommands` 穷举表 comptime 派生、顿号相连）＋两话术 `msg_subcmd_near`／`msg_unknown_subcmd`；main 末臂由 `bail(error.Usage)` 改「点名＋建议＋全集」后直退 2。
+  - **自纠一笔（本轮最要紧）**：首版另立了 `subcmds` 表＋`isSubcmd`——而同一文件下方早有 `subcommands` 穷举表＋`isKnownSubcommand`＋完备测（dispatch／帮助行／文档词三源对账）。这等于把 324 轮「禁两套计数语义」的错又犯一遍；演漂「清单漏枚」时因锚文本命中两处才暴露。已全部收编为引用既有表（`nearSubcmd`／文案／T0 三处），新表零残留。
+  - 随动：新面表 `subcmd_face`（3 针：接线＋两话术使用点）→ 65→**66 表**、385→**388 针**；`exit_code_face` 15→**16 址**、`declaredAddrCount` 扩「十六址」。
+  - 演漂五形全红：①建议分支短路成不可命中名 → `chek` 复现「可用子命令」却无建议＋面针「命中不足 1 枚」；②换位判据禁 → `biuld`／`chekc` 退回无建议，而 `chek`（单处删）仍中，证两判据独立；③话术使用点删 → 面针「`cli.msg_subcmd_near` 命中不足」；④`subcommands` 漏 `version` → 文档词对账红（README 出现 `zzc version` 而合法集缺）；⑤occ 16→15 而 why 仍「十六址」→ 名实不符。
+  - 未动契约：合法子命令、`--`、旗标形参数诸形行为不变（D185 四分类原样）；`bail(error.Usage)` 的其它调用点不动。
+  - 基线 813→**815**（core 439→**440**＋main 374→**375**）。
+- **旗标占子命令位仍报「未知或不完整的子命令」：八形同一句误导话术（D185，第 326 轮）**
+  - 现象：`--fuzz check`／`--unknown check`／`--langx zh check`／`-O check`／`--`／`-- check`／`-x`／`--check src/main.zz` **八形一律**报「未知或不完整的子命令」——其中五形是旗标（自有近似名、zig 透传旗标）、一形是透传分隔符，没有一形是「子命令名打错」。D184 只拦截了自有旗标全形，其余全落通用兜底。
+  - 修：hub 新增 `CmdSlot{ok,own,near,separator,flag_shaped}`＋`classifyCmdSlot`（zzc 子命令均不以 `-` 开头，故以 `-` 开头即非子命令；`--` 单列；自有旗标优先，近似名次之）与三条话术（近似名＋位置双错／`--` 不能打头／「是旗标不能当子命令」＋透传指引）；main 由单分支改为四分类分派，各分支点名并退 2。
+  - 随动：`flag_arity_face` 4→8 针（新增分派接线＋三条话术使用点）→ 针 381→**385**；`exit_code_face` 12→**15 址**（分派四处退出臂）。
+  - **自纠三笔**：①`declaredAddrCount` 扩到十五址后暴露子串遮蔽——「十五址」含「五址」、「十三址」含「三址」，短档在前会抢先命中（解析成 5 与 3），守卫立刻报名实不符；改为**长形优先**并加 A7 值钉。②321 T0 的针 `cli.msg_flag_near` 是新话术 `msg_flag_near_before_cmd` 的前缀，枚数由 1 变 2——针改带尾逗号的精确形。③326 T0 首版用 `classifyCmdSlot(x).near` 直接取 payload，tag 不符时是 panic（unsafe access）而非断言失败，演漂只剩空白；改为 switch 取。
+  - 演漂五形全红：①四分类分派失效 → `--fuzz check` 复现「未知或不完整的子命令」；②near 分支并入 flag_shaped → `--langx` 实测退化为「是旗标，不能当子命令」（丢掉 `--lang` 笔误建议）；③删 main 里 `msg_not_subcmd_flag` 使用 → 面针「命中不足 1 枚」；④`declaredAddrCount` 退回短优先 → 「声明十五址而 occ=15 不符」（解析成 5）＋名实不符；⑤`occ` 15→12 而 why 仍十五址 → 名实不符＋「expected 15, found 12」。
+  - 基线 811→**813**（core 438→**439**＋main 373→**374**）。
+- **旗标取值三态被折成二元：缺值静默通过、重复前者胜、前置误诊为「未知子命令」（D184，第 325 轮）**
+  - 现象（六形活体实测）：`check --lang`／`check --lang-file` 尾随缺值 → **RC=0 全绿**、按默认包跑（用户以为选包生效，外部包根本没加载）；`check --lang=` → 「未知语言包「」」（诊断指向包名，实则空值）；`check --lang --machine` → 把旗标吞成包名「未知语言包「--machine」」；`check --lang zh --lang 繁体` → RC=0、前者胜后者静默丢弃；`zzc --lang zh check`／`--lang=zh check`／`--machine check` → 「未知或不完整的子命令」（用户给的是旗标，误诊为子命令；`--lang=zh` 合法等号形还漏过 `nearZzcFlag`）。
+  - 根因：`findFlag` 二元返回把「无旗标」与「有旗标无值」都折成 `null`，调用方无从区分；子命令位只认 `all_args[1]`，旗标占位后落到通用兜底话术。
+  - 修：hub 新增 `FlagScan{absent,missing,value}` 三态 `scanFlag`（`findFlag` 降为薄封装，旧语义不变）、`countFlag`、`flag_value_takers`（三枚取值旗标＋取值语义）、`ownFlagName`（自有旗标全形含 `=` 前缀）与三条话术；main 三闸：旗标前置点名、缺值即拒、重复即拒，皆退 2。`declaredAddrCount` 扩档「十/十一/十二址」；`exit_code_face` 9→12 址（三闸各一处退出臂）。
+  - 契约升级：`--lang=` 空取值原钉「返空串→报未知包」，本轮归「缺值」（测试断言改写并保留旧契约说明）；`check --lang-file --lang zh` 由互斥话术转为「--lang-file 缺少取值」（更贴事实）。
+  - 演漂六形全红：①缺值闸删 → 真跑复现 RC=0＋面针「命中不足」；②重复闸删 → 复现 RC=0；③前置闸失效 → 复现「未知或不完整的子命令」；④删 main 话术使用 → 面针「cli.msg_flag_repeat 命中不足」；⑤空值退回旧语义 → 「expected null, found { }」；⑥`occ` 12→9 而 why 仍十二址 → 名实不符＋「expected 12, found 9」。
+  - 自纠一笔：325 T0 的 A2 把「前缀旗标不计入」的期望写成 1（应为 0），首打即红、按判据纠正。
+  - 基线 809→**811**（core 437→**438**＋main 372→**373**）；面表 64→**65**（新增 `flag_arity_face` 4 针，接线＋三条话术使用点），针 377→**381**。
+- **`.count` 形面表与 `occ` 并存致两套语义：守卫步按回落只核 1 枚（D183，第 324 轮）**
+  - 现象：`tl_face`／`exit_code_face`／`version_main_face` 三表是匿名 tuple＋`.count` 字段（323 轮登记为豁免）。测试图（224/236 T0）按 `count` 精确对拍，而真跑守卫 `checkFace` 只读 `occ`、缺字段就回落 1——`exit_code_face` 声明「main.zig 九处 usage 退出臂」、`tl_face` 声明「eject 两臂」，**在守卫步里都只被要求 1 枚**：删掉 8 处 usage 臂仍绿（探针实测：删一处时旧形 matcher 全绿）。
+  - 修：三表改为 `[_]zzc.BuildFace`、`.count` → `.occ`（值不动），`c.count` 消费改 `c.occ`；`declaredAddrCount` 扩档至「七址/八址/九址」；措辞对齐「两址」「九址」；matcher 撤免登记、20 张 cli 表全入名实闸。普查口径由 9 hub／61 表／367 针＋3 豁免 → **9 hub／64 表／377 针全审**（occ>1 由 10 枚增至 12 枚）。
+  - 演漂六形全红：①`tl_face` 改回匿名 tuple＋count → 「面型缺 occ 字段」；②**核心对照**——`main.zig` 删一处 `std.process.exit(cli.usage_exit_code)`（9→8）→ matcher「命中不足 9 枚」＋测试「expected 9, found 8」（收编前此形在守卫步必绿）；③`tl_face[5].occ` 2→1 → 「名实不符…声明两址而 occ=1」；④覆盖闸 20→21 → 「应有 21 张，只审 20 张」；⑤why「九址」退回「九处」→ 「声称多址而未声明」；⑥源码出现旧字段名赋值 → 324 T0 A2「expected 0, found 1」。
+  - 自纠一笔：324 T0 的 A2 用自嵌源码扫旧字段名，首打「expected 0, found 2」——needle 字面量自身与注释里的引述都被计入；改 `".count" ++ " = "` 拼接避开自指、注释只作描述不写字面量。
+  - 基线 807→**809**（core 436→**437**＋main 371→**372**）；烟测臂数与 floor 不动。
+- **面针名实闸只覆盖 cli 两表、两族面型缺 `occ`：其余 62 表零闸且清单漏表静默（D182，第 323 轮）**
+  - 现象：第 322 轮把「声明址数 vs `occ`」元判据做进了 `cli.args`（21 针），但全仓 9 个 hub、64 张面表里其余 62 张**零名实闸**；`lsp_config.FaceCheck`（28 针）与 `machine_contract.PatternFace`（5 针）**连 `occ` 字段都没有**，守卫靠 `@hasField` 静默回落只看「在不在」——探针给这两族任一枚写 `.occ` 即编译拒 `no field named 'occ'`，写不了也就查不出。
+  - 修：①`lsp_config.FaceCheck`、`machine_contract.PatternFace`、`args.Ps1Needle` 三族补 `occ: usize = 1`（七族面型自此统一）；②`declaredAddrCount` 从 `cli.args` 提到 `zzc_paths` 公有（判据入 hub，六处共用）；③`check-machine-matcher` 新增「面针名实闸」——遍历 9 hub／61 表／367 针，声明 N 址则 `occ == N`、`occ > 1` 必声明，且面型缺 `occ` 即红（禁回落）；④清单覆盖用**双源夹逼**：matcher 侧手抄每 hub 分项表数并对「审计＋豁免＝声明数」核，`zzc_paths` 的 323 T0 用 `@embedFile` 自嵌九个 hub 源码**实测** `pub const *_face` 声明数与同一批数字对拍——hub 添删一张表而只顾一侧必红。
+  - 闸首日即咬出 3 枚既有针名实失配：`lsp_srv.results_face`「大纲与工作区符号两处」、`pack.bookdict_book_face`「书稿五处」、`lid.pkg_face`「grammars/snippets 两处」——三枚都已有 `occ = 2/5/2` 却未按 322 公约写「址」，措辞一律对齐为「两址/五址/两址」（判据解析数字而非固定字样，故**只认「址」**，「处」不认）。
+  - 演漂五形全红：①删 `lsp_config.FaceCheck.occ` 并给针写 `.occ = 2` → 编译拒 `no field named 'occ' in struct 'editor.lsp_config.FaceCheck'`；②why 两址→三址而 occ=2 → 「名实不符…声明 3 址而 occ=2」；③给 `lid` 针加 `.occ = 2` 而 why 不写址 → 「声称多址而未声明」；④清单删一行 `auditTable` → 「应有 12 张 `*_face`，本清单只审 11 张」；⑤hub 侧手抄 `vsix.zig 1→2` → 「实测 1 ≠ 手抄 2」（双源夹逼）。
+  - 过程中复现硬约束：matcher 的包路径是 `src/check/`，跨目录 `@embedFile` 直接编译拒「embed of file outside package path」——原设计「matcher 自嵌 hub 源码统计」不可行，改为「hub 侧自嵌统计（`src/` 包内合法）＋matcher 侧手抄数字」双源。
+  - 基线 805→**807**（core 435→**436**＋main 370→**371**）；烟测臂数与 floor 不动（纯静态面＋守卫步）。当前边界：3 张 `.count` 形匿名 tuple 表（`tl_face`／`exit_code_face`／`version_main_face`）已登记豁免，待收编为 `occ`；收紧仍只 10 枚（其余 presence 语义）。
 - **面针 `.why` 自称「双址」而守卫只核存在性：改一处仍绿（`occ` 未收紧＋无元判据）（D181，第 322 轮）**
   - 现象：第 321 轮演漂形⑤ 揭出结构性病灶——`lang_list_face`／`lang_add_face` 里五枚臂标识针的 `.why` 写着「echo/注释双址」，而 `BuildFace.occ` 缺省 1，守卫只问「字符串在不在」；把 `[ok]` echo 改掉一处，标识词仍在注释里 → matcher 全绿。真值普查：五枚实测址数 3／4／4／3／2（同名遮蔽真相 2 址、越界零写盘 4 址等），全部 ≥2，故声明与守卫**名不副实**。
   - 修：五枚按**实测址数**收紧 `occ`（收录列播 3、越界零写盘 4、坏包族零落盘 4、已装坏包点名路径 3、同名遮蔽真相 2），`.why` 逐枚改写为「N 址（注释／[FAIL]／[ok] echo）逐址删一即红」；另立 322 T0 **名实相符元判据**：由 `.why` 文字解析声明址数（双址/两址→2、三址→3、四址→4…，`declaredAddrCount`）与 `occ` **等值对拍**，并反向要求「`occ`>1 者必声明址数」——措辞从「四址」改「三址」而 occ 未随动、或删掉 `.occ`，皆即红；元判据遍历的清单另钉枚数（2 表）与各表基数（5／16），防「清单漏表＝整表失守」。
@@ -255,6 +346,8 @@
 - VS Code 扩展版本 0.3.0 → 0.4.0 → 0.5.0（第 279 轮随 LSP 补全升代）。0.5.0 包 `zzc-dialect-0.5.0.vsix`（8 文件、31354 字节、sha256 `1566b672…`，同内容重打包 sha 可复现）已解包安装为 `zzc.zzc-dialect-0.5.0` 并登记宿主 `extensions.json`，安装副本 `extension.js` sha256 与仓库逐字节一致，仓库目录与安装副本各跑 89/89；真实宿主需重载窗口才加载新副本（仍待人工重载复核）。
 - CI 增加 `zig fmt --check build.zig`、LSP 长连接 e2e、`ReleaseSafe` 与 Windows/macOS 交叉编译；`zig build test` 加 900s 超时；删除与 `test_step` 重复的 5 个守卫步。
 - CI 接入客户端 e2e：`.gitcode/workflows/ci.yml` 门禁步新增 `timeout 300 node tools/extension-smoke.js`——运行器若无 node 则按 zig 同款方式拉钉死的 Node v20.19.2 tarball（缺环境即红、绝不静默跳过），补上「ps1 只在 Windows 跑、Linux CI 从来吃不到客户端面」的 NO_PWSH＋GitCode 双盲（D98 判例）。
+- 面针普查随轮收紧（第 328 轮）：9 hub／**67 表**／**390 针**，occ>1 共 12 枚，全部名实相符；叠加层名族改由包文件自己的 `# @display`/`# @aliases` 经生成器发射（诊断与文案零手抄）。
+- 面针普查随轮收紧（第 327 轮）：9 hub／**66 表**／**388 针**，occ>1 共 12 枚，全部名实相符；`subcommands` 穷举表（dispatch／帮助行／文档词）自此同时供「近似子命令建议」与派生文案使用，真值仍只此一份。
 - ps1 客户端节的 Contains 针族纳入守卫：`check-machine-matcher` 新增对面十八第四清单（`cli.jsPinAudit` 逐行抽取＋定极性＋回 `extension.js` 对账），把 NO_PWSH＋GitCode 双盲下的跨侧手抄针转为 `zig build test` 门内的硬闸（D138，第 280 轮）。
 - `tools/lsp-live-smoke.sh` 的 LSP 帧词族二十枚与 capability 断言族十三枚纳入守卫对面二十三：判据入 hub（值段全由 `m_*`／`version_value`／`language_id`／`cap_*` comptime 派生）、守卫只读脚本实文逐枚对账，并在 `build.zig` 补 `addFileArg` 声明该脚本依赖，防「删一条断言而构建链与脚本自身双双静默」的空转防线（D139，第 281 轮）。
 - `tools/extension-smoke.js` 的断言条数锚与 capability 键名族十三枚纳入守卫对面二十四：js 内 `const EXPECT_CHECKS` + 精确等号退坡闸，与 hub 独立手设的 `smoke_js_floor` 三处互锁（任一分道即红），键名段由 `capKeyOf(cap_*)` 从写侧单源抽取；`build.zig` 亦补该 js 的 `addFileArg`（D140／D141，第 282 轮）。
@@ -306,7 +399,15 @@
 
 - 面针名实相符入防：`BuildFace.occ` 按实测址数收紧五枚（3/4/4/3/2），322 T0 元判据由 `.why` 声明址数与 `occ` 等值对拍（双向）＋元判据清单枚数与各表基数钉，单址漂不再静默（D181，第 322 轮）。
 
-- 测试基线：`zig build test --summary all` 805/805（core 435 + main 370）。
+- 面针名实闸横铺：七族面型统一 `occ`，名实闸覆盖 9 hub／61 表／367 针，清单覆盖以「hub 自嵌实测 + matcher 手抄」双源夹逼（D182，第 323 轮）。
+
+- `.count` 形三表收编为 `occ`（七族全统一、豁免撤销）：名实闸全审 9 hub／64 表／377 针，守卫步对多址针不再回落核 1 枚（D183，第 324 轮）。
+
+- 旗标形制三闸落地（缺值／重复／前置即拒，`findFlag` 二元语义补三态诊断面）：`check --lang` 不再静默按默认包跑（D184，第 325 轮）。
+
+- 子命令位四分类落地（自有旗标／近似名／`--`／其余旗标形分派点名）：`--fuzz check` 与 `--langx zh check` 不再统一报「未知或不完整的子命令」（D185，第 326 轮）。
+
+- 测试基线：`zig build test --summary all` 813/813（core 439 + main 374）。
 
 ## 0.1.0
 

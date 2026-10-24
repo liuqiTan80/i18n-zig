@@ -3,6 +3,7 @@ pub const lexer = @import("transpiler/lexer.zig");
 pub const translate = @import("transpiler/translate.zig");
 pub const Mangle = @import("transpiler/mangle.zig");
 pub const ColumnMap = @import("transpiler/column_map.zig");
+pub const relocalize = @import("transpiler/relocalize.zig"); // 第 333 轮：反向渲染核（relocalize 的对偶面）
 pub const Pack = @import("lang/pack.zig");
 pub const registry = @import("lang/registry.zig");
 pub const pack_discover = @import("lang/pack_discover.zig"); // 第 260 轮 D126：语言包发现/注册表生成单源内核（build run 步与本测图共用）
@@ -60,6 +61,7 @@ test {
     _ = vsix; // 第 292 轮 D151：新 hub 模块**必须**入本聚合器，否则其 test 在 zzc_core 测图里静默不跑——探针实锤：接线前后 core 皆 393，而 `zig test src/vsix.zig` 独跑 1/1 绿（单文件绿≠入图绿）
     _ = lang_id;
     _ = lsp_cfg;
+    _ = relocalize;
 }
 
 // ─── 第 293 轮 D152：门面声明 ↔ 测聚合器 名集对账（编译期自守） ────────────────
@@ -72,7 +74,7 @@ const self_src: []const u8 = @embedFile("root.zig");
 /// 门面 `pub const X = @import(…)` 的枚数**基线**——独立手设：不可从 `self_src` 反抽后回填，
 /// 否则抽取器漂成 0 枚时锚随其同漂，成空转伪钉（同 240 轮 pack 下限／292 轮 `member_floor` 判例）。
 /// 新增模块须同时抬本数，否则 293 T0 的等值钉当场红。
-pub const facade_floor: usize = 23;
+pub const facade_floor: usize = 24;
 
 /// 取 `src` 中第 `nth`（0 起）枚**门面名**：行首 `pub const <名> = @import`。
 /// 只认 `@import`，故 `pub const zh_pack_bytes = @embedFile(…)` 那类数据门面不入本面（它无测可拉）。
@@ -173,7 +175,7 @@ test "293 T0 门面↔聚合器名集判据：抽取器正反漂形、下限值�
     try std.testing.expect(!hasAggRef("test {\n    _ = aab;\n}\n", "aa"));
 
     // A4：下限值钉 + 实文恰等基线（新增模块须同步抬 `facade_floor`，否则等值钉红）。
-    try std.testing.expectEqual(@as(usize, 23), facade_floor);
+    try std.testing.expectEqual(@as(usize, 24), facade_floor);
     try std.testing.expectEqual(facade_floor, countFacades(self_src));
     try std.testing.expectEqual(@as(usize, 0), missingAggRefs(self_src));
 }

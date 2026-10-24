@@ -657,7 +657,7 @@ pub const results_face = [_]jsonrpc.FaceCheck{
     .{ .needle = "s." ++ k_selectionRange ++ " ||", .why = "大纲 selectionRange 读侧属性须等于写侧 `f_document_symbol` 输出键——漂即 js 回退 `|| r`（整声明范围）导致大纲点击高亮整行而非仅名称，UX 静默降级；探针 P1 实锤 s.selectionRange→s.selectionRang 时三门禁全绿（双静默·第 289 轮 D148）" },
     .{ .needle = std.fmt.comptimePrint("function toVscodeKind(k) {{ return Math.max(k - {d}, 0); }}", .{lsp_kind_base}), .why = "kind 换算的减数须等于 LSP 枚举基址真值——抄成 0/+1 即图标整体错位一格，探针 P1 实锤 s.kind→s.kind + 5 时守卫与 e2e 皆一字不变（双静默·第 290 轮 D149）" },
     .{ .needle = std.fmt.comptimePrint("toVscodeKind(c.kind || {d})", .{lsp_kind_base}), .why = "补全项构造器须吃换算后的 vscode 码——回退直传即 LSP 3(Function) 落进 vscode 3(Constructor)；探针 P2 实锤旧断言 `eq(decl.kind, 3)` 把本换算判为红（反向假锚·第 290 轮 D149）" },
-    .{ .needle = "toVscodeSymbolKind(s.kind)", .occ = 2, .why = "大纲与工作区符号两处 kind 读面皆须走换算（同形两处手抄，presence 只核首现故以计数下界逐枚对账）——漏一处即那一族图标错位（第 290 轮 D149）" },
+    .{ .needle = "toVscodeSymbolKind(s.kind)", .occ = 2, .why = "大纲与工作区符号两址 kind 读面皆须走换算（同形两址手抄，presence 只核首现故以计数下界逐枚对账；措辞第 323 轮 D182 对齐「址」公约）——漏一处即那一族图标错位（第 290 轮 D149）" },
     .{ .needle = "!!res." ++ k_isIncomplete, .why = "客户端读补全完整性旗标须经 hub 键 `k_isIncomplete`（js 写 `!!res.isIncomplete`）——旗标只在候选超上限截断时为 true，而 e2e 固定文档永不触发截断，旧形 `!!res.isIncomplet` 读 undefined 落 false 恰与被测期望全等 → 探针 P1 实锤守卫与 e2e 皆一字不变（双静默·第 291 轮 D150）" },
 };
 

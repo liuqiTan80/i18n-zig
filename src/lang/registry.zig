@@ -52,6 +52,29 @@ pub fn lookup(name: []const u8) ?Entry {
     return null;
 }
 
+/// 叠加层命中结果（第 328 轮 D187）：`base_key` 是被叠加的基包，`label` 是该叠加层的首名（`# @display`）。
+pub const OverlayHit = struct { base_key: []const u8, label: []const u8 };
+
+/// 按名查「这是某基包的内置叠加层吗」（第 328 轮 D187）。
+///
+/// 叠加层没有 `# @key`、不进 `entries`，故 `lookup` 永远查不到它；而它所叠加的基包**默认就带着它**，
+/// 于是 `--lang 繁體` 历史上只能落「未知语言包」——话术把人引向「是不是要另装/另选」，而正解是
+/// 「什么都不用做」。本判据只回答「他是哪一层的名字」，话术与退出码仍由调用方决定。
+pub fn overlayHint(name: []const u8) ?OverlayHit {
+    const t = std.mem.trim(u8, name, " \t");
+    if (t.len == 0) return null;
+    for (entries) |p| {
+        for (p.overlay_names) |names| {
+            for (names) |nm| {
+                if (nameMatch(t, nm)) {
+                    return .{ .base_key = p.key, .label = if (names.len > 0) names[0] else p.key };
+                }
+            }
+        }
+    }
+    return null;
+}
+
 test "registry：默认包为中文；按 key/别名/大小写命中；未知名返回 null" {
     // 默认项（entries[0]）即中文包，字节非空。
     try std.testing.expectEqualStrings("zh", defaultEntry().key);
@@ -172,4 +195,54 @@ test "nameMatch 双向大小写折叠真边界：两向 ASCII 折叠 + 非字母
     // ⑦ 字母 vs 非字母同位不等 → 拒；长度不等先短路拒。
     try std.testing.expect(!nameMatch("zh", "zhh"));
     try std.testing.expect(!nameMatch("zh", "zx"));
+}
+
+// 第 328 轮 T0（D187）：叠加层名族「正形扩臂」。旧形：叠加层无 `# @display`/`# @aliases`，生成表里
+// 只有字节没有名字，`registry.lookup("繁體")` 恒 null、诊断只能报「未知语言包」。
+test "第 328 轮 T0 叠加层名族：与繁体.txt 头指令同源＋正反形（D187）" {
+    // A1 同长不变量：overlay_names 与 overlays 同序同长（生成器漏发一组即红）。
+    for (entries) |p| try std.testing.expectEqual(p.overlays.len, p.overlay_names.len);
+
+    // A2 基包 zh 的叠加层有名且首名为 display 正形。
+    const zh = lookup("zh").?;
+    try std.testing.expect(zh.overlay_names.len > 0);
+    try std.testing.expect(zh.overlay_names[0].len > 0);
+    try std.testing.expectEqualStrings("繁体字形", zh.overlay_names[0][0]);
+
+    // A3 正形全命中：简繁两体、全称、+字、正体皆指向基包 zh。
+    for ([_][]const u8{ "繁体", "繁體", "繁体中文", "繁體中文", "繁体字", "繁體字", "正体字", "正體字", "繁体字形" }) |n| {
+        const h = overlayHint(n) orelse return error.NoOverlayHit;
+        try std.testing.expectEqualStrings("zh", h.base_key);
+        try std.testing.expectEqualStrings("繁体字形", h.label);
+    }
+
+    // A4 反形：基包名、大小写变体、臆造名、空串/空白皆不得误判为叠加层。
+    for ([_][]const u8{ "简体", "中文", "汉", "zh", "ZH", "zhh", "繁", "", "  " }) |n| {
+        try std.testing.expectEqual(@as(?OverlayHit, null), overlayHint(n));
+    }
+
+    // A5 三源同源：繁体.txt 头指令的 `# @display` 与 `# @aliases` 逐项都必须被生成表覆盖——手改
+    // 包文件而忘了重生成、或生成器漏发别名，此处即红（不靠人记「两个地方要一起改」）。
+    const head = @embedFile("packs/繁体.txt");
+    var lines = std.mem.splitScalar(u8, head, '\n');
+    var seen: usize = 0;
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0) continue;
+        if (!std.mem.startsWith(u8, line, "#")) break;
+        if (std.mem.startsWith(u8, line, "# @display ")) {
+            const v = std.mem.trim(u8, line["# @display ".len..], " ");
+            try std.testing.expect(overlayHint(v) != null);
+            seen += 1;
+        } else if (std.mem.startsWith(u8, line, "# @aliases ")) {
+            var it = std.mem.splitScalar(u8, line["# @aliases ".len..], ',');
+            while (it.next()) |part| {
+                const v = std.mem.trim(u8, part, " \t");
+                if (v.len == 0) continue;
+                try std.testing.expect(overlayHint(v) != null);
+                seen += 1;
+            }
+        }
+    }
+    try std.testing.expect(seen >= 9); // display 1 ＋ aliases 8：少一条即证明扫描落空
 }

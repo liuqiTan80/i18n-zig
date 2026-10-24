@@ -69,6 +69,12 @@ pub fn writeWholeAtomic(io: Io, path: []const u8, data: []const u8) !void {
 }
 
 /// 判断相对当前工作目录的路径是否存在（仅用于避免覆盖，不区分文件/目录）。
+/// 删单个文件（第 330 轮 D189）：`lang remove` 要撤掉已装用户包。不做存在性判断——「本来
+/// 就没有」由调用方按语义翻成母语（`error.FileNotFound` 在 userpack 层已提前挡成 NotInstalled）。
+pub fn delFile(io: Io, path: []const u8) !void {
+    try std.Io.Dir.cwd().deleteFile(io, path);
+}
+
 pub fn pathExists(io: Io, path: []const u8) bool {
     std.Io.Dir.cwd().access(io, path, .{}) catch return false;
     return true;

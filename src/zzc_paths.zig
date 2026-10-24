@@ -113,6 +113,44 @@ pub const builtin_pack_cwd_rel: []const u8 = src_dir ++ "/" ++ builtin_pack_embe
 /// vsix 四面族对齐补上该字段——双址以上之针可显式要 2、3 枚，守卫不再只看「在不在」。
 pub const BuildFace = struct { needle: []const u8, why: []const u8, occ: usize = 1 };
 
+/// 从面针 `.why` 文里解析**声明的址数**（「双址/两址」→2、「三址」→3、「四址」→4…；未声明返
+/// null 即 presence 语义 1）。第 322 轮 D181 立、第 323 轮 D182 从 `cli.args` 提到本 hub——六个面型
+/// 族（`BuildFace`／`lsp_config.FaceCheck`／`pack.FaceCheck`／`lang_identity`／`jsonrpc`／`vsix`）的
+/// 名实闸由同一判据核；判据本体放此处而不放守卫，守 203 轮「判据入 hub、守卫只做 I/O」。
+/// 为何解析数字而非检固定字样：措辞从「四址」改「三址」而 `occ` 未随动必须红，只认「双址」会漏。
+pub fn declaredAddrCount(why: []const u8) ?usize {
+    // 数组＋具名字段（元组的 `pr[0]` 是 comptime 索引，运行期循环里取报 "unable to resolve comptime value"）。
+    // 长形优先（第 326 轮 D185 自纠）：`十五址` 含子串 `五址`、`十三址` 含 `三址`，若按短形在前
+    // 逐条 indexOf，多址声明会被短档抢先命中——扩到十五址时守卫报「声明十五址而 occ=15 不符」
+    // （实际解析成 5）。故按字数从多到少排列，长形先匹。
+    const pairs = [_]struct { word: []const u8, n: usize }{
+        .{ .word = "二十四址", .n = 24 }, // 第 331 轮 D190：relocalize 两臂并入（且须先于「十四址」——否则 24 被解成 14）
+        .{ .word = "二十二址", .n = 22 }, // 第 330 轮 D189：lang remove 五臂并入（长形仍须先匹）
+        .{ .word = "二十一址", .n = 21 },
+        .{ .word = "十七址", .n = 17 },
+        .{ .word = "十六址", .n = 16 },
+        .{ .word = "十五址", .n = 15 },
+        .{ .word = "十四址", .n = 14 },
+        .{ .word = "十三址", .n = 13 },
+        .{ .word = "十二址", .n = 12 },
+        .{ .word = "十一址", .n = 11 },
+        .{ .word = "十址", .n = 10 },
+        .{ .word = "九址", .n = 9 },
+        .{ .word = "八址", .n = 8 },
+        .{ .word = "七址", .n = 7 },
+        .{ .word = "六址", .n = 6 },
+        .{ .word = "五址", .n = 5 },
+        .{ .word = "四址", .n = 4 },
+        .{ .word = "三址", .n = 3 },
+        .{ .word = "双址", .n = 2 },
+        .{ .word = "两址", .n = 2 },
+    };
+    for (pairs) |pr| {
+        if (std.mem.indexOf(u8, why, pr.word) != null) return pr.n;
+    }
+    return null;
+}
+
 /// 对面二十一·`build.zig` 的内置默认包 `addFileArg` 路径（第 238 轮 D106）：`build.zig` 系构建脚本独立
 /// 编译单元、无法 `@import` 本 hub，故 needle 由 `builtin_pack_cwd_rel` 派生、守卫读 `build.zig` 逐字节对账——
 /// 把两枚 `addFileArg(b.path("src/lang/packs/中文.txt"))` 钉到 hub 真值，改任一侧即分道转红（同 D78
@@ -123,6 +161,9 @@ pub const build_pack_face = [_]BuildFace{
 
 /// 符号表文件：跨会话稳定的母语名 → ASCII 名映射（D16/D36 语义，恢复失败须传播）。
 pub const symbols_file: []const u8 = root ++ "/symbols.txt";
+/// 符号缓存首行头前缀（第 332 轮 D191）：紧跟词表指纹的十六进制。旧缓存无此头即视为
+/// 与当前词表不配、整表作废——见 `main.loadSymbols` 与 `Pack.fingerprint`。
+pub const symbols_pack_head: []const u8 = "# @pack ";
 
 /// 历史深检临时发射物路径（D129 起 `check` 改 `-fno-emit-bin`，不再落盘；保留在隐藏判据/族清单中，
 /// 旧工程遗留的该路径仍不得外泄为诊断）。
@@ -152,6 +193,10 @@ pub const log_file_name: []const u8 = "untranslated_phrases.json";
 /// （真跑 eject 落 `stan-d/` 而 usage/忽略面分道）、P3 删忽略条目 → 守卫恒 OK（旧清单不含本员）。
 pub const eject_default_dest: []const u8 = "standard";
 
+/// `zzc relocalize` 缺省输出目录名（不带 `[目录]` 参数时的落点）：与 `eject_default_dest`
+/// 同形同治——写出面必登 `disk_family`，否则守卫核对集漏掉该产物、忽略面独漂零信号。
+pub const relocalize_default_dest: []const u8 = "relocalized";
+
 /// 我方**落盘族**全员（第 202 轮 D70）：凡我方会在工程根写出的目录/文件路径都须列在此处，
 /// 由 `zig build check-ignore-coverage` 逐个核对是否被仓根 `.gitignore` 覆盖——清单本身是守卫的输入，
 /// 故新增成员即自动进入覆盖核对；测试图另以「首段必落在族根集内」钉住其形制（202 T0 A2）。
@@ -168,6 +213,8 @@ pub const disk_family = [_][]const u8{
     // 第 213 轮 D81：在工程根跑不带参数的 `zzc eject` 会写出本目录——旧形制下它只在
     // `.gitignore` 里以 `**/standard/` 孤立存在、不在核对集内，删该行守卫恒绿而产物入 `git status`。
     eject_default_dest,
+    // `zzc relocalize` 的缺陷落点（同形同治：他方方言的工程副本，可由命令再生）。
+    relocalize_default_dest,
 };
 
 /// 源码面（忽略面**不得**吞掉的成员，第 202 轮 D70）：我方自己仓里的源码目录与语言包目录——与方言布局族
@@ -394,8 +441,10 @@ pub const demo_count_floor: usize = 6;
 /// 探针实锤：拆去 main.zig 纯母语强制臂后五通道全绿而混写源报错错位成后端假语法错）
 /// ＋指定语言行为面 1 臂（第 308 轮 D167：选包链被吞则恒落默认包，763 门禁全绿——
 /// r9g 断言只在 ps1 通道、本机/CI 从未验证；三形互验计一臂）。
+/// ＋relocalize 回程 1 臂（第 331 轮 D190：双向道的回程此前零真跑——正向 translate 有二十臂护着。
+/// render 退化成恒等复制时 render 单测可全绿而产出不改词形；四断见第二十一臂注）。
 /// 加臂/削臂须两处同动；与 `demo_count_floor`（入口表基数）各司两轴。
-pub const smoke_assert_floor: usize = 20;
+pub const smoke_assert_floor: usize = 21;
 
 /// 不入冒烟网的 demo 目录豁免清单（独立手设，第 297 轮 D156 本闸首跑即抓到真 ghost）：
 /// `demo/httpz` 系第 265 轮叠加层真依赖验证工程——`zig fetch` 外析依赖不入库（`.gitignore` 册）、
@@ -765,9 +814,9 @@ test "第 202 轮 T0 落盘族 ↔ .gitignore 忽略面：族根值钉 + 清单�
         try std.testing.expect(!std.fs.path.isAbsolute(p));
         try std.testing.expect(std.mem.indexOfScalar(u8, p, '\\') == null);
         const seg = if (std.mem.indexOfScalar(u8, p, '/')) |i| p[0..i] else p;
-        try std.testing.expect(std.mem.eql(u8, ".zzc", seg) or std.mem.eql(u8, "logs", seg) or std.mem.eql(u8, "standard", seg)); // 第 213 轮 D81：eject 缺省落点入第三族根
+        try std.testing.expect(std.mem.eql(u8, ".zzc", seg) or std.mem.eql(u8, "logs", seg) or std.mem.eql(u8, "standard", seg) or std.mem.eql(u8, "relocalized", seg)); // 第 213 轮 D81：eject 缺省落点入第三族根；relocalize 缺陷落点入第四族根
     }
-    try std.testing.expectEqual(@as(usize, 10), disk_family.len); // 第 213 轮收编 eject_default_dest
+    try std.testing.expectEqual(@as(usize, 11), disk_family.len); // 第 213 轮收编 eject_default_dest；relocalize 落点随行
 
     // A3 判据形制小样（字面量给定、独立于真文件）：三形各一枚命中，注释行/无尾斜杠（文件规则）/近名/
     //    空 rules/空段一律不覆盖——判据若被放宽（如「子串含即覆盖」）即在此现形。
@@ -794,6 +843,7 @@ test "第 202 轮 T0 落盘族 ↔ .gitignore 忽略面：族根值钉 + 清单�
         \\logs/
         \\**/.zzc/
         \\**/standard/
+        \\**/relocalized/
     ));
     try std.testing.expectEqualStrings("src", firstFalselyIgnored("logs/\n**/.zzc/\nsrc/\n").?);
     try std.testing.expectEqual(@as(?[]const u8, null), firstFalselyIgnored("logs/\n**/.zzc/\n"));
@@ -902,6 +952,14 @@ test "第 213 轮 T0 eject 缺省目录名族：值钉＋收编落盘族＋忽�
     try std.testing.expect(!dirIgnored("**/standar-d/\n", eject_default_dest)); // 近名不混（P1 探针形）
     try std.testing.expect(!dirIgnored("standard\n", eject_default_dest)); // 无尾斜杠＝文件规则
     try std.testing.expect(!dirIgnored("standard/\n", "stan-d")); // 反向：异名产物不被本条目冒充覆盖
+    // A4 `zzc relocalize` 落点同族同治（第 331 轮 D190）：值钉＋收编钉＋忽略判据正反小样，
+    //    与 eject 缺省落点同一套三道闸——写出面与忽略面分道即产物入 `git status` 而守卫零信号。
+    try std.testing.expectEqualStrings("relocalized", relocalize_default_dest);
+    var rfound = false;
+    for (disk_family) |p| rfound = rfound or std.mem.eql(u8, p, relocalize_default_dest);
+    try std.testing.expect(rfound);
+    try std.testing.expect(dirIgnored("**/relocalized/\n", relocalize_default_dest));
+    try std.testing.expect(!dirIgnored("**/relocalize/\n", relocalize_default_dest)); // 近名不混
 }
 
 test "第 234 轮 T0 源扩展名对族：std_ext 值钉 + 两枚改写后缀派生钉与独立字面量钉（防 .zz↔.zig 跨模块手抄单边漂移）" {
@@ -1024,7 +1082,7 @@ test "第 297 轮 T0 demo 冒烟防线单源：路径/入口表独立字面量�
         try std.testing.expectEqualStrings(demo_entries[i], c.needle);
     }
     try std.testing.expectEqual(@as(usize, 1), demos_smoke_count_face.len);
-    try std.testing.expectEqualStrings("EXPECT_CHECKS=20", demos_smoke_count_face[0].needle); // 逐轮随动：锚跟断言下限（旧值 6→…→19→20）
+    try std.testing.expectEqualStrings("EXPECT_CHECKS=21", demos_smoke_count_face[0].needle); // 逐轮随动：锚跟断言下限（旧值 6→…→19→20→21）
     try std.testing.expectEqual(@as(usize, 1), demos_build_face.len);
     try std.testing.expectEqualStrings("addFileArg(b.path(\"tools/demos-smoke.sh\"))", demos_build_face[0].needle);
     // A5 豁免清单值钉（独立手抄）：本闸首跑抓到的真 ghost `demo/httpz` 须显式在册未免——
@@ -1171,12 +1229,12 @@ test "第 306 轮 T0 AGENTS.md 路径单源：值钉＋doc42 步名针 want 对�
 
 test "第 307 轮 T0 断言条数锚解耦：值钉＋两轴关系钉＋count 针随动（D166）" {
     // A1 独立值钉：断言下限逐轮随臂（8→9 第 309 轮第九臂）与入口下限 6 各司两轴。
-    try std.testing.expectEqual(@as(usize, 20), smoke_assert_floor);
+    try std.testing.expectEqual(@as(usize, 21), smoke_assert_floor);
     try std.testing.expectEqual(@as(usize, 6), demo_count_floor);
     try std.testing.expectEqual(demo_entries.len, demo_count_floor); // 入口轴仍与表基数同数
     try std.testing.expect(smoke_assert_floor > demo_entries.len); // 断言轴已解耦：添臂后必大于入口数
     // A2 条数针随动：needle 值跟断言下限（漂值即脚本对账红）。
-    try std.testing.expectEqualStrings("EXPECT_CHECKS=20", demos_smoke_count_face[0].needle); // 第 321 轮 D180 第二十臂添臂随动（旧值 19）
+    try std.testing.expectEqualStrings("EXPECT_CHECKS=21", demos_smoke_count_face[0].needle); // 第 331 轮 D190 第二十一臂添臂随动（旧值 20）
 }
 
 test "第 308 轮 T0 指定语言行为面：fixture 两路径值钉＋面对账基数（D167）" {
@@ -1199,4 +1257,48 @@ test "第 309 轮 T0 叠加包路径单源：值钉＋doc45 步名针 want 对�
         "check_matcher_run.addFileArg(b.path(\"contrib/packs/httpz-中文.txt\"))",
         doc45_build_face[0].needle,
     );
+}
+
+/// 统计源码中 `pub const <名>_face` 的声明数（第 323 轮 D182）：本 hub 属 `src/` 包路径，可
+/// `@embedFile` 各 hub 源码；`src/check/machine_matcher_main.zig` 的包路径是 `src/check/`，
+/// 跨目录 `@embedFile` 会「embed of file outside package path」编译拒（203 轮硬约束），故那边
+/// 改用手抄分项数字、由本测自嵌统计与它对拍——两侧同一批数字即双源夹逼。
+pub fn countFaceDecls(src: []const u8) usize {
+    var n: usize = 0;
+    var i: usize = 0;
+    const key = "pub const ";
+    while (std.mem.indexOfPos(u8, src, i, key)) |k| {
+        var j = k + key.len;
+        const start = j;
+        while (j < src.len and (std.ascii.isAlphanumeric(src[j]) or src[j] == '_')) j += 1;
+        if (std.mem.endsWith(u8, src[start..j], "_face")) n += 1;
+        i = if (j > start) j else start + 1;
+    }
+    return n;
+}
+
+// 第 323 轮 T0（D182）：面表清单双源夹逼。guard 侧（matcher）以手抄分项数字 + 「审计＋豁免＝声明数」
+// 自校；本测则以 @embedFile 自嵌九个 hub 源码**实测声明数**，与同一批数字对拍——hub 添/删一张
+// `*_face` 表而只顾一侧，必在这两侧之一红，堵 322/323 轮反复出现的「清单漏表＝整表静默失守」。
+test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
+    const specs = [_]struct { path: []const u8, src: []const u8, n: usize }{
+        .{ .path = "cli/args.zig", .src = @embedFile("cli/args.zig"), .n = 25 },
+        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 15 },
+        .{ .path = "lsp/server.zig", .src = @embedFile("lsp/server.zig"), .n = 12 },
+        .{ .path = "editor/lsp_config.zig", .src = @embedFile("editor/lsp_config.zig"), .n = 5 },
+        .{ .path = "editor/lang_identity.zig", .src = @embedFile("editor/lang_identity.zig"), .n = 5 },
+        .{ .path = "vsix.zig", .src = @embedFile("vsix.zig"), .n = 1 },
+        .{ .path = "lang/pack.zig", .src = @embedFile("lang/pack.zig"), .n = 4 },
+        .{ .path = "lsp/jsonrpc.zig", .src = @embedFile("lsp/jsonrpc.zig"), .n = 1 },
+        .{ .path = "machine_contract.zig", .src = @embedFile("machine_contract.zig"), .n = 1 },
+    };
+    var total: usize = 0;
+    for (specs) |sp| {
+        const got = countFaceDecls(sp.src);
+        if (got != sp.n) std.debug.print("面表声明数分道：{s} 实测 {d} ≠ 手抄 {d}\n", .{ sp.path, got, sp.n });
+        try std.testing.expectEqual(sp.n, got);
+        total += got;
+    }
+    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（20+15+12+5+5+1+4+1+1）独立手抄对拍。
+    try std.testing.expectEqual(@as(usize, 69), total);
 }

@@ -44,7 +44,7 @@ pub fn preCheck(gpa: std.mem.Allocator, src: []const u8) ![]fullwidth.Violation 
 /// 仅导入参数里的 `.zz` 扩展名该改写为 `.zig`；普通字符串字面量（如文件名 `"备份.zz"`、
 /// 展示文本、甚至 `@embedFile("模板.zz")` 的资产路径）必须原样保留，否则发生静默数据损坏。
 /// 语言无关：不把 `导入` 硬编码，而是查关键字/别名表看前一个词元的映射值是否恰为 `@import`。
-fn isImportOperand(lang: Pack, src: []const u8, toks: []const lexer.Token, i: usize) bool {
+pub fn isImportOperand(lang: Pack, src: []const u8, toks: []const lexer.Token, i: usize) bool {
     if (i < 2) return false;
     const open = toks[i - 1];
     const open_txt = open.text(src);

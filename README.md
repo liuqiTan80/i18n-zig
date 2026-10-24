@@ -69,6 +69,7 @@ zzc 做三件事：
 - **母语报错**：错误消息与提示本地化，`--machine` 输出供编辑器 / CI 逐行正则消费。
 - **编辑器集成**：VS Code 扩展提供语法高亮、补全、问题匹配、LSP 悬停（含第三方库叠加包）/ 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 上下文补全 / 全角标点快速修复（含保存时批量）/ 文档大纲 / 代码折叠（含注释块） / 语义诊断 / 语义 token 着色 / 方言切换。
 - **导出毕业**：`zzc eject` 把方言工程导出为一份可独立 `zig build` 的标准 Zig 工程。
+- **双向道（跨语言共享）**：`zzc relocalize --to <包>` 把同一工程重生为另一方言词形的孪生工程——母语面出、母语面入，源树不改；产出再由正向链 `zzc check --lang <包>` 自检判绿。
 - **工程化**：上万行 Zig、数百个测试、跨文件同步守卫、以「消缺工单 + 演进轮次」记账的持续治理（详见下文与 `docs/`）。
 
 ---
@@ -158,6 +159,7 @@ zzc check           # 只做翻译 + 词法/编译检查（母语报错，不产
 zzc build           # 翻译 → zig build-exe，其余参数透传给 zig
 zzc test            # 翻译 → zig test
 zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认 standard/ 目录）
+zzc relocalize --to ja   # 把本工程重生为 ja 方言词形的孪生工程（默认 relocalized/ja/ 目录）
 ```
 
 ---
@@ -172,6 +174,7 @@ zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认
 | `zzc run [文件.zz]` | 编译并运行；`--` 之后传给程序 |
 | `zzc test [文件.zz]` | 翻译 → `zig test` |
 | `zzc eject [目录]` | 导出标准 Zig 工程（默认 `standard/`） |
+| `zzc relocalize --to <包> [目录]` | 把本工程重生为另一语言包词形的孪生工程（默认 `relocalized/<包>/`；源树不改，产出自检走 `zzc check --lang <包>`） |
 | `zzc lsp` | 启动 LSP 服务器（JSON-RPC over stdio：悬停 / 跳转定义 / 查找引用 / 同名高亮 / 重命名（含预检） / 工作区符号 / 参数提示 / 智能扩选 / 全角快速修复（含 source.fixAll 批量）/ 文档大纲 / 代码折叠（含注释块） / 快路诊断 / 文档同步）；配 `--lang-overlay` 时悬停可反查第三方库叠加包别名 |
 | `zzc lang` | 列出当前语言包与可注册包 |
 | `zzc lang add <文件>` | 装入外部语言包到本工程（可选 `--as <注册名>`；免重编译） |
@@ -183,6 +186,7 @@ zzc eject           # 导出为可独立 zig build 的标准 Zig 工程（默认
 | `--lang-file <路径>` | 从外部文件加载语言包（第三方发行包、免重编译；与 `--lang` 互斥） |
 | `--lang-overlay <路径>` | 把第三方库叠加层（如 `contrib/packs/httpz-中文.txt`）累积并入所选基包；所有子命令均生效，不透传 zig |
 | `--machine` | 把母语报错压成单行机读形制 `路径:行:列: 种类: 消息（提示：…）`（编辑器/CI 消费；不透传 zig） |
+| `--to <包>` | `zzc relocalize` 的目标语言包：`--lang` 始终是**源**包、`--to` 才是**产出**包（其它子命令上出现即拒） |
 
 > 方言文件默认取 `src/main.zz`；错误标签与 std 错误名保持 ASCII 原样。
 

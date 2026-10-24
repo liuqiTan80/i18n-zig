@@ -92,6 +92,19 @@ pub const contract_values = [_][]const u8{
     zig_main, // 语义编译根判据（含 main 的文件）
 };
 
+/// 第 332 轮 D191：词表指纹——符号缓存（`.zzc/symbols.txt`）与「当时所用词表」的绑定。
+/// 取 keywords + aliases 全部**键**的位置无关混合哈希（累加 Wyhash）：键集一变、指纹必变，
+/// 无须排序也不必分配。不含 docs/diagnostics：它们不决定「哪个词算标识符」。
+/// 指纹漂移判据只管「缓存是否还配得上当前词表」，不追求密码学强度。
+pub fn fingerprint(self: Pack) u64 {
+    var acc: u64 = 0x9E37_79B9_7F4A_7C15;
+    var kit = self.keywords.keyIterator();
+    while (kit.next()) |k| acc +%= (std.hash.Wyhash.hash(0, k.*) ^ 0xA5A5_A5A5_A5A5_A5A5);
+    var ait = self.aliases.keyIterator();
+    while (ait.next()) |k| acc +%= (std.hash.Wyhash.hash(1, k.*) ^ 0x5A5A_5A5A_5A5A_5A5A);
+    return acc +% @as(u64, self.keywords.count()) *% 0x9E37_79B9 +% @as(u64, self.aliases.count());
+}
+
 pub const ValidationError = error{
     PackMissingConst,
     PackMissingVar,
@@ -597,7 +610,7 @@ pub const bookdict_book_face = [_]FaceCheck{
     .{
         .needle = kwtable_ref,
         .occ = 5,
-        .why = "书稿五处指路皆须以 hub 词干指向对照表——分道即书把读者指向不存在的文件，「本篇已列全」的声明也就失去可核对的落点",
+        .why = "书稿五址指路皆须以 hub 词干指向对照表——分道即书把读者指向不存在的文件，「本篇已列全」的声明也就失去可核对的落点",
     },
 };
 
@@ -1820,4 +1833,81 @@ test "upsertDiagnostic 直调：就地替换保持位置/首末中三命中位/�
     try std.testing.expectEqualStrings("a覆", pack.diagnostics.items[0].message);
     try std.testing.expectEqualStrings("b再覆", pack.diagnostics.items[1].message);
     try std.testing.expectEqualStrings("c覆", pack.diagnostics.items[2].message);
+}
+
+test "第 332 轮 T0 词表指纹（D191）：同表恒等、插入序无关、键集敏感、值漂移不作废、docs/whitelist 出局" {
+    // 判据本体：指纹只回答一个问题——「缓存里的母语名映射，还配得上当前词表吗」。
+    //   「哪些词算已知」只由 keywords ∪ aliases 的**键集**定；它一变，旧缓存里的
+    //   `變量 = z_4` 就必须作废（否则 translate 的 ident_first 永远让位这枚僵尸标识符）。
+    //   合成小样，不绑真表：真表每轮都在长词，绑真表等于让本测随包内容漂红。
+    const gpa = std.testing.allocator;
+    const base_txt =
+        \\ [keywords]
+        \\ 常数 = const
+        \\ 变量 = var
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+    ;
+    // A0 同文两解恒等：指纹不得掺进程随机/时间（否则每次运行整表作废，缓存机制空转）。
+    var p1 = try parse(gpa, base_txt);
+    defer p1.deinit();
+    var p2 = try parse(gpa, base_txt);
+    defer p2.deinit();
+    try std.testing.expectEqual(p1.fingerprint(), p2.fingerprint());
+    try std.testing.expect(p1.fingerprint() != 0);
+    // A1 插入序无关：同键集异书写序 → 同指纹（累加混合，不排序、不分配）。
+    var rev = try parse(gpa,
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+        \\ [keywords]
+        \\ 变量 = var
+        \\ 常数 = const
+    );
+    defer rev.deinit();
+    try std.testing.expectEqual(p1.fingerprint(), rev.fingerprint());
+    // A2 键集敏感：增一枚新别名即变——D191 真场景（当年未知词后来补进词表）。
+    var added = try parse(gpa,
+        \\ [keywords]
+        \\ 常数 = const
+        \\ 变量 = var
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+        \\ 标准库.内存 = std.mem
+    );
+    defer added.deinit();
+    try std.testing.expect(p1.fingerprint() != added.fingerprint());
+    // A3 改值不动键 → 指纹不变（刻意钉死：值漂移不改「哪个词算已知」的判定，故不致作废整表、
+    //   白白重排生成名；将来若改成吃值，本臂即红，须连同 D191 理由一并复核）。
+    var revalued = try parse(gpa,
+        \\ [keywords]
+        \\ 常数 = const
+        \\ 变量 = let
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+    );
+    defer revalued.deinit();
+    try std.testing.expectEqual(p1.fingerprint(), revalued.fingerprint());
+    // A4 docs/whitelist 出局：悬停说明与英文豁免不参与「哪些词算母语词」。
+    var docs = try parse(gpa,
+        \\ [keywords]
+        \\ 常数 = const
+        \\ 变量 = var
+        \\ [aliases]
+        \\ 标准库.调试 = std.debug
+        \\ [docs]
+        \\ 标准库.调试 = 往屏幕打印
+        \\ [whitelist]
+        \\ foo
+    );
+    defer docs.deinit();
+    try std.testing.expectEqual(p1.fingerprint(), docs.fingerprint());
+    // A5 真包面：内置默认包两解恒等（跨运行可复用）；与繁体包不同（换包/叠层必使旧缓存作废）。
+    var zh = try parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_lang));
+    defer zh.deinit();
+    var zh2 = try parse(gpa, @embedFile(zzc_paths.builtin_pack_embed_lang));
+    defer zh2.deinit();
+    try std.testing.expectEqual(zh.fingerprint(), zh2.fingerprint());
+    var zh_trad = try parse(gpa, @embedFile("packs/繁体.txt"));
+    defer zh_trad.deinit();
+    try std.testing.expect(zh.fingerprint() != zh_trad.fingerprint());
 }

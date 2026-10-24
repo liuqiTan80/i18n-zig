@@ -27,6 +27,226 @@ const pack_hub = @import("zzc_core").Pack; // 第 294 轮 D153：对照表 ↔ �
 /// `face` 取 anytype：215/216 两 hub 各自声明同形制 FaceCheck（Zig struct 名义类型互不兼容），
 /// 而搜索判据 `lid.countOccurrences` 与旧 `lcfg.missing` 语义在 `occ == 1` 时逐字节等价（计数 0 ⟺ indexOf 落空），
 /// 不另立第三套；对无 `occ` 字段的 hub FaceCheck 以 `@hasField` 回落 `occ = 1`（presence 语义不变）。
+/// —— 面针名实闸（第 323 轮 D182）：322 轮的元判据只审 `cli.args` 两表（21 枚），其余 7 个 hub 的 62 张
+/// 表零名实闸，且 `lsp_config.FaceCheck`／`machine_contract.PatternFace` 两族缺 `occ` 字段（守卫靠
+/// `@hasField` 静默回落只看「在不在」）。本段把闸铺到全部 9 hub／64 表，判据本体全在 hub
+/// （`paths.declaredAddrCount`），本处只遍历与报错。
+const FaceAudit = struct {
+    tables: usize = 0,
+    pins: usize = 0,
+    occ_multi: usize = 0, // 已收紧（occ>1）的枚数——收紧进展锚
+    declared_multi: usize = 0, // 自称多址的枚数——须与 occ_multi 相等
+};
+
+/// 一枚一枚核：①面型必有 `occ` 字段（六族统一，禁回落）；②声明 N 址则 `occ == N`；③`occ > 1` 必声明。
+fn auditTable(comptime table_name: []const u8, comptime face: anytype, a: *FaceAudit) void {
+    a.tables += 1;
+    inline for (face) |c| {
+        a.pins += 1;
+        const has_occ = @hasField(@TypeOf(c), "occ");
+        if (!has_occ) fail(
+            "FAIL: 面型缺 occ 字段——{s}／「{s}」：六族面型须统一，否则守卫静默回落只看存在性\n",
+            .{ table_name, c.needle },
+        );
+        const occ: usize = if (has_occ) c.occ else 1;
+        if (occ > 1) a.occ_multi += 1;
+        if (paths.declaredAddrCount(c.why)) |n| {
+            a.declared_multi += 1;
+            if (occ != n) fail(
+                "FAIL: 名实不符 {s}／「{s}」——.why 声明 {d} 址而 occ={d}\n",
+                .{ table_name, c.needle, n, occ },
+            );
+        } else if (occ > 1) {
+            fail(
+                "FAIL: 声称多址而未声明 {s}／「{s}」occ={d}——.why 须写明「N 址」\n",
+                .{ table_name, c.needle, occ },
+            );
+        }
+    }
+}
+
+/// 清单覆盖闸（第 323 轮 D182）：本清单审到的每 hub 表数必须等于手抄基数——而「hub 新增/删除
+/// `*_face` 表」由 `src/zzc_paths.zig` 的 323 T0 用 `@embedFile` 自嵌源码统计并对拍同一批数字
+/// （彼处属 `src/` 包路径内，合法；本 exe 的包路径是 `src/check/`，`@embedFile` 越界会编译拒）。
+/// 两侧同一批数字＝双源手抄：hub 添表只顾一侧即红，清单漏抄不再静默。
+fn expectTableCount(comptime src_path: []const u8, expected: usize, seen: usize) void {
+    if (expected != seen) fail(
+        "FAIL: 面表清单漏表——{s} 应有 {d} 张 `*_face` 表，本清单只审 {d} 张：漏抄即该表零名实闸\n",
+        .{ src_path, expected, seen },
+    );
+}
+
+fn auditAllFaces() void {
+    var a: FaceAudit = .{};
+    var seen_cli: usize = 0;
+    var seen_paths: usize = 0;
+    var seen_lsp_srv: usize = 0;
+    var seen_lcfg: usize = 0;
+    var seen_lid: usize = 0;
+    var seen_vsix: usize = 0;
+    var seen_pack: usize = 0;
+    var seen_jrpc: usize = 0;
+    var seen_mcon: usize = 0;
+    auditTable("cli.help_main_face", cli_hub.help_main_face, &a);
+    seen_cli += 1;
+    auditTable("cli.readme_flag_face", cli_hub.readme_flag_face, &a);
+    seen_cli += 1;
+    auditTable("cli.plan_flag_face", cli_hub.plan_flag_face, &a);
+    seen_cli += 1;
+    auditTable("cli.contrib_flag_face", cli_hub.contrib_flag_face, &a);
+    seen_cli += 1;
+    auditTable("cli.agents_cmd_face", cli_hub.agents_cmd_face, &a);
+    seen_cli += 1;
+    auditTable("cli.agents_flag_face", cli_hub.agents_flag_face, &a);
+    seen_cli += 1;
+    auditTable("cli.pure_native_smoke_face", cli_hub.pure_native_smoke_face, &a);
+    seen_cli += 1;
+    auditTable("cli.lang_axis_face", cli_hub.lang_axis_face, &a);
+    seen_cli += 1;
+    auditTable("cli.flag_arity_face", cli_hub.flag_arity_face, &a);
+    seen_cli += 1;
+    auditTable("cli.subcmd_face", cli_hub.subcmd_face, &a);
+    seen_cli += 1;
+    auditTable("cli.overlay_name_face", cli_hub.overlay_name_face, &a);
+    seen_cli += 1;
+    auditTable("cli.lang_verb_face", cli_hub.lang_verb_face, &a);
+    seen_cli += 1;
+    auditTable("cli.lang_remove_face", cli_hub.lang_remove_face, &a);
+    seen_cli += 1;
+    auditTable("cli.overlay_smoke_face", cli_hub.overlay_smoke_face, &a);
+    seen_cli += 1;
+    auditTable("cli.lang_list_face", cli_hub.lang_list_face, &a);
+    seen_cli += 1;
+    auditTable("cli.lang_add_face", cli_hub.lang_add_face, &a);
+    seen_cli += 1;
+    auditTable("cli.overlay_pack_face", cli_hub.overlay_pack_face, &a);
+    seen_cli += 1;
+    auditTable("cli.tl_face", cli_hub.tl_face, &a);
+    seen_cli += 1;
+    auditTable("cli.exit_code_face", cli_hub.exit_code_face, &a);
+    seen_cli += 1;
+    auditTable("cli.exit_code_ps1_face", cli_hub.exit_code_ps1_face, &a);
+    seen_cli += 1;
+    auditTable("cli.ps1_face", cli_hub.ps1_face, &a);
+    seen_cli += 1;
+    auditTable("cli.version_main_face", cli_hub.version_main_face, &a);
+    seen_cli += 1;
+    auditTable("cli.readme_cmd_face", cli_hub.readme_cmd_face, &a);
+    seen_cli += 1;
+    auditTable("cli.book_cmd_face", cli_hub.book_cmd_face, &a);
+    seen_cli += 1;
+    auditTable("cli.ps1_native_face", cli_hub.ps1_native_face, &a);
+    seen_cli += 1;
+    auditTable("paths.build_pack_face", paths.build_pack_face, &a);
+    seen_paths += 1;
+    auditTable("paths.readme_face", paths.readme_face, &a);
+    seen_paths += 1;
+    auditTable("paths.readme_build_face", paths.readme_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.doc38_build_face", paths.doc38_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.doc41_build_face", paths.doc41_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.doc42_build_face", paths.doc42_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.demos_smoke_face", paths.demos_smoke_face, &a);
+    seen_paths += 1;
+    auditTable("paths.demos_smoke_count_face", paths.demos_smoke_count_face, &a);
+    seen_paths += 1;
+    auditTable("paths.doc45_build_face", paths.doc45_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.lang_smoke_face", paths.lang_smoke_face, &a);
+    seen_paths += 1;
+    auditTable("paths.demos_build_face", paths.demos_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.ci_tools_face", paths.ci_tools_face, &a);
+    seen_paths += 1;
+    auditTable("paths.ci_build_face", paths.ci_build_face, &a);
+    seen_paths += 1;
+    auditTable("paths.book_demo_face", paths.book_demo_face, &a);
+    seen_paths += 1;
+    auditTable("paths.bookdemo_build_face", paths.bookdemo_build_face, &a);
+    seen_paths += 1;
+    auditTable("lsp_srv.methods_face", lsp_srv.methods_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.cap_face", lsp_srv.cap_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.ps1_frame_face", lsp_srv.ps1_frame_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.smoke_frame_face", lsp_srv.smoke_frame_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.smoke_cap_face", lsp_srv.smoke_cap_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.smoke_js_cap_face", lsp_srv.smoke_js_cap_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.smoke_js_provider_face", lsp_srv.smoke_js_provider_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.params_face", lsp_srv.params_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.results_face", lsp_srv.results_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.kinds_smoke_face", lsp_srv.kinds_smoke_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.sv_face", lsp_srv.sv_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lsp_srv.errors_face", lsp_srv.errors_face, &a);
+    seen_lsp_srv += 1;
+    auditTable("lcfg.pkg_face", lcfg.pkg_face, &a);
+    seen_lcfg += 1;
+    auditTable("lcfg.ext_readme_cfg_face", lcfg.ext_readme_cfg_face, &a);
+    seen_lcfg += 1;
+    auditTable("lcfg.client_face", lcfg.client_face, &a);
+    seen_lcfg += 1;
+    auditTable("lcfg.log_writer_face", lcfg.log_writer_face, &a);
+    seen_lcfg += 1;
+    auditTable("lcfg.log_assert_face", lcfg.log_assert_face, &a);
+    seen_lcfg += 1;
+    auditTable("lid.langconf_face", lid.langconf_face, &a);
+    seen_lid += 1;
+    auditTable("lid.tm_face", lid.tm_face, &a);
+    seen_lid += 1;
+    auditTable("lid.pkg_face", lid.pkg_face, &a);
+    seen_lid += 1;
+    auditTable("lid.client_face", lid.client_face, &a);
+    seen_lid += 1;
+    auditTable("lid.tasks_face", lid.tasks_face, &a);
+    seen_lid += 1;
+    auditTable("vsix.pack_face", vsix_hub.pack_face, &a);
+    seen_vsix += 1;
+    auditTable("pack.kwtable_build_face", pack_hub.kwtable_build_face, &a);
+    seen_pack += 1;
+    auditTable("pack.kwtable_pack_face", pack_hub.kwtable_pack_face, &a);
+    seen_pack += 1;
+    auditTable("pack.bookdict_build_face", pack_hub.bookdict_build_face, &a);
+    seen_pack += 1;
+    auditTable("pack.bookdict_book_face", pack_hub.bookdict_book_face, &a);
+    seen_pack += 1;
+    auditTable("jrpc.frames_face", jrpc.frames_face, &a);
+    seen_jrpc += 1;
+    auditTable("mcon.pattern_face", mcon.pattern_face, &a);
+    seen_mcon += 1;
+    // 第 324 轮 D183：`.count` 形三张已收编为 `occ`（`tl_face`／`exit_code_face`／`version_main_face`），
+    // 豁免登记撤销、全 20 表一律入闸——此前 matcher 侧 `checkFace` 只读 `occ` 并回落 1，声明「九处/两处」
+    // 的针在真跑对账里只被要求 1 枚（测试图按 count 精确、守卫步却宽松，两套语义）。
+    expectTableCount("src/cli/args.zig", 25, seen_cli);
+    expectTableCount("src/zzc_paths.zig", 15, seen_paths);
+    expectTableCount("src/lsp/server.zig", 12, seen_lsp_srv);
+    expectTableCount("src/editor/lsp_config.zig", 5, seen_lcfg);
+    expectTableCount("src/editor/lang_identity.zig", 5, seen_lid);
+    expectTableCount("src/vsix.zig", 1, seen_vsix);
+    expectTableCount("src/lang/pack.zig", 4, seen_pack);
+    expectTableCount("src/lsp/jsonrpc.zig", 1, seen_jrpc);
+    expectTableCount("src/machine_contract.zig", 1, seen_mcon);
+    if (a.declared_multi != a.occ_multi) fail(
+        "FAIL: 名实总分道——自称多址 {d} 枚而已收紧 {d} 枚\n",
+        .{ a.declared_multi, a.occ_multi },
+    );
+    std.debug.print(
+        "面针名实普查：9 hub / {d} 表 / {d} 针，已收紧（occ>1）{d} 枚，自称址数 {d} 枚，全部名实相符\n",
+        .{ a.tables, a.pins, a.occ_multi, a.declared_multi },
+    );
+}
+
 fn checkFace(face_name: []const u8, comptime face: anytype, text: []const u8) void {
     inline for (face) |c| {
         const occ: usize = if (@hasField(@TypeOf(c), "occ")) c.occ else 1;
@@ -178,6 +398,10 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     const args = try init.minimal.args.toSlice(gpa);
+
+    // 面针名实闸先行：与对面文本无关，全表一次跑完（红即退，早于任何文件读取）。
+    auditAllFaces();
+
     const pkg_path = if (args.len >= 2) args[1] else "editors/vscode/package.json";
     const tasks_path = if (args.len >= 3) args[2] else "editors/vscode/examples/tasks.json";
 
@@ -578,7 +802,13 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(readme);
     checkFace(build_path, &paths.readme_build_face, build); // README 须经 addFileArg 声明为文件依赖
     checkFace(readme_arg, &paths.readme_face, readme); // 静态版本族七枚 needle
-    checkFace(main_path, &cli_hub.version_main_face, main_txt); // 出口行委派形在位（复用已读 main_txt·零新增 I/O）
+    checkFace(main_path, &cli_hub.version_main_face, main_txt);
+    checkFace(main_path, &cli_hub.flag_arity_face, main_txt);
+    checkFace(main_path, &cli_hub.subcmd_face, main_txt); // D186 未知子命令点名与建议使用点
+    checkFace(main_path, &cli_hub.overlay_name_face, main_txt); // D187 叠加层点名与判据接线
+    checkFace(main_path, &cli_hub.lang_verb_face, main_txt); // D188 lang 二级动词点名与近似建议
+    checkFace(main_path, &cli_hub.lang_remove_face, main_txt); // D189 lang remove 卸载面 // D184 三闸接线与话术使用点
+    // 出口行委派形在位（复用已读 main_txt·零新增 I/O）
     const rd_name = (jsonStringValue(pkg, "name", 0) orelse
         fail("FAIL: {s} 里找不到 \"name\"——README 扩展臂无从取包名真值。\n", .{pkg_path})).val;
     const rd_ver = (jsonStringValue(pkg, "version", 0) orelse
@@ -1005,6 +1235,10 @@ pub fn main(init: std.process.Init) !void {
     );
     std.debug.print(
         "、面针名实相符面：五枚自称双址的臂标识针按实测址数收紧（3/4/4/3/2），322 T0 立元判据——由 `.why` 文字声明解析址数与 occ 等值对拍（双向：声明几址就几址、已收紧必声明），并钉元判据清单枚数与各表基数（清单漏表即整表失守）；`BuildFace` 第 321 轮补 occ 与四面族对齐，本轮补「名实」闸（D181）\n",
+        .{},
+    );
+    std.debug.print(
+        "、面针名实闸横铺：`lsp_config.FaceCheck`（28 针）与 `machine_contract.PatternFace`（5 针）补 `occ` 字段、六族面型自此统一；`declaredAddrCount` 从 cli 提到 `zzc_paths` 公有（判据入 hub）；名实闸覆盖 9 hub／64 表全部面针，另以 `@embedFile` 自嵌源码统计 `pub const *_face` 声明数与清单枚数对拍——清单漏一张表即红，堵 322 轮「清单漏表＝整表失守」的元层缺口（D182）\n",
         .{},
     );
 }

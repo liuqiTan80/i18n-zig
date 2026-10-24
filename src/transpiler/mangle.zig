@@ -23,6 +23,10 @@ next_index: usize = 1,
 /// 已被用户源码里的 ASCII 标识符 `z_<n>` 占用的编号集合：intern 派新名时跳过之，
 /// 避免母语名被转成与用户手写的 `z_1` 等同名而撞车（详见 reserveZInText）。
 reserved: std.AutoHashMap(usize, void),
+/// 第 332 轮 D191：与本表配套的词表指纹（0 = 尚未绑定／旧格式缓存）。`saveSymbols` 把它写进
+/// 缓存首行、`loadSymbols` 用它对账；不符即整表作废——避免旧缓存把「当年的未知词」永久
+/// 钉成标识符（translate 的 `ident_first` 让位于用户标识符），使后来补上的词表永不生效。
+pack_fp: u64 = 0,
 
 pub fn init(gpa: std.mem.Allocator) Mangle {
     return .{

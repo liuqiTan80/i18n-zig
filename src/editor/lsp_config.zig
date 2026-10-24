@@ -76,9 +76,13 @@ pub const log_activated: []const u8 = namespace ++ " 扩展已激活（v";
 pub const log_spawn: []const u8 = "启动语言服务器：";
 
 /// 一次对面核对项：逐字节 needle 与「分道即何为」的说明（守卫据此报错，判据不另立）。
+/// `occ`：该 needle 在对面文件中**应现枚数**（缺省 1＝presence 语义）。第 323 轮 D182 补齐——本 hub
+/// 旧形缺此字段而守卫靠 `@hasField` 静默回落，与 `zzc_paths.BuildFace`／`pack.FaceCheck`／
+/// `lang_identity`／`jsonrpc`／`vsix` 五族不一致：针在注释与代码各出现一次时改一处仍绿。
 pub const FaceCheck = struct {
     needle: []const u8,
     why: []const u8,
+    occ: usize = 1,
 };
 
 /// 对面·清单 `package.json`：设置面板抬头与两枚属性全名。

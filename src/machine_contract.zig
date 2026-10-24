@@ -108,7 +108,9 @@ fn digit(comptime n: usize) []const u8 {
 }
 
 /// 对面十七核对项（与守卫 checkFace 同形的 needle/why 对；判据入 hub，守卫只做 I/O）。
-pub const PatternFace = struct { needle: []const u8, why: []const u8 };
+/// `occ`：对面文件中应现枚数（缺省 1＝presence 语义）。第 323 轮 D182 补齐——旧形缺此字段，
+/// 守卫靠 `@hasField` 静默回落；本族与 `BuildFace`／`FaceCheck` 五族自此统一，名实闸可全覆盖。
+pub const PatternFace = struct { needle: []const u8, why: []const u8, occ: usize = 1 };
 
 /// 由 `pattern_pairs` 派生的五枚逐字节 needle（`"file": 1` … `"message": 5`）——
 /// 改任一枚字段名/组号皆回到本真值重派生，杜绝第二份手抄。

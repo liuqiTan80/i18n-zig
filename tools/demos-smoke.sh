@@ -24,7 +24,7 @@ if [ ! -x "$zzc" ]; then
   exit 1
 fi
 
-EXPECT_CHECKS=20
+EXPECT_CHECKS=21
 checks=0
 fails=0
 
@@ -505,6 +505,53 @@ else
   fails=$((fails + 1))
 fi
 
+# 第二十一臂 · relocalize 双向道回程真跑（第 331 轮 D190）：正向 translate 有前二十臂护着，
+# 回程 `relocalize` 此前零真跑——探针（把 render 改成恒等复制）下 test/matcher 全绿，唯本臂可捕。
+# 四断：正形（ja 源 → zh 孪生，产出词形真换、注释原样、且由**同一条正向链**自检判绿）＋缺 `--to`
+# （用法错非失败码）＋`--to` 串台（非 relocalize 子命令上出现即拒，静默剔离即人以为生效）＋
+# 防毁源（落点撞源码树即拒且源文件仍在——清空 `dest/src` 前的那道闸被拆即删源码）。
+checks=$((checks + 1))
+rl_ok=0
+d_rl="$(mktemp -d)"; mkdir -p "$d_rl/src"
+cp "$root/tools/fixtures/proj-ja/src/main.zz" "$d_rl/src/"
+rl_out="$(cd "$d_rl" && "$zzc" relocalize --lang-file "$root/tools/fixtures/external-min.txt" --to zh 2>&1)"; rl_rc=$?
+if [ $rl_rc -ne 0 ]; then
+  echo "  [FAIL] relocalize 正形未过（实得 RC=$rl_rc 期望 0）；输出：$rl_out"; rl_ok=1
+elif [ ! -f "$d_rl/relocalized/zh/src/main.zz" ]; then
+  echo "  [FAIL] relocalize 未落产出树（期望 relocalized/zh/src/main.zz）"; rl_ok=1
+elif ! grep -qF -- "主函数" "$d_rl/relocalized/zh/src/main.zz"; then
+  echo "  [FAIL] 产出未换成目标包词形（缺「主函数」——render 退化恒等复制即此形）"; rl_ok=1
+elif ! grep -qF -- "// R9g" "$d_rl/relocalized/zh/src/main.zz"; then
+  echo "  [FAIL] 注释未原样搬（渲染越界改写了非词元面）"; rl_ok=1
+elif ! (cd "$d_rl" && "$zzc" check --lang zh relocalized/zh/src/main.zz) >/dev/null 2>&1; then
+  echo "  [FAIL] 产出未过正向链自检（判据与被检物须同源：`check --lang <目标包>` 必绿）"; rl_ok=1
+else
+  nd_out="$(cd "$d_rl" && "$zzc" relocalize --lang-file "$root/tools/fixtures/external-min.txt" 2>&1)"; nd_rc=$?
+  if [ $nd_rc -ne $EXPECT_USAGE_RC ]; then
+    echo "  [FAIL] 缺 --to 未按用法错拦（实得 RC=$nd_rc 期望 $EXPECT_USAGE_RC——落默认包即静默产出错语言树）"; rl_ok=1
+  elif ! printf '%s' "$nd_out" | grep -qF -- "缺少目标语言包"; then
+    echo "  [FAIL] 缺 --to 话术缺词核「缺少目标语言包」"; rl_ok=1
+  fi
+  cs_out="$(cd "$d_rl" && "$zzc" check --to zh src/main.zz 2>&1)"; cs_rc=$?
+  if [ $cs_rc -ne $EXPECT_USAGE_RC ]; then
+    echo "  [FAIL] --to 串台未被拦（check 上实得 RC=$cs_rc——静默剔离即人以为换包生效）"; rl_ok=1
+  elif ! printf '%s' "$cs_out" | grep -qF -- "只属于"; then
+    echo "  [FAIL] 串台话术缺词核「只属于」"; rl_ok=1
+  fi
+  ov_out="$(cd "$d_rl" && "$zzc" relocalize --lang-file "$root/tools/fixtures/external-min.txt" --to zh src 2>&1)"; ov_rc=$?
+  if [ $ov_rc -ne $EXPECT_FAIL_RC ]; then
+    echo "  [FAIL] 落点撞源码树未拒（实得 RC=$ov_rc 期望 $EXPECT_FAIL_RC——清空 dest/src 前那道闸被拆即删源码）"; rl_ok=1
+  elif [ ! -f "$d_rl/src/main.zz" ]; then
+    echo "  [FAIL] 防毁源闸失效：源 src/main.zz 已不在（源码被产出清理吃掉）"; rl_ok=1
+  fi
+fi
+rm -rf "$d_rl"
+if [ $rl_ok -eq 0 ]; then
+  echo "  [ok] relocalize 回程：正形落树/词形真换/注释原样/正向链自检绿 + 缺 --to/串台/防毁源三反形"
+else
+  fails=$((fails + 1))
+fi
+
 if [ "$checks" -ne "$EXPECT_CHECKS" ]; then
   echo "FAIL: 断言条数 $checks ≠ 锚 $EXPECT_CHECKS（削臂/加臂须两处同动并随动 hub 下限）"
   exit 1
@@ -513,4 +560,4 @@ if [ "$fails" -ne 0 ]; then
   echo "FAIL: demos-smoke $fails/$checks 条未过"
   exit 1
 fi
-echo "PASS：${checks} 项断言全过（六枚 demo 全量编译/运行对拍＋纯母语/指定语言/叠加轴行为面真跑）"
+echo "PASS：${checks} 项断言全过（六枚 demo 全量编译/运行对拍＋纯母语/指定语言/叠加轴行为面真跑＋relocalize 回程孪生工程）"

@@ -66,6 +66,24 @@ pub fn install(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []const u8,
     try file_io.writeWhole(io, rel, bytes);
 }
 
+/// 卸载失败的种类（第 330 轮 D189）：与 `InstallError` 同形——坏名必须在拼路径前挡住，
+/// 「本来就没装」要和 fs 权限错分开（前者是用户认知错、后者才是环境错）。
+pub const RemoveError = error{
+    BadKey, // 注册名不合白名单（同 install 前置判，禁穿越）
+    NotInstalled, // 目标位没有该包：卸载要可重复失败，不能静默成功
+};
+
+/// 把已装用户包从 `<dir>/<key>.txt` 删掉（第 330 轮 D189）：此前 `lang add` 装上即隐形，
+/// 想撤只能自己猜路径去删文件。判据顺序与 install 对齐——先判名（零副作用）、再查存在、
+/// 最后删；目录本身不删（同一目录还装着别的包）。
+pub fn remove(io: Io, gpa: std.mem.Allocator, dir: []const u8, key: []const u8) !void {
+    if (!keyIsSafe(key)) return error.BadKey;
+    const rel = try fileRel(gpa, dir, key);
+    defer gpa.free(rel);
+    if (!file_io.pathExists(io, rel)) return error.NotInstalled;
+    try file_io.delFile(io, rel);
+}
+
 /// 已装用户包列播条目（第 315 轮 D174 列播补位）：`key` 为文件名基形（即 `--lang`
 /// 选择名），`name` 为包内 `展示名`（`Pack.meta_name` 键）值；缺失/畸形回落 key——
 /// 列播是只读指引，不做全包 parse，坏包也要让用户看见装了什么名。
@@ -348,4 +366,45 @@ test "第 315 轮 T0 listInstalled：空目录/正形/回落/封口/排序五形
     try std.testing.expectEqualStrings("a", got[0].name); // 无 $name 回落 key
     try std.testing.expectEqualStrings("b", got[1].key);
     try std.testing.expectEqualStrings("乙包", got[1].name);
+}
+
+test "第 330 轮 T0 remove：真删／可重复失败／坏名零副作用（D189）" {
+    var threaded = std.Io.Threaded.init(std.heap.page_allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var arena_impl = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_impl.deinit();
+    const gpa = arena_impl.allocator();
+
+    const priv = tpriv.Priv.init(io);
+    var db: [96]u8 = undefined;
+    const dir = priv.path(&db, ".zig-cache/tmp/zzc_rm_", "");
+    const body = "$name = 测试删\n$code = kR\n[keywords]\n常数 = const\n";
+    const rel = try fileRel(gpa, dir, "kR");
+
+    // A1 真删：装→存在→remove→不存在，且同目录别的包不受牵连。
+    try install(io, gpa, dir, "kR", body);
+    try install(io, gpa, dir, "kKeep", body);
+    defer std.Io.Dir.cwd().deleteTree(io, dir) catch {};
+    try std.testing.expect(file_io.pathExists(io, rel));
+    try remove(io, gpa, dir, "kR");
+    try std.testing.expect(!file_io.pathExists(io, rel));
+    const keep = try fileRel(gpa, dir, "kKeep");
+    defer gpa.free(keep);
+    try std.testing.expect(file_io.pathExists(io, keep));
+
+    // A2 可重复失败：再删同一名 → NotInstalled（绝不静默成功）。
+    try std.testing.expectError(error.NotInstalled, remove(io, gpa, dir, "kR"));
+
+    // A3 坏名零副作用：BadKey 先于磁盘查询，目录里不出现该名（也不误删他人）。
+    try std.testing.expectError(error.BadKey, remove(io, gpa, dir, "../evil"));
+    try std.testing.expectError(error.BadKey, remove(io, gpa, dir, ""));
+    try std.testing.expectError(error.BadKey, remove(io, gpa, dir, "中文"));
+    try std.testing.expect(file_io.pathExists(io, keep));
+
+    // A4 卸载后列播不再见到它（装/列/删三面同一目录语义）。
+    try remove(io, gpa, dir, "kKeep");
+    const listed = try listInstalled(io, gpa, dir);
+    defer freeListed(gpa, listed);
+    try std.testing.expectEqual(@as(usize, 0), listed.len);
 }

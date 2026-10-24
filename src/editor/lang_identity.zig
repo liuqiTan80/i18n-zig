@@ -159,7 +159,7 @@ pub const pkg_face = [_]FaceCheck{
     .{ .needle = "\"id\": \"" ++ language_id ++ "\"", .why = "contributes.languages[0].id 须等于语言 id 真值" },
     .{ .needle = "\"onLanguage:" ++ language_id ++ "\"", .why = "activationEvents 须按同一语言 id 激活" },
     .{ .needle = "\"" ++ paths.dialect_ext ++ "\"", .why = "contributes.languages[0].extensions 须等于方言扩展名真值" },
-    .{ .needle = "\"language\": \"" ++ language_id ++ "\"", .why = "grammars/snippets 两处 language 皆须等于语言 id 真值（逐枚计数≥" ++ std.fmt.comptimePrint("{d}", .{language_block_count}) ++ "·漂任一枚即少一枚→红）", .occ = language_block_count },
+    .{ .needle = "\"language\": \"" ++ language_id ++ "\"", .why = "grammars/snippets 两址 language 皆须等于语言 id 真值（逐枚计数≥" ++ std.fmt.comptimePrint("{d}", .{language_block_count}) ++ "·漂任一枚即少一枚→红）", .occ = language_block_count },
     .{ .needle = "\"scopeName\": \"" ++ scope_name ++ "\"", .why = "grammars[].scopeName 须与生成侧 tmLanguage 同源，分道即编辑器寻不到 grammar（高亮全废）" },
     .{ .needle = "\"path\": \"./" ++ grammar_asset_path ++ "\"", .why = "grammars[].path 须指向生成器实际写出的 tmLanguage 资产" },
     .{ .needle = "\"path\": \"./" ++ snippets_asset_path ++ "\"", .why = "snippets[].path 须指向生成器实际写出的片段资产" },

@@ -479,6 +479,9 @@ $code = zh
 未使用变量 = unused local variable|局部变量声明后未使用|删除该变量，或以 `_ =` 显式丢弃。
 未使用参数 = unused function parameter|函数参数声明后未使用|若该参数故意不用，把名字改为 `_`（下划线）以向编译器明确表示有意忽略；否则请在函数体内使用它。
 未使用常量 = unused local constant|`常数`（const）声明后从未使用|该 `常数` 绑定后没有任何地方读取它；删除该声明，或用 `_ = 名字` 显式表示有意忽略。
+未使用值 = all non-void values must be used|表达式的结果未被使用|Zig 里只有 `空`（void）能当语句直接丢掉：把值绑定给 `常数`/`变量`、作为参数传出去，或在确实不要时显式写 `_ = 表达式;`。
+显式丢弃值 = to discard the value, assign it to '_'|确定要丢弃就显式赋给 `_`|这是「未使用值」的配套说明行：在表达式前加 `_ = `，向编译器明确表示「我知道它会返回值，但故意不要」。
+未使用捕获 = unused capture|捕获的取值声明后从未使用|`如果`/`匹配`/`捕获`/`对于` 的捕获名绑定了取值却从未读取；不需要该值时改用下划线 `_` 占位，或在分支体里真正使用它。
 不可达代码 = unreachable code|不可达（永远不会执行）的代码|该语句位于 `返回`/`断开`/`继续` 或永不成立的分支之后，控制流永远到不了这里；删除它或修正上方的控制流。
 控制流已转向 = control flow is diverted|控制流在此处离开、不再到达下方代码|配合“不可达代码”出现的说明行：标出控制流正是在这里离开（如 `返回`/`断开`），致使其下方语句不可达。
 循环外断开 = break expression outside loop|`断开`（break）只能用在循环内部|`断开`（break）出现在任何循环/匹配之外；把它放回循环体内，若是要退出函数请改用 `返回`。
@@ -511,6 +514,37 @@ $code = zh
 丢弃常量限定 = cast discards const qualifier|强制转换会丢弃 `常数`（const）限定|此转换试图去掉 `常数` 带来的只读限定，Zig 不允许静默丢弃 const。若要可写，请对 `变量`（var）数组取地址，或用 `@constCast` 明确表达意图（并自行承担后果）。
 建议省略尝试 = consider omitting 'try'|建议省略 `尝试`|该表达式本身并非错误/可选值，无需 `尝试`（try）处理，去掉它即可。
 定义位置 = declared here|相关定义在此处声明|定位用的兜底说明行：指出上述错误涉及的名字正是在这里声明/定义的，用于对照声明处与使用处（若上方已有更具体的结构/函数/枚举声明位置条目则优先用之）。
+# 第 331 轮 D190：zig 0.17 parser 错误族补齐（27 条）。来源是本机 `lib/std/zig/Ast.zig` 的
+# `w.writeAll("…")` 全集（30 条，可枚举真相源），与包内既有条目对账后逐条补译——此前 30 条里
+# 只有 3 条有着落，其余一律落到「[未翻译] 此报错暂未提供中文翻译」，母语用户写错一个逗号也算不
+# 出哪错了。表序：这 27 条整句与既有短语互不为子串（D41 守卫已核），故置于段末不劫持既有项。
+歧义逻辑与 = ambiguous use of '&&'; use 'and' for logical AND, or change whitespace to ' & &' for bitwise AND|`&&` 有歧义：逻辑与请写 `且`，位与请写 `& &`|Zig 没有 `&&` 运算符：`且`（and）是逻辑与、单个 `&` 是位与；两个 `&` 连写会被当成逻辑与的笔误——要位与就分开写 `& &`。
+位区间限单项指针 = bit range only allowed on single item pointers|位区间只能用于单项指针|`x[起..宽]` 这种按位取宽只适用于单项指针（如 `*u8`）；多值/切片指针请先取出单项再取位。
+比较不可连写 = comparison operators cannot be chained|比较运算符不能连着写|`甲 < 乙 < 丙` 在 Zig 里不成立（不是 Python 的链式比较），请拆成两个比较再用 `且` 连接。
+字段间禁声明 = declarations are not allowed between container fields|容器字段之间不能夹声明|结构/联合/枚举里字段必须连续排列，声明（函数、常数）要放在字段之前或之后，不能插在中间。
+文档注释挂编译期块 = documentation comments cannot be attached to comptime blocks|文档注释不能挂在编译期块上|`///` 只能挂在有名字的声明（函数/类型/字段/常数）上；`编译期 {}` 块本身没有名字可挂，改用普通注释 `//`。
+文档注释挂测试 = documentation comments cannot be attached to tests|文档注释不能挂在测试上|`///` 不能用于 `测试`；说明测试意图请用普通注释 `//`。
+声明后缺分号 = expected ';' after declaration|声明后缺少分号 `;`|检查上一行声明是否忘了结尾 `;`——多行声明要在最后一个 `)` 或 `}` 之后补。
+字段后缺逗号 = expected ',' after field|字段后缺少逗号 `,`|容器字段之间用 `,` 分隔（Zig 允许最后一项也带逗号）。
+循环捕获后缺逗号 = expected ',' after for capture|`对于` 的捕获名后缺少逗号|多值循环的捕获形如 `对于 (键, 值) 于 表`——键与值之间是逗号。
+循环操作数后缺逗号 = expected ',' after for operand|`对于` 的操作数后缺少逗号|`对于 (…, …)` 里每一段都是操作数，段与段之间必须有 `,`。
+初始值后缺逗号 = expected ',' after initializer|初始值之后缺少逗号|结构体/数组字面量里的 `字段 = 值` 之间用 `,` 分隔，缺一个就会在这里报。
+参数后缺逗号 = expected ',' after parameter|参数之间缺少逗号|`函数 名(甲: 类型, 乙: 类型)` 参数之间用 `,`；每个参数都要写类型。
+匹配分支后缺逗号 = expected ',' after switch prong|`匹配` 的分支后缺少逗号|分支形如 `值 => 结果,`，末尾要有 `,`；分支体是块 `{…}` 时之后同样要补。
+字段缺初始值 = expected field initializer|字段缺少初始值|结构体字面量里写 `类型{ 字段 = 值 }`，等号右边的值不能省。
+公开后应为声明 = expected function or variable declaration after pub|`公开` 之后应跟函数或变量声明|`公开` 是可见性修饰，必须紧跟 `函数`／`变量`／`常数`，不能单独出现。
+原型后应分号或块 = expected ';' or block after function prototype|函数原型后应为分号 `;` 或函数体|`外部 函数 名(...) 返回类型` 之后要么 `;`（只声明），要么 `{ … }`（给实现）。
+变量声明缺限定 = expected 'var' or 'const' before variable declaration|变量声明前应有 `变量` 或 `常数`|Zig 没有独立的赋值语句：`x = 1;` 要先写 `变量 x = 1;` 或 `常数 x = 1;`。
+外部函数不能有体 = extern functions have no body|`外部` 函数不能有函数体|`外部 函数` 只声明签名（实现由 C/外部库提供）：去掉 `{ … }`，或改用普通 `函数`。
+重复地址空间 = extra addrspace qualifier|地址空间修饰重复了|一个指针只能有一个 `地址空间(...)` 限定，检查是否写了两遍。
+重复对齐 = extra align qualifier|对齐修饰重复了|一个指针/变量只能有一个 `对齐(...)` 限定，检查是否写了两遍。
+字段在声明之后 = field after declarations here|字段不能写在声明之后|容器里字段须成组出现：把该字段移到声明之前那一段字段里。
+字段在声明之前 = field before declarations here|字段不能写在声明之前|容器开头不能先来声明再来字段——字段要全部连续，声明放后面。
+可变参数后禁参数 = function prototype has parameter after varargs|`可变参数` 之后不能再有参数|`...` 必须是参数表的最后一项；要更多参数就放到 `...` 之前。
+文档注释须独占行 = same line documentation comment|文档注释必须独占一行|`///` 不能写在代码同一行的末尾，请另起一行放在被说明声明的上方。
+文档注释未挂载 = unattached documentation comment|文档注释没有挂到任何声明|`///` 之后必须紧跟被说明的声明，中间不能空行、也不能夹别的语句。
+声明变量须限定 = use 'var' or 'const' to declare variable|声明变量要用 `变量` 或 `常数`|先用 `变量 x = 值;` 声明再使用；直接 `x = 值;` 会被当成对未声明名字的赋值。
+初始化误用比较 = variable initialized with '==' instead of '='|初始化误用了 `==`（比较），应为 `=`|`变量 x == 1;` 是把比较当成了赋值；声明处只能写单个 `=`。
 
 # ---------------------------------------------------------------------------
 # [whitelist] 纯母语过滤器豁免规则（台账 F2，第 51 轮）：整行精确匹配——报错文本恰为

@@ -98,6 +98,8 @@ pub fn generateRegistrySource(gpa: Allocator, files: []const PackFile) ![]const 
         \\    display: []const u8,
         \\    bytes: []const u8,
         \\    overlays: []const []const u8,
+        \\    /// 各叠加层的可读名族（第 328 轮 D187）：与 overlays 同序同长；每组首名是 `# @display`，其余为 `# @aliases`。
+        \\    overlay_names: []const []const []const u8,
         \\};
         \\
         \\pub const entries = [_]Entry{
@@ -140,6 +142,22 @@ pub fn generateRegistrySource(gpa: Allocator, files: []const PackFile) ![]const 
             push(gpa, &out, " ");
             emitBytes(gpa, &out, dirs.items[oi].bytes);
             push(gpa, &out, ",");
+        }
+        push(gpa, &out, " }, .overlay_names = &.{");
+        for (ovl.items) |oi| {
+            const od = dirs.items[oi];
+            push(gpa, &out, " &.{");
+            if (od.display.len != 0) {
+                push(gpa, &out, " ");
+                emitStr(gpa, &out, od.display);
+                push(gpa, &out, ",");
+            }
+            for (od.aliases) |a| {
+                push(gpa, &out, " ");
+                emitStr(gpa, &out, a);
+                push(gpa, &out, ",");
+            }
+            push(gpa, &out, " },");
         }
         push(gpa, &out, " }, },\n");
     }
