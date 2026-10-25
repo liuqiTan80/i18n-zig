@@ -167,6 +167,10 @@ fn auditAllFaces() void {
     seen_paths += 1;
     auditTable("paths.github_release_face", paths.github_release_face, &a); // 第 335 轮 D194：发布面四针（触发/权限/出口/打包器）
     seen_paths += 1;
+    auditTable("paths.diag_corpus_face", paths.diag_corpus_face, &a); // 第 336 轮 D195：语料面两针（条数锚／语料根）
+    seen_paths += 1;
+    auditTable("paths.diag_corpus_build_face", paths.diag_corpus_build_face, &a); // 第 336 轮 D195：回放器 build 侧依赖针
+    seen_paths += 1;
     auditTable("paths.book_demo_face", paths.book_demo_face, &a);
     seen_paths += 1;
     auditTable("paths.bookdemo_build_face", paths.bookdemo_build_face, &a);
@@ -233,7 +237,7 @@ fn auditAllFaces() void {
     // 豁免登记撤销、全 20 表一律入闸——此前 matcher 侧 `checkFace` 只读 `occ` 并回落 1，声明「九处/两处」
     // 的针在真跑对账里只被要求 1 枚（测试图按 count 精确、守卫步却宽松，两套语义）。
     expectTableCount("src/cli/args.zig", 25, seen_cli);
-    expectTableCount("src/zzc_paths.zig", 17, seen_paths); // 第 335 轮 D194：16→17（github_release_face）
+    expectTableCount("src/zzc_paths.zig", 19, seen_paths); // 第 336 轮 D195：17→19（diag_corpus_face＋diag_corpus_build_face）
     expectTableCount("src/lsp/server.zig", 12, seen_lsp_srv);
     expectTableCount("src/editor/lsp_config.zig", 5, seen_lcfg);
     expectTableCount("src/editor/lang_identity.zig", 5, seen_lid);
@@ -945,6 +949,17 @@ pub fn main(init: std.process.Init) !void {
     // 发布面（第 335 轮 D194）：同一份 GitHub CI 文本里的发版 job——tag 触发、写权限、gh 出口、
     // 打包器路径四针；四者缺一即「门禁绿但无人能产出发行件」，与 D193 同根（清单只活在 CI 里）。
     checkFace(gh_ci_arg, &paths.github_release_face, gh_ci_txt);
+
+    // —— 对面四十八：诊断语料回放器（第 336 轮 D195）。语料把「哪段源码逼出哪条报文」固化，回放器
+    // 逐 case 跑 `zzc check`；本面只钉两件会静默的事——条数锚（删 case 只动脚本即退化成抽样）与
+    // 语料根目录（改名而脚本不改则该目录恒空、逐条全绿），两枚皆由 hub 真值 comptime 派生。
+    // build 侧另钉一片：回放器须对 matcher 步声明文件依赖，否则改脚本不重跑、面针吃旧文本。
+    const corpus_sh_arg = if (args.len >= 27) args[26] else paths.diag_corpus_sh;
+    const corpus_sh_txt = std.Io.Dir.cwd().readFileAlloc(io, corpus_sh_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ corpus_sh_arg, @errorName(e) });
+    defer gpa.free(corpus_sh_txt);
+    checkFace(corpus_sh_arg, &paths.diag_corpus_face, corpus_sh_txt);
+    checkFace(build_path, &paths.diag_corpus_build_face, build);
     const ci_faces = .{ .{ ci_arg, ci_txt }, .{ gh_ci_arg, gh_ci_txt } };
     inline for (ci_faces) |face| {
         var miss_buf: [paths.ci_gate_cmds.len][]const u8 = undefined;
@@ -1181,6 +1196,10 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print(
         "、GitHub 发布面 {s} 四针在位（tag 触发／contents: write／gh 出口／打包器路径由 vsix_py_path 派生、与 build 步同源）",
         .{gh_ci_arg},
+    );
+    std.debug.print(
+        "、诊断语料回放器 {s} 的条数锚（{d} 条）与语料根 {s} 与 hub 同源、且对 matcher 步声明文件依赖",
+        .{ corpus_sh_arg, paths.diag_corpus_floor, paths.diag_corpus_dir },
     );
     std.debug.print(
         "、书稿图片面 {s} 引用实计 {d} 枚与盘上 {s} svg {d} 枚双向零漂（hidden=ghost=0，独立手设下限 {d}，未逐枚 addFileArg 则盘上增量靠下次他变/CI 全新 cache 兼保）",

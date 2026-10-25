@@ -123,7 +123,7 @@ cp zig-out/bin/zzc ~/.local/bin/                   # 或任意 PATH 目录
 zig build test
 ```
 
-`zig build test` 会跑**双测试图**（`zzc_core` 模块图 + `main` 入口图）的单元/快照测试，并联动以下跨文件同步守卫（`Build Summary: 17/17 steps`）：
+`zig build test` 会跑**双测试图**（`zzc_core` 模块图 + `main` 入口图）的单元/快照测试，并联动以下跨文件同步守卫与语料回放（`Build Summary: 19/19 steps`）：
 
 | 守卫步 | 作用 |
 | --- | --- |
@@ -132,6 +132,7 @@ zig build test
 | `check-ignore-coverage` | 校验仓根 `.gitignore` 覆盖我方落盘族 |
 | `check-machine-matcher` | 校验编辑器对面（`package.json` / `extension.js` / `tasks.json` 等）与机读契约同源 |
 | `check-toolchain-baseline` | 校验 `build.zig.zon` 与 CI 安装版本同源于工具链族真值 |
+| `check-diag-corpus` | 回放 `tools/diag-corpus/` 里每条诊断语料的触发源码：须报错退非零、输出含期望译文、条数等于 hub 锚 |
 
 其它常用构建步：
 

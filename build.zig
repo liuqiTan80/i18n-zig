@@ -242,6 +242,9 @@ pub fn build(b: *std.Build) void {
     // 哪些门禁」的手抄清单，改一面忘另一面即本地全绿、推到某侧才发现少跑（D157 同根，那时只一个面）。
     // 本片令对面四十七把两面逐行对 `paths.ci_gate_cmds` 单源命令核；不声明即改 CI 不触发重跑。
     check_matcher_run.addFileArg(b.path(".github/workflows/ci.yml"));
+    // 第 336 轮 D195：诊断语料回放器纳入 matcher 步输入——第 26 片（**仍垫底**：前 25 片的 argv 位已被
+    // 各面对固定）。回放器自身承载「条数锚 + 语料根」两枚面针，改脚本不重跑即吃陈旧文本（D157 同族）。
+    check_matcher_run.addFileArg(b.path("tools/diag-corpus.sh"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 
@@ -268,6 +271,20 @@ pub fn build(b: *std.Build) void {
     check_ver_run.addFileArg(b.path(".github/workflows/ci.yml"));
     check_ver_step.dependOn(&check_ver_run.step);
     test_step.dependOn(&check_ver_run.step);
+
+    // ---------------------------------------------------------------- 诊断语料回放（第 336 轮 D195）
+    // 语料（`tools/diag-corpus/<族-名>/`）是「哪段源码逼出哪条报文」的沉淀：此前每轮补诊断族都
+    // 靠一次性探针，用完即删，下一族又从零摸。本步把回放挂进 test 图——逐 case 跑 `zzc check`，
+    // 断言「报错退非零 + 输出含期望子串 + case 数 = hub 锚」。
+    // 三个 add* 各管一事：artifact 给刚构建的 zzc（防 zig-out 陈旧）、directory 令语料增删/改内容
+    // 都成为输入依赖（不声明即改 case 不重跑＝回放恒绿）、fileInput 钉脚本本体。
+    const check_corpus_run = b.addSystemCommand(&.{ "bash", "tools/diag-corpus.sh" });
+    check_corpus_run.addArtifactArg(exe);
+    check_corpus_run.addDirectoryArg(b.path("tools/diag-corpus"));
+    check_corpus_run.addFileInput(b.path("tools/diag-corpus.sh"));
+    const check_corpus_step = b.step("check-diag-corpus", "诊断语料回放（触发源码 + 期望译文 + 极性 + 条数锚）");
+    check_corpus_step.dependOn(&check_corpus_run.step);
+    test_step.dependOn(&check_corpus_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②；第 260 轮 D126 迁 run 步）

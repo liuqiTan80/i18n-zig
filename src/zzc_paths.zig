@@ -533,6 +533,18 @@ pub const vsix_py_path: []const u8 = "tools/build-vsix.py";
 /// 两条 `git push` 时漏一侧无任何信号，故落一枚自验脚本（推完逐仓回读 sha 对本地 HEAD）。
 pub const push_both_path: []const u8 = "tools/push-both.sh";
 
+/// 诊断语料根目录（第 336 轮 D195）：每族一个 case 目录，内含 `src/main.zz`（触发源码）与
+/// `expect.txt`（期望输出子串）。语料是「真跑造形」的沉淀——探针工作区用完即删，若连触发源码
+/// 都不留，下一轮补族仍要重新摸「什么写法能逼出这条报文」。
+pub const diag_corpus_dir: []const u8 = "tools/diag-corpus";
+
+/// 语料回放器路径（同上）：逐 case 跑 `zzc check`，断言报错极性 + 期望译文 + 条数锚。
+pub const diag_corpus_sh: []const u8 = "tools/diag-corpus.sh";
+
+/// 语料条数锚（**手设**，不从目录数抽取——抽取即自证）：脚本内 `EXPECT_CASES` 与本节面针、
+/// 以及 `323 T0` 的目录实计三处互锁；删/增 case 只改一处即分道转红。
+pub const diag_corpus_floor: usize = 3;
+
 /// 对面三十四·ci.yml 调用面：三枚脚本的执行针形（解释器词＋空格＋路径）全由 hub 路径常量
 /// comptime 派生——脚本改名/移位而 ci.yml 不随动（或反之）即分道转红。
 pub const ci_tools_face = [_]BuildFace{
@@ -574,6 +586,22 @@ pub const github_release_face = [_]BuildFace{
     .{ .needle = "contents: write", .why = "发布 job 须显式给 contents: write——默认只读，创建 Release 必 403，且日志在读权限处才红（第 335 轮 D194）" },
     .{ .needle = "gh release create", .why = "成品出口须走 gh CLI 而非第三方 action——供应链面收窄到运行器自带件（第 335 轮 D194）" },
     .{ .needle = "python3 " ++ vsix_py_path, .why = "扩展包须由 hub 里那枚打包器路径产出——与 build 步（对面二十九）同源，改名不同动即发布件里塞旧码（第 335 轮 D194）" },
+};
+
+// —— 诊断语料回放面（第 336 轮 D195）——
+//
+// 诊断译文早就补到 96 条，但「哪段源码会逼出这条报文」只活在人脑与一次性探针里：补下一族仍要
+// 从头摸。语料把「触发源码 + 期望子串」固化下来，回放器每轮重跑；本面只钉两件最容易静默的事——
+// 条数锚与语料根目录，两处都由 hub 真值派生（改锚不改脚本、或改目录不改脚本，皆红）。
+pub const diag_corpus_face = [_]BuildFace{
+    .{ .needle = "EXPECT_CASES=" ++ std.fmt.comptimePrint("{d}", .{diag_corpus_floor}), .why = "语料条数锚须与 hub `diag_corpus_floor` 同源——删 case 只动脚本即两侧分道，回放退化成抽样（第 336 轮 D195）" },
+    .{ .needle = "cases_dir=\"$root/" ++ diag_corpus_dir ++ "\"", .why = "回放器须读 hub 声明的同一语料根——针钉**赋值行**（只钉裸路径会被脚本顶注里的同名字面垫住：本轮 M2 演漂实证，注释命中而赋值已漂）（第 336 轮 D195）" },
+};
+
+/// 回放器在 build.zig 侧的依赖针：不声明 `addFileArg` 即改脚本不触发 matcher 重跑，面针吃旧文本
+/// （D157 同族：面文本变了而守卫不重跑＝恒绿）。
+pub const diag_corpus_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ diag_corpus_sh ++ "\"))", .why = "语料回放器须对 matcher 步声明文件依赖——不声明即改脚本不重跑，两条面针吃陈旧文本（第 336 轮 D195）" },
 };
 
 /// 两面共用的门禁命令核（单源）：**表序即最长匹配优先**，故裸 `zig build` 必须排在
@@ -1400,7 +1428,7 @@ pub fn countFaceDecls(src: []const u8) usize {
 test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     const specs = [_]struct { path: []const u8, src: []const u8, n: usize }{
         .{ .path = "cli/args.zig", .src = @embedFile("cli/args.zig"), .n = 25 },
-        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 17 }, // 第 335 轮 D194：16→17（github_release_face）
+        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 19 }, // 第 336 轮 D195：17→19（diag_corpus_face＋diag_corpus_build_face）
         .{ .path = "lsp/server.zig", .src = @embedFile("lsp/server.zig"), .n = 12 },
         .{ .path = "editor/lsp_config.zig", .src = @embedFile("editor/lsp_config.zig"), .n = 5 },
         .{ .path = "editor/lang_identity.zig", .src = @embedFile("editor/lang_identity.zig"), .n = 5 },
@@ -1416,8 +1444,8 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
         try std.testing.expectEqual(sp.n, got);
         total += got;
     }
-    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+17+12+5+5+1+4+1+1）独立手抄对拍。
-    try std.testing.expectEqual(@as(usize, 71), total); // 第 335 轮 D194：70→71（zzc_paths 增 github_release_face）
+    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+19+12+5+5+1+4+1+1）独立手抄对拍。
+    try std.testing.expectEqual(@as(usize, 73), total); // 第 336 轮 D195：71→73（zzc_paths 增两张语料面表）
 }
 
 // 第 334 轮 T0（D193）：CI 镜像面。GitHub 仓加建后本仓出现**第二个** CI 面，两面各持一份「该跑哪
@@ -1542,4 +1570,34 @@ test "第 335 轮 T0 发布面：四针值钉＋触发/权限/出口/派生四�
     try std.testing.expect(std.mem.startsWith(u8, github_release_face[2].needle, "gh release "));
     // A8 每针都得有 why（实名面：无理由的针等于没人知道它防什么，删了也无从判断）。
     for (github_release_face) |c| try std.testing.expect(c.why.len > 0);
+}
+
+// 第 336 轮 T0（D195）：诊断语料回放的两张面表。与 335 轮同一骨架——值钉 + 派生关系；另加一条
+// 「锚点可独立读」：`EXPECT_CASES=3` 必须以字面量在针里可见（人改 floor 而忘改脚本时，A2 与脚本
+// 实跑两处同时红，而不是靠派生式自证）。
+test "第 336 轮 T0 语料面：条数锚＋语料根＋build 依赖三钉与派生关系（D195）" {
+    // A1 条数锚值钉（独立手抄）：hub 的 floor 就是脚本必须写的那个数。
+    try std.testing.expectEqual(@as(usize, 3), diag_corpus_floor);
+    // A2 条数锚针：字面量可读形 + 派生式同源（两种写法都得对得上，防「只有派生式」时改锚不易发现）。
+    try std.testing.expectEqualStrings("EXPECT_CASES=3", diag_corpus_face[0].needle);
+    try std.testing.expectEqualStrings(
+        "EXPECT_CASES=" ++ std.fmt.comptimePrint("{d}", .{diag_corpus_floor}),
+        diag_corpus_face[0].needle,
+    );
+    // A3 语料根：路径值钉 + 针值对拍（改名不同动即红，防「目录恒空、逐条全绿」）。
+    try std.testing.expectEqualStrings("tools/diag-corpus", diag_corpus_dir);
+    // 语料根针钉的是**赋值行**而非裸路径：裸路径在脚本注释里也出现，M2 演漂实证会被垫住（注释命中、赋值已漂）。
+    try std.testing.expectEqualStrings("cases_dir=\"$root/" ++ diag_corpus_dir ++ "\"", diag_corpus_face[1].needle);
+    // A4 回放器路径与 build 侧依赖针（逐字对拍：addFileArg 漏挂即改脚本不重跑）。
+    try std.testing.expectEqualStrings("tools/diag-corpus.sh", diag_corpus_sh);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"tools/diag-corpus.sh\"))",
+        diag_corpus_build_face[0].needle,
+    );
+    // A5 形态钉：回放器必须落在 tools/ 下（否则语料根与之的相对位置改写，脚本里 `../..` 推断失效）。
+    try std.testing.expect(std.mem.startsWith(u8, diag_corpus_sh, "tools/"));
+    try std.testing.expect(std.mem.endsWith(u8, diag_corpus_sh, ".sh"));
+    // A6 实名面：三枚针都得写清防什么（无理由的针删了也无从判断）。
+    for (diag_corpus_face) |c| try std.testing.expect(c.why.len > 0);
+    for (diag_corpus_build_face) |c| try std.testing.expect(c.why.len > 0);
 }
