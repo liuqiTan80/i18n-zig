@@ -508,13 +508,30 @@ pub const demos_build_face = [_]BuildFace{
 // 假守卫」）；同理 README 快跑道 29 处命令样例手抄八枚 `cli.sub_*` 真值，改名即指引静默失效。
 
 /// 仓根 CI 工作流（matcher 步新输入·第 18 片）。
+/// 第 334 轮 D193：本仓自此有**两个** CI 面——本值仍是 GitCode 侧，GitHub 侧见 `github_ci_path`，
+/// 两面用同一组 `ci_tools_face` 针与同一张 `ci_gate_cmds` 命令核表逐面对拍（镜像面）。
 pub const ci_path: []const u8 = ".gitcode/workflows/ci.yml";
+
+/// GitHub Actions 侧 CI 工作流（第 334 轮 D193·镜像面，matcher 步第 25 片）。
+/// 升它入面的动因：GitHub 仓此前**零 CI**——`ci_path` 只被 GitCode 读，GitHub 从不执行
+/// `.gitcode/workflows/`，公开仓的绿标与门禁皆无；新增后若不入面，便成「第二份无人核的命令清单」
+/// （跨侧手抄漂移族，D157 同根）。
+pub const github_ci_path: []const u8 = ".github/workflows/ci.yml";
 
 /// LSP 长连接冒烟脚本路径（守卫对面二十三输入·此常量收编 matcher fallback 手抄字面）。
 pub const smoke_sh_path: []const u8 = "tools/lsp-live-smoke.sh";
 
 /// 客户端 e2e 套件路径（守卫对面二十四输入·同上收编）。
 pub const esm_js_path: []const u8 = "tools/extension-smoke.js";
+
+/// VSIX 打包器路径（第 335 轮 D194）：本仓无 npm 依赖的离线打包入口，`build.zig` 已声明为
+/// matcher 步输入（对面二十九）；发布 job 也靠它产出可安装件，故提到 hub 作单源——三处
+/// （脚本本身、build 步、CI 发布 job）共用一枚真值，改名须同动。
+pub const vsix_py_path: []const u8 = "tools/build-vsix.py";
+
+/// 双远端同步助手路径（第 335 轮 D194）：本仓两枚远端（gitcode 主仓 + GitHub 镜像），靠手敲
+/// 两条 `git push` 时漏一侧无任何信号，故落一枚自验脚本（推完逐仓回读 sha 对本地 HEAD）。
+pub const push_both_path: []const u8 = "tools/push-both.sh";
 
 /// 对面三十四·ci.yml 调用面：三枚脚本的执行针形（解释器词＋空格＋路径）全由 hub 路径常量
 /// comptime 派生——脚本改名/移位而 ci.yml 不随动（或反之）即分道转红。
@@ -529,6 +546,106 @@ pub const ci_tools_face = [_]BuildFace{
 pub const ci_build_face = [_]BuildFace{
     .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ ci_path ++ "\"))", .why = "ci.yml 须对 matcher 步声明文件依赖——改面不触发重跑即假绿形制（202/203/210/238 轮判例，第 298 轮 D157）" },
 };
+
+// —— CI 镜像面（第 334 轮 D193）——
+//
+// GitHub 仓加建后出现第二个 CI 面：`.gitcode/` 在 GitHub 上从不被执行，`.github/` 又不被任何
+// 本地守卫读到——两面各持一份「该跑哪些门禁命令」的手抄清单，改一面忘另一面即「本地全绿、
+// 推到某侧才发现漏步」，正是 D157 的同一根因（那时只有一个面，所以只钉了一个）。
+// 本面把「命令核」收编为单源表：两面逐条必须各含一份，缺一即红；判据是纯函数，守卫只做 I/O。
+
+/// GitHub 侧两个构建步的命名针（与 `ci_build_face` 同形制）：matcher 步与 D73 版本步
+/// 都必须把 GitHub 面声明为文件依赖——前者管命令/脚本针，后者管 `download/<ver>/` 版本对账；
+/// 只挂一处即另一半静静脱钩（同路径两片各管一事，不可互顶）。
+pub const github_ci_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ github_ci_path ++ "\"))", .why = "GitHub 面须对 matcher 步声明文件依赖——不声明即改 CI 不触发重跑，镜像面对拍吃陈旧文本（第 334 轮 D193）" },
+    .{ .needle = "check_ver_run.addFileArg(b.path(\"" ++ github_ci_path ++ "\"))", .why = "GitHub 面须对 D73 版本步声明文件依赖——`download/<ver>/` 版本对账逐面进行，漏一面即那面可静默换代（第 334 轮 D193）" },
+};
+
+// —— GitHub 发布面（第 335 轮 D194）——
+//
+// 门禁盖好了却没有「成品出口」：仓里零 tag、零 Release、产物无人上传，改 tag 会不会带上
+// 正确版本、扩展包会不会漏打、发布权限给没给——全靠人记。与 D193 同一根因（清单手抄在
+// CI 里，本地无守卫读），故同样收编为单源面针：四枚针各管一件事，缺一即红。
+// 刻意不用第三方 release action：`gh` 是 ubuntu 运行器自带件，少一枚供应链就等于少一处
+// 「上游改接口→发版静默失败」的通道。
+pub const github_release_face = [_]BuildFace{
+    .{ .needle = "tags: [\"v*\"]", .why = "发布 job 须由 tag 触发——只挂分支推送即发版路径永不进入，改版本号后无人能产出发行件（第 335 轮 D194）" },
+    .{ .needle = "contents: write", .why = "发布 job 须显式给 contents: write——默认只读，创建 Release 必 403，且日志在读权限处才红（第 335 轮 D194）" },
+    .{ .needle = "gh release create", .why = "成品出口须走 gh CLI 而非第三方 action——供应链面收窄到运行器自带件（第 335 轮 D194）" },
+    .{ .needle = "python3 " ++ vsix_py_path, .why = "扩展包须由 hub 里那枚打包器路径产出——与 build 步（对面二十九）同源，改名不同动即发布件里塞旧码（第 335 轮 D194）" },
+};
+
+/// 两面共用的门禁命令核（单源）：**表序即最长匹配优先**，故裸 `zig build` 必须排在
+/// 三条带参数的 `zig build …` 之后，否则它会把它们全部截胡、使缺步不被发现。
+pub const ci_gate_cmds = [_][]const u8{
+    "zig fmt --check src/ build.zig",
+    "zig build test --summary all",
+    "zig build -Doptimize=ReleaseSafe",
+    "zig build -Dtarget=x86_64-windows",
+    "zig build -Dtarget=aarch64-macos",
+    "bash " ++ demos_smoke_path,
+    "sh " ++ smoke_sh_path,
+    "node " ++ esm_js_path,
+    "zig build", // 裸构建：必须最后（见上「表序即最长匹配优先」）
+};
+
+/// 单行归一：去首尾空白；剥掉 YAML 步前缀（`- ` 列表符与 `run:` 键——GitHub Actions 每步都是
+/// `- run: <命令>`，GitCode 面则在 `run: |` 块内平铺，两面归一后同形才谈得上逐条对拍）；再剥
+/// `timeout <秒> `（两面都靠 timeout 控时但秒数各不同）；注释行与空行返回空串。纯函数，无 I/O。
+fn ciGateLine(raw: []const u8) []const u8 {
+    var s = std.mem.trim(u8, raw, " \t\r");
+    if (std.mem.startsWith(u8, s, "- ")) s = std.mem.trim(u8, s[2..], " \t\r");
+    if (std.mem.startsWith(u8, s, "run:")) s = std.mem.trim(u8, s[4..], " \t\r");
+    const tmo = "timeout ";
+    if (std.mem.startsWith(u8, s, tmo)) {
+        const rest = s[tmo.len..];
+        var i: usize = 0;
+        while (i < rest.len and std.ascii.isDigit(rest[i])) i += 1;
+        if (i > 0 and i < rest.len and rest[i] == ' ') s = std.mem.trim(u8, rest[i + 1 ..], " \t\r");
+    }
+    if (s.len == 0 or s[0] == '#') return "";
+    return s;
+}
+
+/// 命中位图：逐行归一后按表序认首领（`startsWith`，首中即停），一面里同一条命令出现多次也只记
+/// 一次。`ciGateMissing`（枚数）与 `ciGateMiss`（逐条点名）共用本判据，不另立第二套。纯函数。
+fn ciGateHits(txt: []const u8) [ci_gate_cmds.len]bool {
+    var hit: [ci_gate_cmds.len]bool = @splat(false); // 0.17 无 `**` 重复形（`"x" ** n` 判单侧空格硬拒），改 @splat
+    var it = std.mem.splitScalar(u8, txt, '\n');
+    while (it.next()) |raw| {
+        const line = ciGateLine(raw);
+        if (line.len == 0) continue;
+        for (ci_gate_cmds, 0..) |cmd, idx| {
+            if (std.mem.startsWith(u8, line, cmd)) {
+                hit[idx] = true;
+                break;
+            }
+        }
+    }
+    return hit;
+}
+
+/// 一个 CI 面里缺失的命令核枚数（0 = 九条俱全）。纯函数，供守卫与 T0 共用。
+pub fn ciGateMissing(txt: []const u8) usize {
+    var miss: usize = 0;
+    for (ciGateHits(txt)) |h| {
+        if (!h) miss += 1;
+    }
+    return miss;
+}
+
+/// 缺失命令逐条点名（守卫报错用）：未命中的命令按 `ci_gate_cmds` 表序写入 `out` 前缀并返回枚数。
+/// 只点名不自己判「几条算不及格」——闸值由守卫与 T0 各自对 `0` 比较，判据留在本 hub。
+pub fn ciGateMiss(txt: []const u8, out: *[ci_gate_cmds.len][]const u8) usize {
+    var miss: usize = 0;
+    for (ciGateHits(txt), 0..) |h, idx| {
+        if (h) continue;
+        out[miss] = ci_gate_cmds[idx];
+        miss += 1;
+    }
+    return miss;
+}
 
 // —— 书稿图片引用面（第 299 轮 D158）——
 //
@@ -1283,7 +1400,7 @@ pub fn countFaceDecls(src: []const u8) usize {
 test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     const specs = [_]struct { path: []const u8, src: []const u8, n: usize }{
         .{ .path = "cli/args.zig", .src = @embedFile("cli/args.zig"), .n = 25 },
-        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 15 },
+        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 17 }, // 第 335 轮 D194：16→17（github_release_face）
         .{ .path = "lsp/server.zig", .src = @embedFile("lsp/server.zig"), .n = 12 },
         .{ .path = "editor/lsp_config.zig", .src = @embedFile("editor/lsp_config.zig"), .n = 5 },
         .{ .path = "editor/lang_identity.zig", .src = @embedFile("editor/lang_identity.zig"), .n = 5 },
@@ -1299,6 +1416,130 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
         try std.testing.expectEqual(sp.n, got);
         total += got;
     }
-    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（20+15+12+5+5+1+4+1+1）独立手抄对拍。
-    try std.testing.expectEqual(@as(usize, 69), total);
+    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+17+12+5+5+1+4+1+1）独立手抄对拍。
+    try std.testing.expectEqual(@as(usize, 71), total); // 第 335 轮 D194：70→71（zzc_paths 增 github_release_face）
+}
+
+// 第 334 轮 T0（D193）：CI 镜像面。GitHub 仓加建后本仓出现**第二个** CI 面，两面各持一份「该跑哪
+// 些门禁」的手抄清单——改一面忘另一面即「本地全绿、推到某侧才发现少跑」，根因与 D157 同族（那时
+// 只有一个面，所以只钉了一个）。本测钉单源命令核（值＋表序不变量）、归一器正反小样与镜像面针形。
+test "第 334 轮 T0 CI 镜像面：命令核表序不变量＋归一器正反小样＋镜像面命名针（D193）" {
+    // A1 路径值钉（独立手抄）：两面各属一侧宿主（GitCode 只读 .gitcode/、GitHub 只读 .github/），
+    //    不可互代；改名须此处同动。
+    try std.testing.expectEqualStrings(".github/workflows/ci.yml", github_ci_path);
+    try std.testing.expect(!std.mem.eql(u8, ci_path, github_ci_path));
+    // A2 命令核逐字节对拍（独立手抄 want 表）：增删一条须两处同动。
+    const want = [_][]const u8{
+        "zig fmt --check src/ build.zig",
+        "zig build test --summary all",
+        "zig build -Doptimize=ReleaseSafe",
+        "zig build -Dtarget=x86_64-windows",
+        "zig build -Dtarget=aarch64-macos",
+        "bash tools/demos-smoke.sh",
+        "sh tools/lsp-live-smoke.sh",
+        "node tools/extension-smoke.js",
+        "zig build",
+    };
+    try std.testing.expectEqual(want.len, ci_gate_cmds.len); // 基数钉
+    inline for (ci_gate_cmds, 0..) |cmd, i| {
+        try std.testing.expectEqualStrings(want[i], cmd);
+    }
+    // A3 表序不变量（前缀劫持防）：靠前条目不得是靠后条目的**严格前缀**——否则后者所在行恒被
+    //    前者认领，该命令永远「缺」，守卫会把齐全的面误判为缺步（裸 `zig build` 必须垫底即此因）。
+    for (ci_gate_cmds, 0..) |a, i| {
+        for (ci_gate_cmds[i + 1 ..]) |b| {
+            try std.testing.expect(!(a.len < b.len and std.mem.startsWith(u8, b, a)));
+        }
+    }
+    // A4 归一器正形：九条俱全且在带 timeout 前缀/尾参数的现实形下 → 0 缺。
+    const all = "zig fmt --check src/ build.zig\n" ++
+        "timeout 900 zig build test --summary all\n" ++
+        "zig build -Doptimize=ReleaseSafe --prefix /tmp/ci-rel\n" ++
+        "zig build -Dtarget=x86_64-windows --prefix /tmp/ci-win\n" ++
+        "zig build -Dtarget=aarch64-macos --prefix /tmp/ci-mac\n" ++
+        "timeout 120 bash tools/demos-smoke.sh\n" ++
+        "timeout 30 sh tools/lsp-live-smoke.sh\n" ++
+        "timeout 300 node tools/extension-smoke.js\n" ++
+        "zig build\n";
+    try std.testing.expectEqual(@as(usize, 0), ciGateMissing(all));
+    var out: [ci_gate_cmds.len][]const u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 0), ciGateMiss(all, &out));
+    // A5 反形：抽掉 test 行 → 恰 1 缺且点名恰为该条（只报枚数的闸说不出少了哪步，故点名器同测）。
+    const no_test = "zig fmt --check src/ build.zig\n" ++
+        "zig build -Doptimize=ReleaseSafe --prefix /tmp/ci-rel\n" ++
+        "zig build -Dtarget=x86_64-windows --prefix /tmp/ci-win\n" ++
+        "zig build -Dtarget=aarch64-macos --prefix /tmp/ci-mac\n" ++
+        "timeout 120 bash tools/demos-smoke.sh\n" ++
+        "timeout 30 sh tools/lsp-live-smoke.sh\n" ++
+        "timeout 300 node tools/extension-smoke.js\n" ++
+        "zig build\n";
+    try std.testing.expectEqual(@as(usize, 1), ciGateMissing(no_test));
+    try std.testing.expectEqual(@as(usize, 1), ciGateMiss(no_test, &out));
+    try std.testing.expectEqualStrings("zig build test --summary all", out[0]);
+    // A6 边界钉①：注释里提到命令不算执行（CI 注释铺满而实步删掉即假绿形）；裸 `zig build` 也不
+    //    被带参数的构建行顶替（表序首中即停，裸条目须自占一行）。
+    try std.testing.expectEqual(
+        ci_gate_cmds.len - 1,
+        ciGateMissing("# zig build test --summary all\nzig build\n"),
+    );
+    // A6b 两面宿主形制归一：GitHub 面的 `- run: <命令>` 与 GitCode `run: |` 块内的平铺行归一后同形
+    //     （不剥这两层，镜像面会被误报「九条全缺」——本轮首跑即撞）。
+    try std.testing.expectEqual(
+        ci_gate_cmds.len - 2,
+        ciGateMissing("      - run: timeout 900 zig build test --summary all\n        run: zig build\n"),
+    );
+    // A7 边界钉②：只剥 `timeout <数字> ` 前缀——`timeout --foreground …` 等非数字形不剥，故不
+    //    算命中（两面现实形皆为数字秒；若某面改此形，本闸与守卫同时红，逼其显式在册）。
+    try std.testing.expectEqual(
+        ci_gate_cmds.len,
+        ciGateMissing("timeout --foreground zig build test --summary all\n"),
+    );
+    // A8 换行容错：CRLF 行尾与行首尾空白不影响命中（工作区须 LF，但守卫不因脏行尾误红）；
+    //    两行命中⇒缺 len-2（仅裸构建与格式门禁两枚）。
+    try std.testing.expectEqual(
+        ci_gate_cmds.len - 2,
+        ciGateMissing("  zig build  \r\nzig fmt --check src/ build.zig\r\n"),
+    );
+    // A9 镜像面命名针：两枚步名限定针（matcher 步管命令针、D73 版本步管 download/<ver>/ 对账），
+    //    同路径两片各管一事——只挂一处即另一半静静脱钩。
+    try std.testing.expectEqual(@as(usize, 2), github_ci_build_face.len);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\".github/workflows/ci.yml\"))",
+        github_ci_build_face[0].needle,
+    );
+    try std.testing.expectEqualStrings(
+        "check_ver_run.addFileArg(b.path(\".github/workflows/ci.yml\"))",
+        github_ci_build_face[1].needle,
+    );
+}
+
+// 第 335 轮 T0（D194）：GitHub 发布面。判据仍是「四枚针各管一件事、值逐字节对拍」，但
+// 这里多钉一层**派生关系**：第四枚针必须由 `vsix_py_path` 拼出——只改常量不改针（或反过来）
+// 即红，防的正是 D151/对面二十九那次「打包器改名、发布件还在塞旧码」的同一类漂移。
+test "第 335 轮 T0 发布面：四针值钉＋触发/权限/出口/派生四要素（D194）" {
+    // A1 打包器路径值钉（独立手抄，不从被测者取）：release 面第四针与 build 步共用此真值。
+    try std.testing.expectEqualStrings("tools/build-vsix.py", vsix_py_path);
+    // A2 双推助手路径值钉：README 与操作手册都靠它指路，改名即文档指向不存在的文件。
+    try std.testing.expectEqualStrings("tools/push-both.sh", push_both_path);
+
+    // A3 四枚针逐字节对拍（want 独立手抄，禁从 face 表回抄）。
+    const want = [_][]const u8{
+        "tags: [\"v*\"]",
+        "contents: write",
+        "gh release create",
+        "python3 tools/build-vsix.py",
+    };
+    try std.testing.expectEqual(want.len, github_release_face.len);
+    for (github_release_face, 0..) |c, i| try std.testing.expectEqualStrings(want[i], c.needle);
+
+    // A4 派生关系钉：第四针以 hub 路径收尾（反向：只改 const 则针不同步，A3 与 A4 至少一红）。
+    try std.testing.expect(std.mem.endsWith(u8, github_release_face[3].needle, vsix_py_path));
+    // A5 触发面钉：首针必须是 tag 过滤（`tags:` 起头）——换成 `branches:` 即发版路径永不进入。
+    try std.testing.expect(std.mem.startsWith(u8, github_release_face[0].needle, "tags:"));
+    // A6 权限面钉：次针须含写权限词（只读默认值下创建 Release 必 403）。
+    try std.testing.expect(std.mem.indexOf(u8, github_release_face[1].needle, "write") != null);
+    // A7 出口面钉：第三针须是 gh CLI 动词（第三方 action 形式 `uses:` 不进此针）。
+    try std.testing.expect(std.mem.startsWith(u8, github_release_face[2].needle, "gh release "));
+    // A8 每针都得有 why（实名面：无理由的针等于没人知道它防什么，删了也无从判断）。
+    for (github_release_face) |c| try std.testing.expect(c.why.len > 0);
 }

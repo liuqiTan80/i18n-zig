@@ -236,6 +236,12 @@ pub fn build(b: *std.Build) void {
     // 第九臂正形/映射源的盘上真值件（@embedFile 不可越包路径，296 自守形制在此不适用，改 run 时读）；
     // 路径单源 `paths.overlay_pack_path`，映射两枚 needle 对包文 presence 由守卫胶合。
     check_matcher_run.addFileArg(b.path("contrib/packs/httpz-中文.txt"));
+    // 第 334 轮 D193：GitHub Actions 侧 CI 工作流纳入 matcher 步输入——第 25 片（**位序垫底**：前 24
+    // 片的 argv 位已被守卫各面对固定，新片只能排在末位，否则后续各面对全体错位、把包文当文档）。
+    // GitHub 仓加建后本仓有了第二个 CI 面，而 `.github/` 从不被任何本地守卫读：两面各持一份「该跑
+    // 哪些门禁」的手抄清单，改一面忘另一面即本地全绿、推到某侧才发现少跑（D157 同根，那时只一个面）。
+    // 本片令对面四十七把两面逐行对 `paths.ci_gate_cmds` 单源命令核；不声明即改 CI 不触发重跑。
+    check_matcher_run.addFileArg(b.path(".github/workflows/ci.yml"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 
@@ -257,6 +263,9 @@ pub fn build(b: *std.Build) void {
     const check_ver_run = b.addRunArtifact(check_ver_exe);
     check_ver_run.addFileArg(b.path("build.zig.zon"));
     check_ver_run.addFileArg(b.path(".gitcode/workflows/ci.yml"));
+    // 第 334 轮 D193：版本族对账逐面进行——GitHub 面也装 zig，故也须核 `download/<ver>/` 字面；
+    // 只挂 GitCode 面即那面可静默换代（与 matcher 步同路径两片各管一事，不可互顶）。
+    check_ver_run.addFileArg(b.path(".github/workflows/ci.yml"));
     check_ver_step.dependOn(&check_ver_run.step);
     test_step.dependOn(&check_ver_run.step);
 }

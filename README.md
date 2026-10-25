@@ -142,6 +142,24 @@ zig build gen-editor-snippets          # 从语言包重新生成补全片段
 zig build gen-pack-registry            # 重新生成语言包注册表（通常随包内容自动刷新，无需手跑）
 ```
 
+### 发布与双推
+
+本仓有两枚远端（`origin` 主仓 + `github` 镜像），CI 也分两面。日常同步与发版各有一条既定路径：
+
+```sh
+bash tools/push-both.sh                    # 推 main 到两枚远端，并逐仓回读 sha 对本地 HEAD
+bash tools/push-both.sh 某分支              # 可选：推指定分支
+
+git tag v0.1.0                             # 打 tag 即进入发版流程（先改版本常量，再打同名 tag）
+git push origin v0.1.0                     # tag 推到任一远端都会触发 `.github/workflows/ci.yml` 的发布 job
+```
+
+- 双推脚本拒跑脏工作区，不带强制推与跳钩子的旗标；推完两仓 sha 不一致会点名是哪一侧。
+- 发版 job 先跑一遍 `fmt` / `build` / `test`（发行件必须出自已验证的树），再把 tag 与 `zzc version`
+  对账，随后产出三平台产物与 `zzc-dialect-<版本>.vsix` 挂到 Release 上。
+- 这四件事（tag 触发、写权限、`gh` 出口、打包器路径）由 `check-machine-matcher` 的发布面针在
+  本地钉住：改 CI 忘改针、或改造脚本不同动，`zig build test` 当场转红，不必推到远端才发现。
+
 ---
 
 ## 快速上手（10 秒）
@@ -283,7 +301,7 @@ src/                编译器与工具链（Zig）
   lsp/              zzc lsp 语言服务器（JSON-RPC over stdio）
 editors/vscode/     VS Code 扩展（零依赖宿主 + 客户端帧层）
 docs/               中文教程《母语编写 Zig》与方案书 / 关键字对照表 / 消缺台账等
-tools/              e2e 演示校验脚本与 fixture
+tools/              e2e 演示校验脚本、双推助手与 fixture
 demo/               可直接试的方言示例（hello / multi / nested / errors / fullwidth ...）
 build.zig           构建脚本（编译 + 测试 + 守卫 + 资产生成步）
 ```

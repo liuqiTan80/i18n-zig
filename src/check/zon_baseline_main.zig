@@ -1,7 +1,8 @@
 //! 工具链版本族 ↔ 本仓 `build.zig.zon` 与 CI 安装版本守卫（第 205 轮 D73）：读两枚对面文件，
 //! 核对它们声明/安装的版本仍等于 `zzc_paths` 的族真值。用法：
-//!   check-toolchain-baseline [zon 路径] [CI 工作流路径]
-//!   （缺省 `build.zig.zon` 与 `.gitcode/workflows/ci.yml`，构建步以文件依赖传入实际路径）
+//!   check-toolchain-baseline [zon 路径] [GitCode CI 工作流路径] [GitHub CI 工作流径]
+//!   （缺省 `build.zig.zon`、`.gitcode/workflows/ci.yml` 与 `.github/workflows/ci.yml`，构建步以
+//!   文件依赖传入实际路径）
 //! 判断本身（`minimumZigVersionIn`/`zonDeclaresBaseline`/`ciInstallsBaseline`）全在 `zzc_paths.zig`
 //! 并由其 205 T0 用小样钉住——本程序只做 I/O 与退出码，不另立第二套判据。
 //! 为何不在测试图内读盘：`@embedFile` 受 zig 0.17 的 module 包路径（`src/`）限制不可越（202 轮硬约束），
@@ -17,7 +18,10 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const args = try init.minimal.args.toSlice(gpa);
     const zon_path = if (args.len >= 2) args[1] else "build.zig.zon";
-    const ci_path = if (args.len >= 3) args[2] else ".gitcode/workflows/ci.yml";
+    const ci_path = if (args.len >= 3) args[2] else paths.ci_path;
+    // 第 334 轮 D193：本仓自此有两个 CI 面（GitHub 仓加建后）。装 zig 的那一行逐面各写一次，
+    // 故 `download/<ver>/` 版本字面也逐面各核一次——只核 GitCode 面即 GitHub 面可静默换代。
+    const gh_ci_path = if (args.len >= 4) args[3] else paths.github_ci_path;
 
     const zon = std.Io.Dir.cwd().readFileAlloc(io, zon_path, gpa, .unlimited) catch |e| {
         std.debug.print("FAIL: 无法读取 {s}（{s}）\n", .{ zon_path, @errorName(e) });
@@ -45,19 +49,22 @@ pub fn main(init: std.process.Init) !void {
         std.process.exit(1);
     }
 
-    const ci = std.Io.Dir.cwd().readFileAlloc(io, ci_path, gpa, .unlimited) catch |e| {
-        std.debug.print("FAIL: 无法读取 {s}（{s}）\n", .{ ci_path, @errorName(e) });
-        std.process.exit(1);
-    };
-    defer gpa.free(ci);
-    if (!paths.ciInstallsBaseline(ci)) {
-        std.debug.print(
-            "FAIL: {s} 未按 download/{s}/ 安装 zig——CI 跑的工具链与族真值 {s} 不同代，回译标定早警在 CI 上失真。" ++
-                " 请同步 CI 的版本号。\n",
-            .{ ci_path, paths.zig_version, paths.zig_version },
-        );
-        std.process.exit(1);
+    const ci_faces = [_][]const u8{ ci_path, gh_ci_path };
+    for (ci_faces) |face| {
+        const ci = std.Io.Dir.cwd().readFileAlloc(io, face, gpa, .unlimited) catch |e| {
+            std.debug.print("FAIL: 无法读取 {s}（{s}）\n", .{ face, @errorName(e) });
+            std.process.exit(1);
+        };
+        defer gpa.free(ci);
+        if (!paths.ciInstallsBaseline(ci)) {
+            std.debug.print(
+                "FAIL: {s} 未按 download/{s}/ 安装 zig——CI 跑的工具链与族真值 {s} 不同代，回译标定早警在 CI 上失真。" ++
+                    " 请同步该 CI 面的版本号。\n",
+                .{ face, paths.zig_version, paths.zig_version },
+            );
+            std.process.exit(1);
+        }
     }
 
-    std.debug.print("OK: {s} 与 {s} 均与工具链族真值 {s} 同源，且 {s} 的 .version =「{s}」与产品版本族真值同源\n", .{ zon_path, ci_path, paths.zig_version, zon_path, paths.zzc_version });
+    std.debug.print("OK: {s} 与 {s}／{s} 均与工具链族真值 {s} 同源，且 {s} 的 .version =「{s}」与产品版本族真值同源\n", .{ zon_path, ci_path, gh_ci_path, paths.zig_version, zon_path, paths.zzc_version });
 }

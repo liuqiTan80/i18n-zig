@@ -163,6 +163,10 @@ fn auditAllFaces() void {
     seen_paths += 1;
     auditTable("paths.ci_build_face", paths.ci_build_face, &a);
     seen_paths += 1;
+    auditTable("paths.github_ci_build_face", paths.github_ci_build_face, &a); // 第 334 轮 D193：镜像面两枚步名限定针
+    seen_paths += 1;
+    auditTable("paths.github_release_face", paths.github_release_face, &a); // 第 335 轮 D194：发布面四针（触发/权限/出口/打包器）
+    seen_paths += 1;
     auditTable("paths.book_demo_face", paths.book_demo_face, &a);
     seen_paths += 1;
     auditTable("paths.bookdemo_build_face", paths.bookdemo_build_face, &a);
@@ -229,7 +233,7 @@ fn auditAllFaces() void {
     // 豁免登记撤销、全 20 表一律入闸——此前 matcher 侧 `checkFace` 只读 `occ` 并回落 1，声明「九处/两处」
     // 的针在真跑对账里只被要求 1 枚（测试图按 count 精确、守卫步却宽松，两套语义）。
     expectTableCount("src/cli/args.zig", 25, seen_cli);
-    expectTableCount("src/zzc_paths.zig", 15, seen_paths);
+    expectTableCount("src/zzc_paths.zig", 17, seen_paths); // 第 335 轮 D194：16→17（github_release_face）
     expectTableCount("src/lsp/server.zig", 12, seen_lsp_srv);
     expectTableCount("src/editor/lsp_config.zig", 5, seen_lcfg);
     expectTableCount("src/editor/lang_identity.zig", 5, seen_lid);
@@ -927,6 +931,32 @@ pub fn main(init: std.process.Init) !void {
     checkFace(ci_arg, &paths.ci_tools_face, ci_txt); // 三枚脚本执行针由 hub 路径派生
     checkFace(readme_arg, &cli_hub.readme_cmd_face, readme); // 八枚命令词针由 sub_* 派生（复用已读 README·零新增 I/O）
 
+    // —— 对面四十七：CI 镜像面（第 334 轮 D193）。GitHub 仓加建后本仓有了两个 CI 面：`.gitcode/` 在
+    // GitHub 侧从不执行、`.github/` 又不被任何本地守卫读——两面各持一份「该跑哪些门禁」的手抄清单，
+    // 改一面忘另一面即「本地全绿、推到某侧才发现少跑」（D157 同根，那时只一个面）。本面把命令核收编
+    // 为 hub 单源表 `ci_gate_cmds`，两面逐条必须各含一份；归一器（timeout 秒数/注释/空行）亦在 hub，
+    // 本处只读文、比对与报错。镜像面顺带过 `ci_tools_face` 三枚执行针（两面脚本调用亦须同源）。
+    const gh_ci_arg = if (args.len >= 26) args[25] else paths.github_ci_path;
+    const gh_ci_txt = std.Io.Dir.cwd().readFileAlloc(io, gh_ci_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ gh_ci_arg, @errorName(e) });
+    defer gpa.free(gh_ci_txt);
+    checkFace(build_path, &paths.github_ci_build_face, build); // 两枚步名限定针（matcher 步＋D73 版本步）
+    checkFace(gh_ci_arg, &paths.ci_tools_face, gh_ci_txt); // 三枚脚本执行针在镜像面亦须同源
+    // 发布面（第 335 轮 D194）：同一份 GitHub CI 文本里的发版 job——tag 触发、写权限、gh 出口、
+    // 打包器路径四针；四者缺一即「门禁绿但无人能产出发行件」，与 D193 同根（清单只活在 CI 里）。
+    checkFace(gh_ci_arg, &paths.github_release_face, gh_ci_txt);
+    const ci_faces = .{ .{ ci_arg, ci_txt }, .{ gh_ci_arg, gh_ci_txt } };
+    inline for (ci_faces) |face| {
+        var miss_buf: [paths.ci_gate_cmds.len][]const u8 = undefined;
+        const miss_n = paths.ciGateMiss(face[1], &miss_buf);
+        if (miss_n != 0) {
+            fail(
+                "FAIL: CI 面 {s} 缺 {d} 条门禁命令，首缺「{s}」——两面须对 hub 单源命令核（{d} 条）逐条等价：缺步即该侧静默少跑一道门禁，另一侧与本地皆无法察觉（第 334 轮 D193）。\n",
+                .{ face[0], miss_n, miss_buf[0], @as(usize, paths.ci_gate_cmds.len) },
+            );
+        }
+    }
+
     // —— 对面三十五：书稿图片引用 ↔ `docs/images` 盘上双向普查（第 299 轮 D158）。九枚插图被书稿以
     // `![题](images/名.svg)` 手抄引用而全仓门禁从不校双向存在——t2 探针双形（引用改漂名／新增孤立
     // svg）fmt/build/test/matcher 四道零信号实锤。判据全在 hub（抽取器＋声明判定纯函数），本步只做 I/O，
@@ -1143,6 +1173,14 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print(
         "、CI 调用面 {s} 三枚脚本执行针（sh／node／bash）与 hub 路径同源且其对 matcher 步 addFileArg 在位，README {s} 八枚命令词针与 cli.sub_* 真值同源",
         .{ ci_arg, readme_arg },
+    );
+    std.debug.print(
+        "、CI 镜像面 {s} 与 {s} 对 hub 单源命令核（{d} 条）逐条等价（timeout 秒数/注释/空行归一，缺步即点名）且镜像面对 matcher／版本两步入 addFileArg、三枚脚本执行针亦同源",
+        .{ ci_arg, gh_ci_arg, @as(usize, paths.ci_gate_cmds.len) },
+    );
+    std.debug.print(
+        "、GitHub 发布面 {s} 四针在位（tag 触发／contents: write／gh 出口／打包器路径由 vsix_py_path 派生、与 build 步同源）",
+        .{gh_ci_arg},
     );
     std.debug.print(
         "、书稿图片面 {s} 引用实计 {d} 枚与盘上 {s} svg {d} 枚双向零漂（hidden=ghost=0，独立手设下限 {d}，未逐枚 addFileArg 则盘上增量靠下次他变/CI 全新 cache 兼保）",

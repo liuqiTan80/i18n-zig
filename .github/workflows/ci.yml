@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# 本仓有两个 CI 面，命令清单必须逐条等价——由 `check-machine-matcher` 的「CI 镜像面」按
+# `zzc_paths.ci_gate_cmds`（单源九核）逐面抽取对拍，任何一面漏步/改名即**本地**转红，
+# 不必等推上去才发现（D157 的「改脚本不同步 ci.yml＝恒绿假守卫」同族）。
+#
+# 两面差异只在运行器语义：
+#   - `.gitcode/workflows/ci.yml`：Euler 运行器，各 step 独立 shell、PATH 不跨步、检出落在
+#     `repo_workspace`，故装工具链与跑门禁关在同一个 run 里；node 可能缺席需自行拉取。
+#   - 本文件：GitHub Actions，分步执行 + `$GITHUB_PATH` 持久化，`ubuntu-latest` 自带 node，
+#     故只需装 Zig，其余逐步对应。
+#
+# Zig 无官方 setup 插件，两面都从 ziglang.org 官方发行位手拉钉死的 0.17.0。版本号以字面量
+# 出现在 `download/0.17.0/`——与 `check-toolchain-baseline` 守卫跨侧对账同源（D73 工具链版本族），
+# 切勿改成变量插值，守卫按字面匹配。
+jobs:
+  gate:
+    name: 构建 / 测试 / 守卫（ubuntu）
+    runs-on: ubuntu-latest
+    # 打 tag 时只跑 release job（它在打包前会把同一套门禁再跑一遍，保证发行件出自已验证的树）。
+    if: github.ref_type != 'tag'
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 装 Zig 0.17.0
+        run: |
+          set -e
+          curl -sLO "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+          tar -xf "zig-x86_64-linux-0.17.0.tar.xz"
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+
+      - name: 工具链自证
+        run: zig version
+
+      # 1) 格式门禁（工作区须 LF：Linux runner 不触发 autocrlf 污染）
+      - name: 格式门禁
+        run: zig fmt --check src/ build.zig
+
+      # 2) 构建
+      - name: 构建
+        run: zig build
+
+      # 3) 单元与快照测试（双测试图；守卫步挂在 test_step 上，随本步一并跑）
+      - name: 单元与快照测试
+        run: timeout 900 zig build test --summary all
+
+      # 3.5) demo 示例编译/运行冒烟（D156/第 297 轮）：六枚 demo 是用户照抄面
+      - name: demo 冒烟
+        run: timeout 120 bash tools/demos-smoke.sh
+
+      # 4) LSP 长连接 e2e（保持 stdin 打开，覆盖真实客户端路径）
+      - name: LSP 长连接 e2e
+        run: timeout 30 sh tools/lsp-live-smoke.sh
+
+      # 5) 客户端 e2e（node 桩注入 vscode API，真起 zzc lsp 子进程逐 provider 断言）
+      - name: 客户端 e2e
+        run: timeout 300 node tools/extension-smoke.js
+
+      # 6) 优化档与跨目标构建（只验编译，不跑测试；产物落 /tmp，避免污染工作树）
+      - name: 优化档构建
+        run: zig build -Doptimize=ReleaseSafe --prefix /tmp/zzc-ci-rel
+
+      - name: 跨目标构建（x86_64-windows）
+        run: zig build -Dtarget=x86_64-windows --prefix /tmp/zzc-ci-win
+
+      - name: 跨目标构建（aarch64-macos）
+        run: zig build -Dtarget=aarch64-macos --prefix /tmp/zzc-ci-mac
+
+  # —— 发布 job（第 335 轮 D194）——
+  # 门禁盖好了还得有「成品出口」：三平台产物 + 可安装的 VSIX，挂到 tag 对应的 Release 上。
+  # 刻意不用第三方 release action——`gh` 是 ubuntu 运行器自带件，少一枚供应链就少一处
+  # 「上游改接口 → 发版静默失败」的通道。四件事由 `paths.github_release_face` 本地钉住：
+  # tag 触发、写权限、gh 出口、打包器路径（与 build 步同源）。
+  release:
+    name: 发布（tag → 三平台产物 + VSIX）
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 装 Zig 0.17.0
+        run: |
+          set -e
+          curl -sLO "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz"
+          tar -xf "zig-x86_64-linux-0.17.0.tar.xz"
+          echo "$PWD/zig-x86_64-linux-0.17.0" >> "$GITHUB_PATH"
+
+      # 发行件必须出自已验证的树：tag 触发的 run 不走 gate job（它按 ref_type 让位），
+      # 故这里把三道门禁再跑一遍——宁慢几分钟，也不把未过测的二进制打上 v 号。
+      - name: 发版前全量门禁
+        run: |
+          set -e
+          zig fmt --check src/ build.zig
+          zig build
+          timeout 900 zig build test --summary all
+
+      - name: 版本对账（tag ↔ 产品版本）
+        run: |
+          set -e
+          got="$(./zig-out/bin/zzc version | head -1 | awk '{print $2}')"
+          want="${GITHUB_REF_NAME#v}"
+          echo "tag=$GITHUB_REF_NAME  产品版本=$got"
+          test "$got" = "$want" || {
+            echo "FAIL: tag $GITHUB_REF_NAME 与产品版本 $got 不同代——先改版本常量再打 tag"
+            exit 1
+          }
+
+      - name: 构建三平台产物
+        run: |
+          set -e
+          mkdir -p dist
+          zig build -Doptimize=ReleaseSafe --prefix "dist/zzc-${GITHUB_REF_NAME}-linux-x86_64"
+          zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-windows --prefix "dist/zzc-${GITHUB_REF_NAME}-windows-x86_64"
+          zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos --prefix "dist/zzc-${GITHUB_REF_NAME}-macos-aarch64"
+          cd dist
+          for d in zzc-*; do tar -czf "$d.tar.gz" "$d"; done
+          ls -l
+
+      - name: 打扩展包（VSIX）
+        run: python3 tools/build-vsix.py --out dist
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.vsix --title "$GITHUB_REF_NAME" --generate-notes
