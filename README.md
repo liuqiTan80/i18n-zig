@@ -188,7 +188,7 @@ zzc relocalize --to ja   # 把本工程重生为 ja 方言词形的孪生工程�
 | 命令 | 说明 |
 | --- | --- |
 | `zzc init <项目名>` | 创建母语工程（`src/main.zz` 模板） |
-| `zzc check [文件.zz]` | 翻译 + 词法/编译检查（母语报错） |
+| `zzc check [文件.zz \| 目录]` | 翻译 + 词法/编译检查（母语报错；给目录则按工程根／源目录定位入口） |
 | `zzc build [文件.zz]` | 翻译 → `zig build-exe`（其余参数透传 zig） |
 | `zzc run [文件.zz]` | 编译并运行；`--` 之后传给程序 |
 | `zzc test [文件.zz]` | 翻译 → `zig test` |
@@ -315,3 +315,9 @@ build.zig           构建脚本（编译 + 测试 + 守卫 + 资产生成步）
 - 语言包写法与扩展：[`docs/contributing-lang-pack.md`](docs/contributing-lang-pack.md)
 - 关键字对照表：[`docs/关键字对照表.md`](docs/关键字对照表.md)
 - 变更历史：[`CHANGELOG.md`](CHANGELOG.md)　·　消缺治理记账：[`docs/消缺台账.md`](docs/消缺台账.md)
+
+---
+
+## 许可
+
+本项目以 [MIT](LICENSE) 许可证发布——可自由使用、复制、修改、合并、出版、分发、再许可及/或销售副本，须保留上述版权声明与本许可声明；软件按「现状」提供，不含任何担保。正文见 [`LICENSE`](LICENSE)。

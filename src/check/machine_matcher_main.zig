@@ -171,6 +171,24 @@ fn auditAllFaces() void {
     seen_paths += 1;
     auditTable("paths.diag_corpus_build_face", paths.diag_corpus_build_face, &a); // 第 336 轮 D195：回放器 build 侧依赖针
     seen_paths += 1;
+    auditTable("paths.entry_root_face", paths.entry_root_face, &a); // 第 337 轮 D196：工程根解析委派四针
+    seen_paths += 1;
+    auditTable("paths.license_face", paths.license_face, &a); // 第 338 轮 D197：许可证正文四针（署名派生 + MIT 三句）
+    seen_paths += 1;
+    auditTable("paths.license_readme_face", paths.license_readme_face, &a); // 第 338 轮 D197：README 链接形一针
+    seen_paths += 1;
+    auditTable("paths.license_pkg_face", paths.license_pkg_face, &a); // 第 338 轮 D197：扩展清单 license 字段一针
+    seen_paths += 1;
+    auditTable("paths.license_zon_face", paths.license_zon_face, &a); // 第 338 轮 D197：包清单收录一针
+    seen_paths += 1;
+    auditTable("paths.upstream_watch_face", paths.upstream_watch_face, &a); // 第 339 轮 D198：周检脚本四针（版本源/标记/回放器/钉版来源）
+    seen_paths += 1;
+    auditTable("paths.upstream_watch_yml_face", paths.upstream_watch_yml_face, &a); // 第 339 轮 D198：workflow 三针（周频/取版/本体）
+    seen_paths += 1;
+    auditTable("paths.upstream_watch_build_face", paths.upstream_watch_build_face, &a); // 第 339 轮 D198：两面 build 侧依赖针
+    seen_paths += 1;
+    auditTable("paths.metric_build_face", paths.metric_build_face, &a); // 第 340 轮 D199：测映闸／基准两步步名钩子针
+    seen_paths += 1;
     auditTable("paths.book_demo_face", paths.book_demo_face, &a);
     seen_paths += 1;
     auditTable("paths.bookdemo_build_face", paths.bookdemo_build_face, &a);
@@ -237,7 +255,7 @@ fn auditAllFaces() void {
     // 豁免登记撤销、全 20 表一律入闸——此前 matcher 侧 `checkFace` 只读 `occ` 并回落 1，声明「九处/两处」
     // 的针在真跑对账里只被要求 1 枚（测试图按 count 精确、守卫步却宽松，两套语义）。
     expectTableCount("src/cli/args.zig", 25, seen_cli);
-    expectTableCount("src/zzc_paths.zig", 19, seen_paths); // 第 336 轮 D195：17→19（diag_corpus_face＋diag_corpus_build_face）
+    expectTableCount("src/zzc_paths.zig", 28, seen_paths); // 第 340 轮 D199：27→28（量化收益两步步名钩子面）
     expectTableCount("src/lsp/server.zig", 12, seen_lsp_srv);
     expectTableCount("src/editor/lsp_config.zig", 5, seen_lcfg);
     expectTableCount("src/editor/lang_identity.zig", 5, seen_lid);
@@ -566,6 +584,11 @@ pub fn main(init: std.process.Init) !void {
     //   门内不可观测，t2 探针漂 bail/裸 exit 皆 fresh 609/609 全绿静默。本步读同一 main_txt
     //   （零新增 I/O）验委派形在位（消费侧改回手抄字面量即红）；频次全等钉另由 236 T0 反锚守。
     checkFace(main_path, &cli_hub.exit_code_face, main_txt);
+
+    // —— 对面十六第三清单：`src/main.zig` 的工程根解析委派形（第 337 轮 D196）。
+    //   `pickEntry` 只认 `.zz`，其余实参被静默无视并回落缺省入口：`zzc check demo/hello` 报的是
+    //   「目录 `src` 下未找到」——报错路径与用户给的路径毫不相干（复用本面已读的 main_txt，零新增 I/O）。
+    checkFace(main_path, &paths.entry_root_face, main_txt);
 
     // —— 对面十七：`package.json` 的 problemMatcher pattern 字段映射五枚（第 225 轮 D93）。
     //   「file/location/column/code/message 各取第几捕获组」与机读行段序（line_fmt 占位符序）同骨，
@@ -960,6 +983,45 @@ pub fn main(init: std.process.Init) !void {
     defer gpa.free(corpus_sh_txt);
     checkFace(corpus_sh_arg, &paths.diag_corpus_face, corpus_sh_txt);
     checkFace(build_path, &paths.diag_corpus_build_face, build);
+
+    // —— 对面四十九：许可证面（第 338 轮 D197）。全仓此前零 LICENSE，而发布链（D194）与 VSIX 清单
+    // 都在对外分发产物：产物无许可声明即「默认保留所有权利」。本面把「一份正文 + 三处声明」胶合到
+    // hub 五枚真值（路径/SPDX/署名/年份/署名行）——README 与扩展清单两处复用本函数已读的文本，
+    // 只新增两读（LICENSE 第 27 片、build.zig.zon 第 28 片）。
+    const lic_arg = if (args.len >= 28) args[27] else paths.license_path;
+    const lic_txt = std.Io.Dir.cwd().readFileAlloc(io, lic_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ lic_arg, @errorName(e) });
+    defer gpa.free(lic_txt);
+    const zon_arg = if (args.len >= 29) args[28] else paths.root_zon_path;
+    const zon_txt = std.Io.Dir.cwd().readFileAlloc(io, zon_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ zon_arg, @errorName(e) });
+    defer gpa.free(zon_txt);
+    checkFace(lic_arg, &paths.license_face, lic_txt);
+    checkFace(readme_arg, &paths.license_readme_face, readme);
+    checkFace(pkg_path, &paths.license_pkg_face, pkg);
+    checkFace(zon_arg, &paths.license_zon_face, zon_txt);
+
+    // —— 对面五十：上游漂移周检面（第 339 轮 D198）。「下一版上游会不会把回译打回裸英文」此前零
+    // 通道：两面 CI 都装钉死的 Zig，永远只测已知会绿的那侧。周检脚本＋独立 workflow 把这件事变成
+    // 每周一次的有信号通道，但它在本地既不会被执行也无法触网——能落地的只有「三面声明不许静默漂」：
+    // 脚本判据四枚（版本源/漂移标记/回放器/钉版来源，皆钉**赋值行**——D195 的 M2 判例沿用）、workflow
+    // 三枚（周频/取版单源/本体执行）、build 依赖两枚（不声明即改面不重跑，D157 同族）。
+    const watch_sh_arg = if (args.len >= 30) args[29] else paths.upstream_watch_sh;
+    const watch_sh_txt = std.Io.Dir.cwd().readFileAlloc(io, watch_sh_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ watch_sh_arg, @errorName(e) });
+    defer gpa.free(watch_sh_txt);
+    const watch_yml_arg = if (args.len >= 31) args[30] else paths.upstream_watch_yml;
+    const watch_yml_txt = std.Io.Dir.cwd().readFileAlloc(io, watch_yml_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ watch_yml_arg, @errorName(e) });
+    defer gpa.free(watch_yml_txt);
+    checkFace(watch_sh_arg, &paths.upstream_watch_face, watch_sh_txt);
+    checkFace(watch_yml_arg, &paths.upstream_watch_yml_face, watch_yml_txt);
+    checkFace(build_path, &paths.upstream_watch_build_face, build);
+
+    // —— 对面五十一：量化收益两步步名钩子（第 340 轮 D199）。测映闸与吞吐基准都是「挂在 test 上」
+    // 的量化防线：一旦有人把依赖摘掉，两面 CI 永不跑它们而本地全绿——本面三枚针只钉住「步存在且入 test」，
+    // 读数本身（测块数/占比/每千行毫秒）由两步自校，上限与下限住 hub。
+    checkFace(build_path, &paths.metric_build_face, build);
     const ci_faces = .{ .{ ci_arg, ci_txt }, .{ gh_ci_arg, gh_ci_txt } };
     inline for (ci_faces) |face| {
         var miss_buf: [paths.ci_gate_cmds.len][]const u8 = undefined;
@@ -1200,6 +1262,22 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print(
         "、诊断语料回放器 {s} 的条数锚（{d} 条）与语料根 {s} 与 hub 同源、且对 matcher 步声明文件依赖",
         .{ corpus_sh_arg, paths.diag_corpus_floor, paths.diag_corpus_dir },
+    );
+    std.debug.print(
+        "、工程根解析面 {s} 四针在位（cmdCheck／cmdBuild 皆委派 pickEntryOrRoot、工程根形与源目录形各一枚判盘针）",
+        .{main_path},
+    );
+    std.debug.print(
+        "、许可证面 {s} 四针（署名行由 hub 派生 + MIT 三句）与三处声明面（README／扩展清单／包清单）同吃 hub 五枚真值",
+        .{lic_arg},
+    );
+    std.debug.print(
+        "、上游漂移周检三面同源：脚本 {s} 四枚赋值行针（版本源 {s}／漂移标记／语料回放器／钉版取自 {s}）＋ workflow {s} 三枚（周频 {s}／向脚本取版而不在此抄字面量／本体执行）＋两枚 addFileArg 依赖针在位",
+        .{ watch_sh_arg, paths.zig_index_url, paths.github_ci_path, watch_yml_arg, paths.upstream_watch_cron },
+    );
+    std.debug.print(
+        "、量化收益两面步名钩子在位 {s}：测映闸的 src/ 输入依赖与两步均挂 test——摘依赖即量化防线退化成手动跑的附件",
+        .{build_path},
     );
     std.debug.print(
         "、书稿图片面 {s} 引用实计 {d} 枚与盘上 {s} svg {d} 枚双向零漂（hidden=ghost=0，独立手设下限 {d}，未逐枚 addFileArg 则盘上增量靠下次他变/CI 全新 cache 兼保）",

@@ -12,11 +12,13 @@ pub const fullwidth = @import("diag/fullwidth.zig");
 pub const diag = @import("diag/translate.zig");
 pub const kind = @import("diag/kind.zig"); // 第 208 轮 D76：机读 kind 词汇单一真值 hub
 pub const cli = @import("cli/args.zig");
+pub const cli_embed_scan = @import("cli/embed_scan.zig"); // 第 341 轮 D200：@embedFile 静态扫描族自 args.zig 下沉（`cli.*` 表面逐名转出不变）
 pub const file_io = @import("file_io.zig");
 pub const tmlang = @import("editor/tmlang.zig");
 pub const snippets = @import("editor/snippets.zig");
 pub const lsp_jsonrpc = @import("lsp/jsonrpc.zig");
 pub const lsp_server = @import("lsp/server.zig");
+pub const lsp_server_query = @import("lsp/server_query.zig"); // 第 341 轮 D200：文本坐标／词与声明查询族自 server.zig 下沉（面表留 hub）
 pub const paths = @import("zzc_paths.zig");
 pub const machine = @import("machine_contract.zig");
 pub const vsix = @import("vsix.zig"); // 第 292 轮 D151：VSIX 包内元数据读侧与产物对账判据单一真值（守卫步据此核本机包是否与源树同源）
@@ -50,11 +52,13 @@ test {
     _ = diag;
     _ = kind;
     _ = cli;
+    _ = cli_embed_scan; // 第 341 轮 D200：下沉模块亦须入聚合器——其 14 枚测不得只靠「被 `cli` 引到」蹭图
     _ = file_io;
     _ = tmlang;
     _ = snippets;
     _ = lsp_jsonrpc;
     _ = lsp_server;
+    _ = lsp_server_query; // 第 341 轮 D200：同上，下沉的查询判据模块自有测须入图
     _ = lsp_legend; // 第 293 轮 D152：与 `lsp_server` 同指 `lsp/server.zig`，本行不增测数，只为门面名↔聚合器名集一一对齐
     _ = paths;
     _ = machine;
@@ -74,7 +78,7 @@ const self_src: []const u8 = @embedFile("root.zig");
 /// 门面 `pub const X = @import(…)` 的枚数**基线**——独立手设：不可从 `self_src` 反抽后回填，
 /// 否则抽取器漂成 0 枚时锚随其同漂，成空转伪钉（同 240 轮 pack 下限／292 轮 `member_floor` 判例）。
 /// 新增模块须同时抬本数，否则 293 T0 的等值钉当场红。
-pub const facade_floor: usize = 24;
+pub const facade_floor: usize = 26; // 第 341 轮 D200：24→26（巨型 hub 拆出的两枚下沉模块入门面）
 
 /// 取 `src` 中第 `nth`（0 起）枚**门面名**：行首 `pub const <名> = @import`。
 /// 只认 `@import`，故 `pub const zh_pack_bytes = @embedFile(…)` 那类数据门面不入本面（它无测可拉）。
@@ -175,7 +179,7 @@ test "293 T0 门面↔聚合器名集判据：抽取器正反漂形、下限值�
     try std.testing.expect(!hasAggRef("test {\n    _ = aab;\n}\n", "aa"));
 
     // A4：下限值钉 + 实文恰等基线（新增模块须同步抬 `facade_floor`，否则等值钉红）。
-    try std.testing.expectEqual(@as(usize, 24), facade_floor);
+    try std.testing.expectEqual(@as(usize, 26), facade_floor);
     try std.testing.expectEqual(facade_floor, countFacades(self_src));
     try std.testing.expectEqual(@as(usize, 0), missingAggRefs(self_src));
 }

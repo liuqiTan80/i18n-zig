@@ -2,7 +2,7 @@
 //!
 //! 子命令：
 //!   zzc init <项目名>       生成母语工程骨架
-//!   zzc check [文件.zz]     翻译 + 词法/编译检查（母语报错）
+//!   zzc check [文件.zz|目录]  翻译 + 词法/编译检查（母语报错；目录=工程根／源目录）
 //!   zzc build [文件.zz]     翻译 -> zig build-exe（其余参数透传 zig）
 //!   zzc run   [文件.zz]     编译并运行，`--` 之后为程序参数
 //!   zzc test  [文件.zz]     翻译 -> zig test
@@ -684,8 +684,29 @@ fn cmdLangRemove(args: []const []const u8) void {
     printOut(cli.msg_lang_remove_ok, .{ key, userpack.default_dir, key });
 }
 
+/// 实参解析（第 337 轮 D196）：先认 `.zz` 文件（`cli.pickEntry`），再认「工程根目录」形。
+///
+/// 旧形制：`zzc check demo/hello` 的实参被 `pickEntry` 静默无视 → 回落 `src/main.zz`（相对**当前
+/// 目录**）→ 报「目录 `src` 下未找到任何方言源文件」。用户给的路径与报错里的路径毫不相干，是本仓
+/// 在册边界里被真跑撞到两次的那条。现按工程根解析：拼 `<根>/src/main.zz`（入口全串取
+/// `zzc.default_entry` 单源），在则用之；不在则母语点名「既不是 .zz 也不是工程根」，不再假装成功。
+fn pickEntryOrRoot(args: []const []const u8) !cli.EntryPick {
+    const pick = cli.pickEntry(args);
+    if (pick.idx != null) return pick;
+    const pos = cli.firstPositional(args) orelse return pick;
+    // 候选序：① 工程根形 `<实参>/src/main.zz`（族布局真值）②「实参即源目录」形 `<实参>/main.zz`
+    // （e2e 冒烟两例与人工习惯皆用此形）。序不可颠倒——工程根优先，否则 `zzc check .` 在有平铺
+    // `main.zz` 的工程里会走偏。
+    const as_root = try cli.entryForRoot(gpa_, pos.arg);
+    if (file_io.pathExists(io_, as_root)) return .{ .entry = as_root, .idx = pos.idx };
+    const as_src = try cli.entryForSourceDir(gpa_, pos.arg);
+    if (file_io.pathExists(io_, as_src)) return .{ .entry = as_src, .idx = pos.idx };
+    printErr(zzc.prog_prefix ++ "`{s}` 既不是方言源文件（须以 " ++ zzc.dialect_ext ++ " 结尾），也不是工程目录（其下没有 `{s}` 或 `{s}`）；请传源文件，或传工程根／源目录。", .{ pos.arg, zzc.default_entry, std.fs.path.basename(zzc.default_entry) });
+    return error.Failed;
+}
+
 fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
-    const entry = cli.pickEntry(args).entry;
+    const entry = (try pickEntryOrRoot(args)).entry;
     const proj = try collectAndTranslate(entry, lang, table);
     // 目标须确属工程（据此定位采集目录并给出母语提示）；但语义编译根取自“含 main 的文件”、
     // 不一定等于用户点名的文件——若点名的是库模块（无 main），直接 `build-exe` 会被 zig 误报
@@ -750,7 +771,7 @@ fn cmdBuild(lang: Pack, table: *Mangle, mode: BuildMode, args: []const []const u
         }
     }
 
-    const pick = cli.pickEntry(zig_args);
+    const pick = try pickEntryOrRoot(zig_args);
     const entry = pick.entry;
     const proj = try collectAndTranslate(entry, lang, table);
     const unit = findUnit(proj, entry) orelse {

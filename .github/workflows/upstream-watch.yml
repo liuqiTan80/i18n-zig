@@ -1,0 +1,49 @@
+name: 上游漂移周检
+
+# 为何要有第二个 workflow（第 339 轮 D198）：两面 CI 装的都是**钉死的** Zig 0.17.0，于是
+# 永远只测「已知会绿」的那一侧；而母语回译是按上游报文**逐条对齐**的——上游一改文案，译文
+# 命中不了，用户看到的是裸英文，这种退化在钉死版上零信号。本 workflow 每周把「上游最新稳定版」
+# 与钉死版对拍一次：有漂移就现装新版、重编本仓、用同一批触发源码做**逐字同构**对比，分道即红。
+#
+# 版本不在此处手抄第三份：装工具链那步向 `tools/upstream-watch.sh --print-pinned` 取版，
+# 而脚本的钉死版本是从 `.github/workflows/ci.yml` 的 `download/<ver>/` 字面抽出来的——那枚字面
+# 本就与 `check-toolchain-baseline` 守卫跨面对账（D73 版本族）。故升钉只动 ci.yml 一处。
+#
+# 权限只给 contents: read：本 job 不写回仓库、不发产物，红了三件事——运行者日志、
+# 默认分支的「最近一次定时任务失败」邮件、以及Issues（若接了告警）。
+on:
+  schedule:
+    # 每周一 03:17 UTC——分钟取非零散点，避开整点上扎堆的定时任务。
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    name: 上游漂移周检（ubuntu）
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 装钉死版 Zig（版本取自 ci.yml 单源）
+        run: |
+          set -e
+          ver="$(bash tools/upstream-watch.sh --print-pinned)"
+          echo "钉死版本：$ver"
+          curl -sLO "https://ziglang.org/download/$ver/zig-x86_64-linux-$ver.tar.xz"
+          tar -xf "zig-x86_64-linux-$ver.tar.xz"
+          echo "$PWD/zig-x86_64-linux-$ver" >> "$GITHUB_PATH"
+
+      - name: 工具链自证
+        run: zig version
+
+      # 周检的对照侧是「钉死版构建出来的 zzc」，故必须先 `zig build` 出 zig-out/bin/zzc；
+      # 只跑门禁不装产物，脚本会以前置错退 2（宁红不空转）。
+      - name: 构建基线产物
+        run: zig build
+
+      - name: 上游漂移周检
+        run: bash tools/upstream-watch.sh

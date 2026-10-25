@@ -604,6 +604,190 @@ pub const diag_corpus_build_face = [_]BuildFace{
     .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ diag_corpus_sh ++ "\"))", .why = "语料回放器须对 matcher 步声明文件依赖——不声明即改脚本不重跑，两条面针吃陈旧文本（第 336 轮 D195）" },
 };
 
+/// 第 337 轮 D196：`zzc check|build <工程根>` 的解析链面（对 `src/main.zig` 消费面）。
+/// 存在动因（落码前真值）：`cli.pickEntry` 只认 `.zz` 结尾实参，其余实参被**静默无视**并回落
+/// 相对当前目录的缺省入口——`zzc check demo/hello` 于是报「目录 `src` 下未找到任何方言源文件」，
+/// 报错里的路径与用户给的路径毫不相干（本仓在册边界，被真跑撞过两次：语料回放与 demo 校验各一次）。
+/// 修后 main 侧两入口都须委派 `pickEntryOrRoot`（漂回手抄 `cli.pickEntry(args).entry` 即本面红），
+/// 且两支候选（工程根形→源目录形）各一枚判盘针——序颠倒或摘臂即 e2e 冒烟红。
+pub const entry_root_face = [_]BuildFace{
+    .{ .needle = "const entry = (try pickEntryOrRoot(args)).entry;", .why = "cmdCheck 的入口解析须走工程根形——漂回 pickEntry 即 `zzc check <目录>` 又静默无视实参（第 337 轮 D196）" },
+    .{ .needle = "const pick = try pickEntryOrRoot(zig_args);", .why = "cmdBuild/run/test 的入口解析同走一支——各走一套则目录形只修一半（第 337 轮 D196）" },
+    .{ .needle = "if (file_io.pathExists(io_, as_root)) return .{ .entry = as_root", .why = "工程根形候选的判盘留在 I/O 层、cli 侧只纯拼串——把存在性判断塞进 cli 即纯函数面失守（第 337 轮 D196）" },
+    .{ .needle = "if (file_io.pathExists(io_, as_src)) return .{ .entry = as_src", .why = "「实参即源目录」形候选须在工程根形之后判——e2e 冒烟两例用 `zzc check src`，判序颠倒或摘臂即该形转红（第 337 轮 D196）" },
+};
+
+// —— 第 338 轮 D197：许可证面（LICENSE 正文 + 三处声明面）——
+//
+// 活体真值（补前）：全仓零 LICENSE——发布链（第 335 轮 D194 的 `gh release`）与 VSIX 清单都在
+// 对外分发产物，而产物无许可声明即「默认保留所有权利」，下游嵌入无从判断义务；`build.zig.zon`
+// 的 `.paths` 注释本身写着「should list files required for compilation plus any license(s)」，
+// 而清单里没有 license。本轮把「许可」从人脑里的一条常识变成四处可对账的声明面：正文一份
+// （`LICENSE`）、声明三份（README／`editors/vscode/package.json` 的 `license` 字段／
+// `build.zig.zon` 的 `.paths`），四者共吃下面五枚真值，任一处独漂即 matcher 红。
+
+/// 仓根许可证正文的路径（也是 `build.zig.zon` `.paths` 里应收录的名字）。
+pub const license_path: []const u8 = "LICENSE";
+/// SPDX 短名：README 与 `package.json` 的 `license` 字段皆据此声明。
+pub const license_spdx: []const u8 = "MIT";
+/// 版权署名（与 git 提交作者显示名一致；改署名只动本枚，正文与面针同随）。
+pub const license_holder: []const u8 = "tan80";
+/// 版权年份（首 commits 年份；独立手设，防「正文年份与 hub 年份各抄一份」）。
+pub const license_year: []const u8 = "2026";
+/// 署名行唯一构造：LICENSE 正文与 `license_face` 首针共用，形制不再两处手抄。
+pub const license_copyright: []const u8 = "Copyright (c) " ++ license_year ++ " " ++ license_holder;
+
+/// 仓根自身清单 `build.zig.zon`（对面四十九新读第 28 片；`out_build_zon` 系毕业工程用，二者不同义）。
+pub const root_zon_path: []const u8 = "build.zig.zon";
+
+/// `LICENSE` 正文面：署名行由 hub 派生，另三枚是 MIT 正文的三段义务句（授权／免责／责任上限）。
+pub const license_face = [_]BuildFace{
+    .{ .needle = license_copyright, .why = "署名行须由 hub `license_copyright` 派生——改署名只动 hub 一枚，正文与守卫同动；独改正文即声明面与义务面分道（第 338 轮 D197）" },
+    .{ .needle = "Permission is hereby granted, free of charge", .why = "MIT 授权句首段在场——缺则正文不是 MIT，而三处声明面仍写着 MIT（第 338 轮 D197）" },
+    .{ .needle = "THE SOFTWARE IS PROVIDED \"AS IS\"", .why = "大写免责句在场——许可义务的下界；漂字即声明与正文分道（第 338 轮 D197）" },
+    .{ .needle = "IN NO EVENT SHALL THE", .why = "责任上限句在场——MIT 三段结构（授权/免责/责任）缺任一即非标准许可文本（第 338 轮 D197）" },
+};
+
+/// README 的许可声明面：以 markdown 链接形把 SPDX 短名与正文路径胶合在同一串里。
+pub const license_readme_face = [_]BuildFace{
+    .{ .needle = "[" ++ license_spdx ++ "](" ++ license_path ++ ")", .why = "README 须以 `[SPDX](路径)` 形指向正文——短名或路径任一处改名而 README 不随动即对外指空（第 338 轮 D197）" },
+};
+
+/// `package.json` 的 license 字段面（VSIX/Marketplace 读这里，缺字段即产物无许可元数据）。
+pub const license_pkg_face = [_]BuildFace{
+    .{ .needle = "\"license\": \"" ++ license_spdx ++ "\"", .why = "扩展清单的 `license` 字段值须等于 hub `license_spdx`——打包器与商店据此对外声明，与正文分道即虚假广告（第 338 轮 D197）" },
+};
+
+/// `build.zig.zon` 的 `.paths` 收录面：包发布时 LICENSE 须随包走（zon 注释自陈「plus any license(s)」）。
+pub const license_zon_face = [_]BuildFace{
+    .{ .needle = "\"" ++ license_path ++ "\",", .why = "许可证正文须被 `.paths` 收录——不收录则 `zig build` 之外的包消费者拿到的树里没有许可文本（第 338 轮 D197）" },
+};
+
+// —— 第 339 轮 D198：上游漂移周检面（回放脚本 + 独立 workflow + build 侧依赖声明）——
+//
+// 活体真值（建前）：两面 CI 装的都是钉死的 Zig，于是「下一版上游会不会把回译打回裸英文」这件事
+// 没有任何通道——母语回译按上游报文逐条对齐，上游改文案则译文命中不了，而这种退化在钉死版上
+// 零信号（`zig build test` 永远只测已知会绿的那侧）。本轮把它变成每周一次的有信号通道：脚本
+// 对拍「钉死版 ↔ 上游最新稳定版」，有漂移就现装新版、重编本仓、用 D195 那批触发源码做逐字同构
+// 对比。守卫面只管三件会静默的事：版本源漂了（周检永远免跑）、workflow 不再调用脚本（周检无人跑）、
+// 脚本没被声明为文件依赖（改了不重跑）。
+
+/// 周检脚本路径（workflow 与守卫共用同一枚，改脚本名即两侧同动）。
+pub const upstream_watch_sh: []const u8 = "tools/upstream-watch.sh";
+/// 周检 workflow 路径（不进 CI 镜像面的门禁命令单源——它按周触发、与推送门禁是两件事）。
+pub const upstream_watch_yml: []const u8 = ".github/workflows/upstream-watch.yml";
+/// 周检频率（每周一 03:17 UTC；分钟取非零散点，避开整点扎堆的定时任务）。
+pub const upstream_watch_cron: []const u8 = "17 3 * * 1";
+/// 上游版本真值通道——脚本据此判「最新稳定版」；曾用 GitHub `releases/latest`，实测它返 0.15.1
+/// （落后于 index.json 的 0.17.0），据此判漂移会天天假红，故弃用。
+pub const zig_index_url: []const u8 = "https://ziglang.org/download/index.json";
+/// 漂移报告的行首标记——报告文案与「判定是否漂移」共用同一枚，改标记即两侧同动。
+pub const drift_marker: []const u8 = "DRIFT(上游漂移)";
+
+/// 周检脚本面：四枚皆钉**赋值行**（裸字面会被脚本顶注里的同名字面垫住——D195 的 M2 判例沿用）。
+pub const upstream_watch_face = [_]BuildFace{
+    .{ .needle = "index_url=\"" ++ zig_index_url ++ "\"", .why = "版本源须是 hub 声明的那枚 index.json——漂向别处（如 releases/latest 实测落后两版）即周检天天假红或恒免跑（第 339 轮 D198）" },
+    .{ .needle = "drift_marker=\"" ++ drift_marker ++ "\"", .why = "漂移标记由 hub 单源——报告与判定共用一枚，独改其一即红了却读不出是哪类红（第 339 轮 D198）" },
+    .{ .needle = "corpus_sh=\"$root/" ++ diag_corpus_sh ++ "\"", .why = "周检复跑的须是 hub 那枚语料回放器——换回放器即比的是别的东西，上游文案漂移照样绿（第 339 轮 D198）" },
+    .{ .needle = "gh_ci=\"$root/" ++ github_ci_path ++ "\"", .why = "钉死版本取自 GitHub CI 面的 `download/<ver>/` 字面（与 D73 版本守卫同面）——脚本另存一份版本即第三处手抄，升钉必漏改（第 339 轮 D198）" },
+};
+
+/// 周检 workflow 面：周频、版本单源取版、周检本体执行三枚。
+pub const upstream_watch_yml_face = [_]BuildFace{
+    .{ .needle = "cron: \"" ++ upstream_watch_cron ++ "\"", .why = "触发频率须与 hub 同源——改 cron 而守卫不认，则「多久检一次」重新回到人脑台账（第 339 轮 D198）" },
+    .{ .needle = "bash " ++ upstream_watch_sh ++ " --print-pinned", .why = "装工具链那步须向脚本取钉死版本，而非在此再抄一枚字面量——此处抄第三份即升钉时三处不同步（第 339 轮 D198）" },
+    .{ .needle = "run: bash " ++ upstream_watch_sh, .why = "周检本体须真被执行（行首形针不被上一枚 --print-pinned 的插值行垫住）——只留取版步即每周空转一次工具链安装（第 339 轮 D198）" },
+};
+
+/// 周检两面在 build.zig 侧的依赖针：不声明 `addFileArg` 即改脚本/workflow 不触发 matcher 重跑，
+/// 面针吃陈旧文本（D157/D195 同族）。
+pub const upstream_watch_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ upstream_watch_sh ++ "\"))", .why = "周检脚本须对 matcher 步声明文件依赖——不声明即改判据不重跑，四枚面针吃陈旧文本（第 339 轮 D198）" },
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ upstream_watch_yml ++ "\"))", .why = "周检 workflow 须对 matcher 步声明文件依赖——不声明即摘掉周检步也本地全绿，防线只剩文档里的空话（第 339 轮 D198）" },
+};
+
+// —— 第 340 轮 D199：量化收益面（测试映射覆盖闸 + 翻译吞吐基准）——
+//
+// 活体真值（建前）：仓里测试占了一半体量，却没有任何可对账的量——既不知道「哪个文件有测、测了多少行」
+// （新文件零测入图只能靠人目测，292/293 轮反复吃过这形亏），也不知道「翻译一次要多少钱」（回归到
+// 十倍慢也没人知道）。另：Zig 0.17 发行包既无 `zig build test --coverage` 亦无 `llvm-cov`，行覆盖率
+// 这台机器根本不存在，故取**可实装口径**：文件级测块/测行账（非行覆盖率）+ 固定语料的墙钟基准。
+// 判据全在本 hub（`measureTestMap` 纯函数零 I/O），读盘与扫目录在 `src/check/test_map_main.zig`。
+
+/// 测映闸扫描的源码根（相对仓根；与 build 步 `addDirectoryArg` 那片同一枚真值）。
+pub const test_map_dir: []const u8 = "src";
+/// 命名 test 块总数下限（独立手设：不可从盘上反抽后回填，否则抽取器漂成 0 枚时锚同漂成空转伪钉）。
+pub const test_block_floor: usize = 480;
+/// test 行占比下限（千分比）——「测试占比」从人眼估算变成周周可对账的数字，退化即红。
+pub const test_share_floor_permille: usize = 460;
+/// 允许零命名 test 块的文件（守卫/生成器的一次性程序：判据在 hub、本件只做 I/O，故本身无测）。
+/// 盘上新增零测文件而不在此登记即红——「新文件静默零测入图」就是本闸要堵的那形。
+pub const test_zero_exempt = [_][]const u8{
+    "src/check/bench_main.zig",
+    "src/check/ignore_coverage_main.zig",
+    "src/check/machine_matcher_main.zig",
+    "src/check/test_map_main.zig",
+    "src/check/zon_baseline_main.zig",
+    "src/editor/gen_snippets_main.zig",
+    "src/editor/gen_tmlang_main.zig",
+    "src/gen/pack_registry_main.zig",
+};
+
+/// 吞吐基准的单位模板（`{d}` 取单位序号，保证行间不同形——防同形重复被任何跳同优化拉低读数）。
+/// 模板本体是方言合法形（导入/函数/循环/返回均走词法改写主路），行首尾由模板自带。
+pub const bench_unit_fmt: []const u8 = "公开 函数 处理{d}(值: 整数) 整数 {{\n    变量 计: 整数 = 0;\n    当 (计 < 值) {{\n        计 = 计 + 1;\n    }}\n    返回 计;\n}}\n";
+/// 模板单位行数（与 `bench_unit_fmt` 同行数——语料总行 = `bench_units` × 本数，手设而不运行时反抽）。
+pub const bench_unit_lines: usize = 7;
+/// 语料单位数（语料规模本身由 hub 定：改小即基准不再是同一件事，面针与基准步同吃本数）。
+/// 14 万行量级的计时区约耗百毫秒；再小的语料会被进程启动与时钟粒度吞掉，读数不可信。
+pub const bench_units: usize = 20_000;
+/// 每千行墙钟上限（毫秒）：这是**量级闸**而非微优化追踪——只拦「多打了个 O(n²)」这类十倍级退化；
+/// 读数本身逐轮记入台账成趋势（基准跑在 ReleaseSafe，档位与 `-Doptimize` 解耦，否则读数不可比）。
+/// 上限可为整数毫秒（展示口径），但比较必在纳秒位上做：实读数 0.9 ms／千行截断成整数即 0，
+/// 拿截断值比较则「上限调到 0」也咬不着（第 340 轮演漂 M5 实测教训，判据见 bench_main.zig）。
+pub const bench_ms_per_kilo_ceiling: usize = 20;
+
+/// 两面在 build.zig 侧的钩子针：摘掉任一「挂在 test 上」的依赖即量化防线静默退化成手动跑的附件。
+pub const metric_build_face = [_]BuildFace{
+    .{ .needle = "check_test_map_run.addDirectoryArg(b.path(\"src\"))", .why = "测映闸须把整面 src/ 声明为输入依赖——不声明即新增文件/改动测块不触发重跑，读数吃旧树（第 340 轮 D199）" },
+    .{ .needle = "test_step.dependOn(&check_test_map_run.step);", .why = "测映闸须挂在 test 上——不挂即两面 CI 永不跑它，上下限沦为本地可选项（第 340 轮 D199）" },
+    .{ .needle = "test_step.dependOn(&check_bench_run.step);", .why = "吞吐基准须挂在 test 上——不挂即没有逐轮同坐标的读数，趋势曲线无数据源（第 340 轮 D199）" },
+};
+
+/// 一行是否为「行首 `test "`」（命名 test 块的起行）。
+fn isTestBlockStart(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "test \"");
+}
+
+/// test 映射读数（单文件）：总行数、命名 test 块数、test 行数。
+/// 测行计法：从行首 `test "` 起，到其后首个**行首 `}`** 止（含首尾）——`zig fmt` 恒把顶层块收尾
+/// 花括号归零列，故本计法与仓内既有形制同骨；嵌套括号皆带缩进，不会提前终止计数。
+pub const TestMap = struct {
+    lines: usize = 0,
+    test_lines: usize = 0,
+    blocks: usize = 0,
+};
+
+/// 扫一文件源码得 `TestMap`（纯函数零 I/O，可被 T0 用小样直钉）。
+pub fn measureTestMap(src: []const u8) TestMap {
+    var m: TestMap = .{};
+    var in_block = false;
+    var pos: usize = 0;
+    while (pos < src.len) {
+        const end = std.mem.indexOfScalarPos(u8, src, pos, '\n') orelse src.len;
+        const line = src[pos..end];
+        m.lines += 1;
+        if (!in_block and isTestBlockStart(line)) {
+            in_block = true;
+            m.blocks += 1;
+        }
+        if (in_block) m.test_lines += 1;
+        if (in_block and std.mem.startsWith(u8, line, "}")) in_block = false;
+        pos = end + 1; // 末尾无换行时 end == src.len，下一轮自然退出（不将尾换行计成额外空行）
+    }
+    return m;
+}
+
 /// 两面共用的门禁命令核（单源）：**表序即最长匹配优先**，故裸 `zig build` 必须排在
 /// 三条带参数的 `zig build …` 之后，否则它会把它们全部截胡、使缺步不被发现。
 pub const ci_gate_cmds = [_][]const u8{
@@ -1428,7 +1612,7 @@ pub fn countFaceDecls(src: []const u8) usize {
 test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     const specs = [_]struct { path: []const u8, src: []const u8, n: usize }{
         .{ .path = "cli/args.zig", .src = @embedFile("cli/args.zig"), .n = 25 },
-        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 19 }, // 第 336 轮 D195：17→19（diag_corpus_face＋diag_corpus_build_face）
+        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 28 }, // 第 340 轮 D199：27→28（量化收益两步步名钩子面）
         .{ .path = "lsp/server.zig", .src = @embedFile("lsp/server.zig"), .n = 12 },
         .{ .path = "editor/lsp_config.zig", .src = @embedFile("editor/lsp_config.zig"), .n = 5 },
         .{ .path = "editor/lang_identity.zig", .src = @embedFile("editor/lang_identity.zig"), .n = 5 },
@@ -1444,8 +1628,185 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
         try std.testing.expectEqual(sp.n, got);
         total += got;
     }
+    // 第 341 轮 D200：自巨型 hub 下沉的**实现模块**不得持面表——面表须与其词汇同源，否则「谁持针」
+    // 失去单源（matcher 侧的 `checkFace` 只能按文件读文本）。下沉模块在此逐枚登记为零枚：长出第一张
+    // 未审面表即本测红，而不需同步改 matcher 的分项清单（两边仍共 9 hub／82 表）。
+    const split_impls = [_]struct { path: []const u8, src: []const u8 }{
+        .{ .path = "cli/embed_scan.zig", .src = @embedFile("cli/embed_scan.zig") },
+        .{ .path = "lsp/server_query.zig", .src = @embedFile("lsp/server_query.zig") },
+    };
+    for (split_impls) |im| {
+        const got = countFaceDecls(im.src);
+        if (got != 0) std.debug.print("面表漂位：下沉实现模块 {s} 持有 {d} 张——须迁回其词汇所属 hub\n", .{ im.path, got });
+        try std.testing.expectEqual(@as(usize, 0), got);
+    }
     // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+19+12+5+5+1+4+1+1）独立手抄对拍。
-    try std.testing.expectEqual(@as(usize, 73), total); // 第 336 轮 D195：71→73（zzc_paths 增两张语料面表）
+    try std.testing.expectEqual(@as(usize, 82), total); // 第 340 轮 D199：81→82（zzc_paths 增量化收益钩子面）
+}
+
+// 第 340 轮 T0（D199）：量化收益面。上下限与语料形制皆独立手抄值钉（改 hub 必同动本测，否则
+// 「闸值被人顺手改小」这类静默松闸无人看）；`measureTestMap` 是本闸的唯一判据，正反小样在此直钉
+// ——测映闸程序本身零测（它只做扫目录与读盘），判据漂形只能靠本测接住。
+test "第 340 轮 T0 量化收益面：测映判据小样与上下限值钉（D199）" {
+    // A1 上下限与扫描根独立手抄（盘上实计低于此即红；抬下限须同动本测）。第 340 轮实计：490 块 / 483‰。
+    try std.testing.expectEqualStrings("src", test_map_dir);
+    try std.testing.expectEqual(@as(usize, 480), test_block_floor);
+    try std.testing.expectEqual(@as(usize, 460), test_share_floor_permille);
+    try std.testing.expectEqual(@as(usize, 20_000), bench_units);
+    try std.testing.expectEqual(@as(usize, 7), bench_unit_lines);
+    try std.testing.expectEqual(@as(usize, 20), bench_ms_per_kilo_ceiling);
+    // A2 零测豁免清单：八枚、逐枚以 `src/` 开头且 `.zig` 收尾、彼此互不相同（查重即防同一文件登两行）。
+    try std.testing.expectEqual(@as(usize, 8), test_zero_exempt.len);
+    for (test_zero_exempt, 0..) |ex, i| {
+        try std.testing.expect(std.mem.startsWith(u8, ex, "src/"));
+        try std.testing.expect(std.mem.endsWith(u8, ex, ".zig"));
+        for (test_zero_exempt[0..i]) |prior| {
+            try std.testing.expect(!std.mem.eql(u8, prior, ex));
+        }
+    }
+    // A3 正样：命名 test 块计数与测行计数逐枚对拍（含嵌套缩进括号不提前终止计数）。
+    const ok_src = "const x = 1;\ntest \"甲\" {\n    if (a) {\n        try y;\n    }\n}\ntest \"乙\" {\n}\n";
+    const m = measureTestMap(ok_src);
+    try std.testing.expectEqual(@as(usize, 8), m.lines);
+    try std.testing.expectEqual(@as(usize, 2), m.blocks);
+    try std.testing.expectEqual(@as(usize, 7), m.test_lines); // 除首行 `const x = 1;` 外皆在测块内
+    // A4 反形：匿名聚合器 `test {` 不算命名测块；注释里的同名字串不算；空文零行；无尾换行不多计一行。
+    try std.testing.expectEqual(@as(usize, 0), measureTestMap("test {\n    _ = a;\n}\n").blocks);
+    try std.testing.expectEqual(@as(usize, 0), measureTestMap("// test \"x\" {\n// }\n").blocks);
+    try std.testing.expectEqual(@as(usize, 0), measureTestMap("").lines);
+    try std.testing.expectEqual(@as(usize, 2), measureTestMap("a\nb").lines);
+    try std.testing.expectEqual(@as(usize, 1), measureTestMap("a\n").lines);
+    // A5 语料形制：模板换行数必等于 `bench_unit_lines`（两者失配即行数计量与语料本体分道），
+    //     且模板零 ASCII 字母（纯母语形——基准里的极性闸靠的就是这一前提）。
+    try std.testing.expectEqual(bench_unit_lines, std.mem.count(u8, bench_unit_fmt, "\n"));
+    try std.testing.expect(std.mem.indexOf(u8, bench_unit_fmt, "{d}") != null); // 逐单位序号形（防同形重复）
+    var tpl_letters: usize = 0;
+    for (bench_unit_fmt) |c| {
+        if (std.ascii.isAlphabetic(c)) tpl_letters += 1;
+    }
+    // 模板零 ASCII 字母——唯一例外是占位符 `{d}` 里那枚 `d`（运行时被序号顶掉，故语料恒纯母语；
+    // 基准里的极性闸靠的正是这一前提，模板一旦长出 ASCII 关键字即语料不再纯母语）。
+    try std.testing.expectEqual(@as(usize, 1), tpl_letters);
+    // A6 步名钩子面：三枚、逐针 occ==1、why 非空；首针由 `test_map_dir` 派生，后两枚是挂 test 的步名形。
+    try std.testing.expectEqual(@as(usize, 3), metric_build_face.len);
+    for (metric_build_face) |f| {
+        try std.testing.expectEqual(@as(usize, 1), f.occ);
+        try std.testing.expect(f.why.len > 0);
+    }
+    try std.testing.expectEqualStrings(
+        "check_test_map_run.addDirectoryArg(b.path(\"" ++ test_map_dir ++ "\"))",
+        metric_build_face[0].needle,
+    );
+    try std.testing.expect(std.mem.startsWith(u8, metric_build_face[1].needle, "test_step.dependOn(&"));
+    try std.testing.expect(std.mem.startsWith(u8, metric_build_face[2].needle, "test_step.dependOn(&"));
+}
+
+// 第 339 轮 T0（D198）：上游漂移周检面。五枚真值（脚本路径／workflow 路径／cron／版本源 URL／
+// 漂移标记）+ 三张表基数 + 「针必须是赋值行形」的形制钉（D195 的 M2 判例：只钉裸字面会被脚本
+// 顶注里的同名字面垫住，matcher 假绿）+ 反形钉（workflow 不得再抄一份版本字面量——那正是本轮要
+// 消灭的第三处手抄）。真跑对账在 matcher 的对面五十；本测只钉「清单本身不漂」。
+test "第 339 轮 T0 上游漂移周检面：五枚真值与三面九针派生（D198）" {
+    // A1 真值独立手抄（改任一须连同脚本／workflow 同动，否则对面五十红）。
+    try std.testing.expectEqualStrings("tools/upstream-watch.sh", upstream_watch_sh);
+    try std.testing.expectEqualStrings(".github/workflows/upstream-watch.yml", upstream_watch_yml);
+    try std.testing.expectEqualStrings("17 3 * * 1", upstream_watch_cron);
+    try std.testing.expectEqualStrings("https://ziglang.org/download/index.json", zig_index_url);
+    try std.testing.expectEqualStrings("DRIFT(上游漂移)", drift_marker);
+    // A2 脚本面基数四针，且逐针是**赋值行**形：含 `=`、以引号收尾、首字符为字母（不允裸字面）。
+    try std.testing.expectEqual(@as(usize, 4), upstream_watch_face.len);
+    for (upstream_watch_face) |f| {
+        try std.testing.expectEqual(@as(usize, 1), f.occ);
+        try std.testing.expect(f.why.len > 0);
+        try std.testing.expect(std.mem.indexOfScalar(u8, f.needle, '=') != null);
+        try std.testing.expect(std.mem.endsWith(u8, f.needle, "\""));
+        try std.testing.expect(std.ascii.isAlphabetic(f.needle[0]));
+    }
+    // A3 四针逐枚由 hub 真值派生（换源／换回放器／换钉版面皆需同动 hub）。
+    try std.testing.expectEqualStrings("index_url=\"" ++ zig_index_url ++ "\"", upstream_watch_face[0].needle);
+    try std.testing.expectEqualStrings("drift_marker=\"" ++ drift_marker ++ "\"", upstream_watch_face[1].needle);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[2].needle, diag_corpus_sh) != null);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[3].needle, github_ci_path) != null);
+    // A4 workflow 面三针的分工：周频针含 cron，取版针含 `--print-pinned`，本体针以 `run: ` 开头。
+    try std.testing.expectEqual(@as(usize, 3), upstream_watch_yml_face.len);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_yml_face[0].needle, upstream_watch_cron) != null);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_yml_face[1].needle, "--print-pinned") != null);
+    try std.testing.expect(std.mem.startsWith(u8, upstream_watch_yml_face[2].needle, "run: "));
+    // 取版针与本体针皆须点名那枚脚本（周频针只钉 cron 形，不涉脚本名）。
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_yml_face[1].needle, upstream_watch_sh) != null);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_yml_face[2].needle, upstream_watch_sh) != null);
+    for (upstream_watch_yml_face) |f| {
+        try std.testing.expect(f.why.len > 0);
+    }
+    // A5 反形：workflow 面不得出现任何版本字面量/发行位 URL（此处自己拼一份，升钉时三处不同步）。
+    for (upstream_watch_yml_face) |f| {
+        try std.testing.expect(std.mem.indexOf(u8, f.needle, "0.17.") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.needle, "download/") == null);
+    }
+    // A6 build 依赖面两针皆为 matcher 步的 addFileArg 形，且逐枚对应一面。
+    try std.testing.expectEqual(@as(usize, 2), upstream_watch_build_face.len);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_build_face[0].needle, upstream_watch_sh) != null);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_build_face[1].needle, upstream_watch_yml) != null);
+    for (upstream_watch_build_face) |f| {
+        try std.testing.expect(std.mem.startsWith(u8, f.needle, "check_matcher_run.addFileArg(b.path(\""));
+        try std.testing.expect(f.why.len > 0);
+    }
+}
+
+// 第 338 轮 T0（D197）：许可证面。真值五枚（路径/SPDX/署名/年份/署名行）+ 四张表基数 +
+// 「声明面三针皆由真值派生」的关系钉——三张声明面各自把短名或路径写进了 markdown/JSON/ZON 三种
+// 不同形制，形制不可互代，但**值**必须同源，故本测既钉派生也钉独漂的反形（改 hub 值而不改声明面，
+// 派生式针与真跑 matcher 同红；改声明面而不改 hub，本测的独立手抄值钉先红）。
+test "第 338 轮 T0 许可证面：五枚真值与四张表派生（D197）" {
+    // A1 真值独立手抄（改任一须连同 `LICENSE` 正文同动）。
+    try std.testing.expectEqualStrings("LICENSE", license_path);
+    try std.testing.expectEqualStrings("MIT", license_spdx);
+    try std.testing.expectEqualStrings("tan80", license_holder);
+    try std.testing.expectEqualStrings("2026", license_year);
+    // A2 署名行派生：全等 + 首尾形制（不可写成 `Copyright 2026` 之类缺 `(c)` 的变体）。
+    try std.testing.expectEqualStrings("Copyright (c) 2026 tan80", license_copyright);
+    try std.testing.expect(std.mem.startsWith(u8, license_copyright, "Copyright (c) "));
+    try std.testing.expect(std.mem.endsWith(u8, license_copyright, license_holder));
+    // A3 正文面基数与针形：四针、逐针 occ==1、why 非空，且首针逐字节等于署名行。
+    try std.testing.expectEqual(@as(usize, 4), license_face.len);
+    try std.testing.expectEqualStrings(license_copyright, license_face[0].needle);
+    for (license_face) |f| {
+        try std.testing.expectEqual(@as(usize, 1), f.occ);
+        try std.testing.expect(f.why.len > 0);
+    }
+    // A4 三张声明面各一枚针，且针值皆由 hub 真值派生（含短名或路径子串）。
+    try std.testing.expectEqual(@as(usize, 1), license_readme_face.len);
+    try std.testing.expectEqual(@as(usize, 1), license_pkg_face.len);
+    try std.testing.expectEqual(@as(usize, 1), license_zon_face.len);
+    try std.testing.expect(std.mem.indexOf(u8, license_readme_face[0].needle, license_spdx) != null);
+    try std.testing.expect(std.mem.indexOf(u8, license_readme_face[0].needle, license_path) != null);
+    try std.testing.expect(std.mem.indexOf(u8, license_pkg_face[0].needle, license_spdx) != null);
+    try std.testing.expect(std.mem.indexOf(u8, license_zon_face[0].needle, license_path) != null);
+    // A5 反形：README 针是 markdown 链接形，不可与 JSON/ZON 形互代（三形制互不包含）。
+    try std.testing.expect(std.mem.indexOf(u8, license_pkg_face[0].needle, "](") == null);
+    try std.testing.expect(std.mem.indexOf(u8, license_zon_face[0].needle, "](") == null);
+    try std.testing.expect(std.mem.endsWith(u8, license_zon_face[0].needle, ","));
+    // A6 三张声明面的 why 非空（名实闸要求逐针有由）。
+    for (license_readme_face ++ license_pkg_face ++ license_zon_face) |f| {
+        try std.testing.expect(f.why.len > 0);
+    }
+}
+
+// 第 337 轮 T0（D196）：工程根解析面。判据侧（`cli.firstPositional`／`cli.entryForRoot`／
+// `cli.entryForSourceDir`）的跳过律与拼串律由 cli 内的 337 T0 直钉；本测补 hub 侧的**清单基数**
+// 与**针形**——四针皆 main.zig 的委派/判盘形，且针内不得出现手抄入口全串（入口真值唯 `default_entry`）。
+test "第 337 轮 T0 工程根解析面：基数四针与委派形针面（D196）" {
+    try std.testing.expectEqual(@as(usize, 4), entry_root_face.len);
+    for (entry_root_face) |f| {
+        try std.testing.expectEqual(@as(usize, 1), f.occ);
+        try std.testing.expect(f.why.len > 0);
+        // 针形须落在「解析链」上：要么委派 pickEntryOrRoot，要么委派 I/O 层存在性判定。
+        const hit = std.mem.indexOf(u8, f.needle, "pickEntryOrRoot") != null or
+            std.mem.indexOf(u8, f.needle, "pathExists") != null;
+        try std.testing.expect(hit);
+        // 入口全串唯 hub `default_entry` 持真值：面针里手抄入口全串即分道（判据取整串，
+        // 不取 `src_dir` 短名——候选变量名 `as_src` 里就含 "src"，短名判据会假红）。
+        try std.testing.expect(std.mem.indexOf(u8, f.needle, default_entry) == null);
+    }
 }
 
 // 第 334 轮 T0（D193）：CI 镜像面。GitHub 仓加建后本仓出现**第二个** CI 面，两面各持一份「该跑哪

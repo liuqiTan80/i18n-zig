@@ -245,6 +245,17 @@ pub fn build(b: *std.Build) void {
     // 第 336 轮 D195：诊断语料回放器纳入 matcher 步输入——第 26 片（**仍垫底**：前 25 片的 argv 位已被
     // 各面对固定）。回放器自身承载「条数锚 + 语料根」两枚面针，改脚本不重跑即吃陈旧文本（D157 同族）。
     check_matcher_run.addFileArg(b.path("tools/diag-corpus.sh"));
+    // 第 338 轮 D197：许可证正文与仓根包清单纳入 matcher 步输入——第 27/28 片（**仍垫底**，前 26 片
+    // 的 argv 位已被各面对固定）。二者皆是「声明面」：LICENSE 承载义务正文，zon 的 .paths 决定包内
+    // 是否随许可走；不声明即改文件不重跑、面针吃陈旧文本（D157 同族）。
+    check_matcher_run.addFileArg(b.path("LICENSE"));
+    check_matcher_run.addFileArg(b.path("build.zig.zon"));
+    // 第 339 轮 D198：上游漂移周检的两面纳入 matcher 步输入——第 29/30 片（**仍垫底**，前 28 片
+    // 的 argv 位已被各面对固定）。周检是「只在定时面上跑」的防线，本地既不会执行 workflow 也无法
+    // 触网装工具链，故能落地的只有「三面声明本身不许静默漂」：脚本判据（版本源/回放器/钉版来源）、
+    // workflow 的调用与频率、build 侧的依赖声明——三处任一改名不随动即周检静默退化成空转。
+    check_matcher_run.addFileArg(b.path("tools/upstream-watch.sh"));
+    check_matcher_run.addFileArg(b.path(".github/workflows/upstream-watch.yml"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 
@@ -285,6 +296,44 @@ pub fn build(b: *std.Build) void {
     const check_corpus_step = b.step("check-diag-corpus", "诊断语料回放（触发源码 + 期望译文 + 极性 + 条数锚）");
     check_corpus_step.dependOn(&check_corpus_run.step);
     test_step.dependOn(&check_corpus_run.step);
+
+    // ---------------------------------------------------------------- 量化收益：测映闸与吞吐基准（第 340 轮 D199）
+    // 仓里测试占了一半体量却零可对账量：不知道「哪个文件有测、测了多少行」（新文件零测入图只能靠
+    // 人目测，292/293 轮反复吃过这形亏），也不知道「译一遍多少钱」（退到十倍慢也无人知道）。另：
+    // Zig 0.17 无 `zig build test --coverage`、发行包不带 llvm-cov，行覆盖率这台机器不存在，故取
+    // 可实装口径：文件级测块/测行账 + 固定语料墙钟基准。两件都挂在 test 上（两面 CI 随之逐轮跑，
+    // 读数才有纵向曲线）；判据全在 hub，两个 main 只做扫目录/读盘/计时与退出码。
+    const check_test_map_exe = b.addExecutable(.{
+        .name = "check-test-map",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check/test_map_main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+    const check_test_map_run = b.addRunArtifact(check_test_map_exe);
+    // 整面 src/ 作为输入依赖：新增/改动任一源文件都重跑本步，否则测块计数吃旧树（D195 同族）。
+    check_test_map_run.addDirectoryArg(b.path("src"));
+    const check_test_map_step = b.step("check-test-map", "测试映射覆盖闸（测块数／测行占比／零测豁免双向对账）");
+    check_test_map_step.dependOn(&check_test_map_run.step);
+    test_step.dependOn(&check_test_map_run.step);
+
+    // 基准档位固定为 ReleaseSafe（不随 `-Doptimize` 漂）：Debug 与 Release 差一个量级，
+    // 跟随命令行档位即「同一仓两次不同命令的读数不可比」，曲线当场作废。
+    const check_bench_exe = b.addExecutable(.{
+        .name = "check-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/check/bench_main.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+            .imports = &.{.{ .name = "zzc_core", .module = mod }},
+        }),
+    });
+    const check_bench_run = b.addRunArtifact(check_bench_exe);
+    const check_bench_step = b.step("check-bench", "翻译吞吐基准（每千行毫秒＋量级闸）");
+    check_bench_step.dependOn(&check_bench_run.step);
+    test_step.dependOn(&check_bench_run.step);
 }
 
 // ---------------------------------------------------------------- 语言包自动发现（R9续②；第 260 轮 D126 迁 run 步）
