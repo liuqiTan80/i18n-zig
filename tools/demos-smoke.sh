@@ -24,7 +24,7 @@ if [ ! -x "$zzc" ]; then
   exit 1
 fi
 
-EXPECT_CHECKS=23
+EXPECT_CHECKS=24
 checks=0
 fails=0
 
@@ -658,6 +658,106 @@ fi
 rm -rf "$d_ua"
 if [ $ua_ok -eq 0 ]; then
   echo "  [ok] 周检装版臂离线真跑：合法同构判绿／基线自红判前置错（本轮缺陷形）／分道判红／坏入口即拒，全程零下载"
+else
+  fails=$((fails + 1))
+fi
+
+# 第二十四臂 · 上游周检装版臂自检闸离线真跑（第 344 轮 D203）：343 轮给装版臂开了两枚入口，却没碰「下载到
+# 解包」那一段本身——包位硬编 x86_64-linux、57 MB 包从不对上游索引里给的 shasum、解出来的二进制能不能跑也
+# 不问。落码前三形实锤（皆真跑）：①错包（内容非上游那枚）→「上游 0.99.0 编不过本仓源码」退 1；②包位取不到
+# →泛泛的「上游发行包下载失败」退 2（话术里连平台位都不出现）；③本平台跑不了这枚包（即异平台机器上的真实
+# 后果）→「已装上游工具链：」打空照样放行，随后同样退 1 报「编不过」。退 1 的语义是「有漂移、人来评估升代」，
+# 于是三形都在建议人去做一件与事实无关的事。本臂走六断（三道新闸一闸一断）：校验和不符／本平台跑不了／
+# 版本自证不符／无本平台条目／好包全闸通过（不误咬）／平台位派生零网络——全程由 PATH 桩 curl 与快照索引
+# 供数，不下一枚真包。
+checks=$((checks + 1))
+us_ok=0
+d_us="$(mktemp -d)"
+us_watch="$root/tools/upstream-watch.sh"
+mkdir -p "$d_us/bin" "$d_us/p/zig-x86_64-linux-0.99.0"
+cat > "$d_us/bin/curl" <<'USEOF'
+#!/usr/bin/env bash
+# 桩 curl：把 US_PAYLOAD 当「下到的发行包」交出去（真实形：镜像站/CDN 上同名但内容不同的包）。
+out=""
+for a in "$@"; do
+  case "$a" in
+    http*|https*) : ;;
+    -*) : ;;
+    *) [ -z "$out" ] && out="$a" ;;
+  esac
+done
+[ -n "$out" ] || { echo "桩 curl 取不到输出路径：$*" >&2; exit 9; }
+cp "$US_PAYLOAD" "$out" || exit 10
+USEOF
+cat > "$d_us/p/zig-x86_64-linux-0.99.0/zig" <<'USEOF'
+#!/usr/bin/env bash
+echo "桩：无法执行二进制文件（可执行文件格式错误）" >&2
+exit 126
+USEOF
+chmod +x "$d_us/bin/curl" "$d_us/p/zig-x86_64-linux-0.99.0/zig"
+tar -cf "$d_us/bad.tar" -C "$d_us/p" zig-x86_64-linux-0.99.0
+cat > "$d_us/p/zig-x86_64-linux-0.99.0/zig" <<'USEOF'
+#!/usr/bin/env bash
+# 好包：version 自证含目标版号，build 只把 US_ZZC_SRC 搬进 --prefix/bin/zzc（与第二十三臂同一手形）。
+case "$1" in
+  version) echo "0.99.0-good-pack" ;;
+  build)
+    prefix=""
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--prefix" ]; then prefix="$2"; shift 2; else shift; fi
+    done
+    [ -n "$prefix" ] || exit 7
+    mkdir -p "$prefix/bin"
+    cp "$US_ZZC_SRC" "$prefix/bin/zzc" || exit 8 ;;
+  *) exit 0 ;;
+esac
+USEOF
+chmod +x "$d_us/p/zig-x86_64-linux-0.99.0/zig"
+tar -cf "$d_us/good.tar" -C "$d_us/p" zig-x86_64-linux-0.99.0
+cat > "$d_us/p/zig-x86_64-linux-0.99.0/zig" <<'USEOF'
+#!/usr/bin/env bash
+# 旧包：能跑、退码 0，但自证的不是要装的那一枚（镜像站上的旧版包）——版本自证闸唯一定得住的形。
+echo "0.5.0-stale-mirror"
+USEOF
+chmod +x "$d_us/p/zig-x86_64-linux-0.99.0/zig"
+tar -cf "$d_us/stale.tar" -C "$d_us/p" zig-x86_64-linux-0.99.0
+us_bad_sum="$(sha256sum "$d_us/bad.tar" | cut -d' ' -f1)"
+us_good_sum="$(sha256sum "$d_us/good.tar" | cut -d' ' -f1)"
+us_stale_sum="$(sha256sum "$d_us/stale.tar" | cut -d' ' -f1)"
+us_url="https://ziglang.org/download/0.99.0/zig-x86_64-linux-0.99.0.tar.xz"
+printf '%s' "{\"0.16.0\":{},\"0.99.0\":{\"x86_64-linux\":{\"tarball\":\"$us_url\",\"shasum\":\"deadbeef\"}}}" > "$d_us/idx_sum.json"
+printf '%s' "{\"0.16.0\":{},\"0.99.0\":{\"x86_64-linux\":{\"tarball\":\"$us_url\",\"shasum\":\"$us_bad_sum\"}}}" > "$d_us/idx_bad.json"
+printf '%s' "{\"0.16.0\":{},\"0.99.0\":{\"x86_64-linux\":{\"tarball\":\"$us_url\",\"shasum\":\"$us_good_sum\"}}}" > "$d_us/idx_good.json"
+printf '%s' "{\"0.16.0\":{},\"0.99.0\":{\"x86_64-linux\":{\"tarball\":\"$us_url\",\"shasum\":\"$us_stale_sum\"}}}" > "$d_us/idx_stale.json"
+us_s="$(PATH="$d_us/bin:$PATH" US_PAYLOAD="$d_us/bad.tar" UPSTREAM_PINNED_OVERRIDE=0.16.0 UPSTREAM_INDEX_FIXTURE="$d_us/idx_sum.json" bash "$us_watch" 2>&1)"; us_s_rc=$?
+if [ $us_s_rc -ne 2 ] || ! printf '%s' "$us_s" | grep -qF -- "上游工具链自检不过" || ! printf '%s' "$us_s" | grep -qF -- "校验和不符" || printf '%s' "$us_s" | grep -qF -- "用上游版构建"; then
+  echo "  [FAIL] 错包未被校拦截（实得 RC=$us_s_rc／判据=RC 须 2 且含「自检不过·校验和不符」、不得走进构建段）——本轮缺陷形①复活：拿到错包被写成关于上游的结论"; us_ok=1
+fi
+us_r="$(PATH="$d_us/bin:$PATH" US_PAYLOAD="$d_us/bad.tar" UPSTREAM_PINNED_OVERRIDE=0.16.0 UPSTREAM_INDEX_FIXTURE="$d_us/idx_bad.json" bash "$us_watch" 2>&1)"; us_r_rc=$?
+if [ $us_r_rc -ne 2 ] || ! printf '%s' "$us_r" | grep -qF -- "校验和相符" || ! printf '%s' "$us_r" | grep -qF -- "本平台跑不了这枚包" || printf '%s' "$us_r" | grep -qF -- "用上游版构建"; then
+  echo "  [FAIL] 本平台跑不了的包未被拦（实得 RC=$us_r_rc／判据=RC 须 2 且先报校验和相符、再报「本平台跑不了这枚包」、不得走进构建段）——本轮缺陷形③复活：异平台后果被写成上游编不过"; us_ok=1
+fi
+us_p="$(UPSTREAM_HOST_TUPLE_OVERRIDE=sparc64-solaris UPSTREAM_PINNED_OVERRIDE=0.16.0 UPSTREAM_INDEX_FIXTURE="$d_us/idx_sum.json" bash "$us_watch" 2>&1)"; us_p_rc=$?
+if [ $us_p_rc -ne 2 ] || ! printf '%s' "$us_p" | grep -qF -- "上游索引无本平台发行包条目" || ! printf '%s' "$us_p" | grep -qF -- "sparc64-solaris" || printf '%s' "$us_p" | grep -qF -- "上游发行包下载失败"; then
+  echo "  [FAIL] 无本平台条目未被单独成闸（实得 RC=$us_p_rc／判据=RC 须 2 且含标记与平台位 sparc64-solaris、不得是旧形「下载失败」）——本轮缺陷形②复活：病因不可分辨且不提平台位"; us_ok=1
+fi
+us_v="$(PATH="$d_us/bin:$PATH" US_PAYLOAD="$d_us/stale.tar" UPSTREAM_PINNED_OVERRIDE=0.16.0 UPSTREAM_INDEX_FIXTURE="$d_us/idx_stale.json" bash "$us_watch" 2>&1)"; us_v_rc=$?
+if [ $us_v_rc -ne 2 ] || ! printf '%s' "$us_v" | grep -qF -- "校验和相符" || ! printf '%s' "$us_v" | grep -qF -- "版本自证不符" || printf '%s' "$us_v" | grep -qF -- "用上游版构建"; then
+  echo "  [FAIL] 能跑却不是那一枚的包未被拦（实得 RC=$us_v_rc／判据=RC 须 2 且先报校验和相符、再报「版本自证不符」、不得走进构建段）——旧包/错包在改前会被当成上游工具链真去构建本仓"; us_ok=1
+fi
+us_g="$(PATH="$d_us/bin:$PATH" US_PAYLOAD="$d_us/good.tar" US_ZZC_SRC="$zzc" UPSTREAM_PINNED_OVERRIDE=0.16.0 UPSTREAM_INDEX_FIXTURE="$d_us/idx_good.json" UPSTREAM_BASE_EXE="$zzc" bash "$us_watch" 2>&1)"; us_g_rc=$?
+if [ $us_g_rc -ne 1 ] || ! printf '%s' "$us_g" | grep -qF -- "校验和相符" || ! printf '%s' "$us_g" | grep -qF -- "已装上游工具链：0.99.0-good-pack" || ! printf '%s' "$us_g" | grep -qF -- "语料回放逐字同构（报文文本未漂）" || printf '%s' "$us_g" | grep -qF -- "上游工具链自检不过"; then
+  echo "  [FAIL] 好包被自检闸误咬（实得 RC=$us_g_rc／判据=RC 须 1 且过校验和·版本自证·走到同构判定、不得含自检不过）——自检闸误咬即真周检永远跑不完"; us_ok=1
+fi
+us_t="$(bash "$us_watch" --print-target 2>&1)"; us_t_rc=$?
+us_t_want="$(uname -m | sed 's/^arm64$/aarch64/')"
+us_t_ov="$(UPSTREAM_HOST_TUPLE_OVERRIDE=aarch64-macos bash "$us_watch" --print-target 2>&1 | tail -1)"
+if [ $us_t_rc -ne 0 ] || ! printf '%s' "$us_t" | grep -qF -- "$us_t_want" || [ "$us_t_ov" != "aarch64-macos" ]; then
+  echo "  [FAIL] 平台位派生不可用（本机形实得「$us_t」RC=$us_t_rc／覆盖形实得「$us_t_ov」——判据=RC 须 0、本机形须含 uname 架构位 $us_t_want、覆盖形须逐字等于注入值 aarch64-macos，其一不合即红）——平台位不再由本机派生／入口不再被读，异平台上重新落进旧形"; us_ok=1
+fi
+rm -rf "$d_us"
+if [ $us_ok -eq 0 ]; then
+  echo "  [ok] 周检装版臂自检闸离线真跑：错包/跑不了/不是那一枚/无本平台四形均判前置错（本轮缺陷形）／好包全闸不误咬／平台位本机派生，全程零下载"
 else
   fails=$((fails + 1))
 fi
