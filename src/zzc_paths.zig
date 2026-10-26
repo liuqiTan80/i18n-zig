@@ -446,8 +446,11 @@ pub const demo_count_floor: usize = 6;
 /// ＋上游周检判据三态 1 臂（第 342 轮 D201：判据表达式此前全仓零钉且本地不可达——落后/领先两臂
 /// 无快照入口永远走不到，把相等判定翻成不等，fmt/build/test/matcher 四道全绿而周检语义整个反转。
 /// 五断见第二十二臂注）。
+/// ＋上游周检装版臂 1 臂（第 343 轮 D202：342 轮离线化的是判定，装版臂（构建闸→两版语料对比→summary）
+/// 整条仍要真发行包才走得到；落码前实跑坐实「两版一样地坏」被报成「逐字同构·报文未漂」的正向读数。
+/// 四断见第二十三臂注）。
 /// 加臂/削臂须两处同动；与 `demo_count_floor`（入口表基数）各司两轴。
-pub const smoke_assert_floor: usize = 22;
+pub const smoke_assert_floor: usize = 23;
 
 /// 不入冒烟网的 demo 目录豁免清单（独立手设，第 297 轮 D156 本闸首跑即抓到真 ghost）：
 /// `demo/httpz` 系第 265 轮叠加层真依赖验证工程——`zig fetch` 外析依赖不入库（`.gitignore` 册）、
@@ -695,11 +698,31 @@ pub const upstream_ahead_marker: []const u8 = "AHEAD(上游钉版领先)";
 /// 版本索引快照入口的环境变量名（第 342 轮 D201）：判据三条方向臂须能在**无网**机器上离线真跑，
 /// 否则「落后/领先」两臂本地永远走不到，判据漂了只能等下周 CI 才现形（CI 一律不设此变量）。
 pub const upstream_index_fixture_env: []const u8 = "UPSTREAM_INDEX_FIXTURE";
+/// 装版臂的**上游侧**离线入口（第 343 轮 D202）：指一枚本机已有的 zig，则跳过下载与解包，而把构建闸／
+/// 语料分道对比／summary 写入这三段照常跑完。立它的因由：342 轮把判据方向臂离线化之后，装版臂整条臂
+/// 仍然本地零通道——它的外部输入只剩「上游工具链」这一件，而那件此前只能靠 50 MB 真发行包供给。
+pub const upstream_zig_bin_env: []const u8 = "UPSTREAM_ZIG_BIN";
+/// 装版臂的**基线侧**离线入口（第 343 轮 D202）：注入「钉死版产物」，使「基线自身即红」这形可在任何
+/// 机器上构造出来。只给上游侧一枚入口是不够的——那一形要的是基线侧红，而基线是 `zig build` 的产物，
+/// 在一台干净的机器上它必然全绿，于是缺陷只能靠读代码发现，永远进不了任何一条自动化防线。
+pub const upstream_base_exe_env: []const u8 = "UPSTREAM_BASE_EXE";
+/// 基线自红态的标记（第 343 轮 D202）：与三条方向态标记同样由 hub 单源。它是**前置错族（退 2）而不是
+/// 漂移族（退 1）**——两版 rc 同为非零且输出逐字相同时，「同构」只蕴含「两边一样」，不蕴含「上游报文
+/// 未漂」；改前正是把这一形报成了正向读数。极性闸先于对比闸，承第 340 轮 D199 同族形制。
+pub const upstream_base_red_marker: []const u8 = "FAIL: 基线自身即红";
+/// 两版语料输出逐字相同时的判词（第 343 轮 D202 收编为单源）：它是**仅当基线全绿才成立**的正向读数——
+/// 基线自红时同样会「逐字同构」，故本轮把极性闸排在它之前；话术与臂共用一枚，独改即臂读到别句。
+pub const upstream_parity_verdict: []const u8 = "语料回放逐字同构（报文文本未漂）";
+/// 两版语料输出不同时的态标记（第 343 轮 D202 收编为单源）：周检存在的动因就是抓这一形（上游改了报文
+/// 文本 → 回译表须重对齐）。臂按它判「对比闸真的在比」。
+pub const upstream_diverge_marker: []const u8 = "输出分道";
 
-/// 周检脚本面：八枚皆钉**赋值/取值行**（裸字面会被脚本顶注里的同名字面垫住——D195 的 M2 判例沿用）。
-/// 前四枚是 339 轮的声明面（版本源/漂移标记/回放器/钉版来源），后四枚是 342 轮补的判据面（两枚三态判词＋
-/// 一枚离线入口＋一枚方向判据机器）。补判据面的因由：改前判据表达式全仓零钉——把相等判定翻成不等、或删掉
-/// 方向臂，fmt/build/test/matcher 四道全绿，而周检语义整个反转（无漂移的周周日日红、真漂移恒绿）。
+/// 周检脚本面：十三枚皆钉**赋值/取值行**（裸字面会被脚本顶注里的同名字面垫住——D195 的 M2 判例沿用）。
+/// 前四枚是 339 轮的声明面（版本源/漂移标记/回放器/钉版来源），中四枚是 342 轮补的判据面（两枚三态判词＋
+/// 一枚离线入口＋一枚方向判据机器），后五枚是 343 轮补的装版臂面（两枚离线入口＋一枚基线自红标记＋
+/// 同构/分道两句话术）。
+/// 补判据面的因由：改前判据表达式全仓零钉——把相等判定翻成不等、或删掉方向臂，fmt/build/test/matcher 四道
+/// 全绿，而周检语义整个反转（无漂移的周周日日红、真漂移恒绿）。
 pub const upstream_watch_face = [_]BuildFace{
     .{ .needle = "index_url=\"" ++ zig_index_url ++ "\"", .why = "版本源须是 hub 声明的那枚 index.json——漂向别处（如 releases/latest 实测落后两版）即周检天天假红或恒免跑（第 339 轮 D198）" },
     .{ .needle = "drift_marker=\"" ++ drift_marker ++ "\"", .why = "漂移标记由 hub 单源——报告与判定共用一枚，独改其一即红了却读不出是哪类红（第 339 轮 D198）" },
@@ -709,6 +732,11 @@ pub const upstream_watch_face = [_]BuildFace{
     .{ .needle = "ahead_marker=\"" ++ upstream_ahead_marker ++ "\"", .why = "领先态标记须由 hub 单源——删掉它即第三态重新被吞进漂移臂：本仓钉版领先时周检去装更旧的工具链并退 1（第 342 轮 D201）" },
     .{ .needle = "index_fixture=\"${" ++ upstream_index_fixture_env ++ ":-}\"", .why = "离线快照入口须由 hub 单源——漂了它则判据方向臂本地不可达，冒烟臂三形全退化为触网或前置错（第 342 轮 D201）" },
     .{ .needle = "older=\"$(printf '%s\\n%s\\n' \"$pinned\" \"$latest\" | sort -V | head -1)\"", .why = "方向判据机器（两版取较旧者·数值序）全脚本只此一处——删行即退回「不等即漂移」的二元旧形；针内不含版本字面量，升钉不触此针（第 342 轮 D201）" },
+    .{ .needle = "upstream_zig_bin=\"${" ++ upstream_zig_bin_env ++ ":-}\"", .why = "装版臂的上游侧离线入口须由 hub 单源——漂了它则构建闸／分道对比／summary 三段本地仍零通道，只能等真发行包（第 343 轮 D202）" },
+    .{ .needle = "base_exe=\"${" ++ upstream_base_exe_env ++ ":-}\"", .why = "装版臂的基线侧离线入口须由 hub 单源——只给上游侧入口则「基线自身即红」这形在任何机器上都构造不出来，缺陷进不了自动化防线（第 343 轮 D202）" },
+    .{ .needle = "base_red_marker=\"" ++ upstream_base_red_marker ++ "\"", .why = "基线自红标记须由 hub 单源且属前置错族（退 2）而非漂移族（退 1）——同化成漂移语即「本仓语料坏了」被读成「上游漂了要升钉」；摘掉它则两版一样地坏被报成正向读数（第 343 轮 D202）" },
+    .{ .needle = "parity_verdict=\"" ++ upstream_parity_verdict ++ "\"", .why = "同构判词须由 hub 单源——极性闸排在它之前是本轮的修法，判词漂了则臂读不到「合法同构」这条正向路，会把该绿的形当红（第 343 轮 D202）" },
+    .{ .needle = "diverge_marker=\"" ++ upstream_diverge_marker ++ "\"", .why = "分道标记须由 hub 单源——它是周检存在的动因（上游改报文→回译须重对齐）；摘掉它则两版输出不同也读不出是哪类红，对比闸退化成只比 rc（第 343 轮 D202）" },
 };
 
 /// 周检 workflow 面：周频、版本单源取版、周检本体执行三枚。
@@ -1430,7 +1458,7 @@ test "第 297 轮 T0 demo 冒烟防线单源：路径/入口表独立字面量�
         try std.testing.expectEqualStrings(demo_entries[i], c.needle);
     }
     try std.testing.expectEqual(@as(usize, 1), demos_smoke_count_face.len);
-    try std.testing.expectEqualStrings("EXPECT_CHECKS=22", demos_smoke_count_face[0].needle); // 逐轮随动：锚跟断言下限（旧值 6→…→20→21→22）
+    try std.testing.expectEqualStrings("EXPECT_CHECKS=23", demos_smoke_count_face[0].needle); // 逐轮随动：锚跟断言下限（旧值 6→…→20→21→22）
     try std.testing.expectEqual(@as(usize, 1), demos_build_face.len);
     try std.testing.expectEqualStrings("addFileArg(b.path(\"tools/demos-smoke.sh\"))", demos_build_face[0].needle);
     // A5 豁免清单值钉（独立手抄）：本闸首跑抓到的真 ghost `demo/httpz` 须显式在册未免——
@@ -1577,12 +1605,12 @@ test "第 306 轮 T0 AGENTS.md 路径单源：值钉＋doc42 步名针 want 对�
 
 test "第 307 轮 T0 断言条数锚解耦：值钉＋两轴关系钉＋count 针随动（D166）" {
     // A1 独立值钉：断言下限逐轮随臂（8→9 第 309 轮第九臂）与入口下限 6 各司两轴。
-    try std.testing.expectEqual(@as(usize, 22), smoke_assert_floor);
+    try std.testing.expectEqual(@as(usize, 23), smoke_assert_floor);
     try std.testing.expectEqual(@as(usize, 6), demo_count_floor);
     try std.testing.expectEqual(demo_entries.len, demo_count_floor); // 入口轴仍与表基数同数
     try std.testing.expect(smoke_assert_floor > demo_entries.len); // 断言轴已解耦：添臂后必大于入口数
     // A2 条数针随动：needle 值跟断言下限（漂值即脚本对账红）。
-    try std.testing.expectEqualStrings("EXPECT_CHECKS=22", demos_smoke_count_face[0].needle); // 第 342 轮 D201 第二十二臂添臂随动（旧值 21）
+    try std.testing.expectEqualStrings("EXPECT_CHECKS=23", demos_smoke_count_face[0].needle); // 第 343 轮 D202 第二十二臂添臂随动（旧值 21）
 }
 
 test "第 308 轮 T0 指定语言行为面：fixture 两路径值钉＋面对账基数（D167）" {
@@ -1731,8 +1759,8 @@ test "第 339 轮 T0 上游漂移周检面：五枚真值与三面九针派生�
     try std.testing.expectEqualStrings("17 3 * * 1", upstream_watch_cron);
     try std.testing.expectEqualStrings("https://ziglang.org/download/index.json", zig_index_url);
     try std.testing.expectEqualStrings("DRIFT(上游漂移)", drift_marker);
-    // A2 脚本面基数：339 轮四针＋342 轮四针＝八针，且逐针是**赋值/取值行**形：含 `=`、以引号收尾、首字符为字母（不允裸字面）。
-    try std.testing.expectEqual(@as(usize, 8), upstream_watch_face.len);
+    // A2 脚本面基数：339 轮四针＋342 轮四针＋343 轮五针＝十三枚，且逐针是**赋值/取值行**形：含 `=`、以引号收尾、首字符为字母（不允裸字面）。
+    try std.testing.expectEqual(@as(usize, 13), upstream_watch_face.len);
     for (upstream_watch_face) |f| {
         try std.testing.expectEqual(@as(usize, 1), f.occ);
         try std.testing.expect(f.why.len > 0);
@@ -1817,6 +1845,63 @@ test "第 342 轮 T0 周检三态判据面：标记不同化、判据不写版�
     try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[7].needle, "$latest") != null);
     try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[7].needle, "sort -V") != null);
     try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[7].needle, "0.17.") == null);
+}
+
+// 第 343 轮 T0（D202）：装版臂面。342 轮把判据方向臂离线化之后，装版臂（下载→构建→语料对比→summary）
+// 整条臂仍然本地零通道，实跑坐实其中一段确实在说谎：两版 rc 同为非零且输出逐字相同时，脚本报「语料回放
+// 逐字同构（报文文本未漂）」——同构只蕴含「两边一样」，不蕴含「未漂」。本测钉的是补上那一段之后清单的
+// 完备性：三枚新针各就各位（按名而非只数基数，承 342 轮 A3 的教训）、三条离线通道不同名不合并、基线自红
+// 属前置错族而不与漂移族同化。
+test "第 343 轮 T0 装版臂离线面：两枚入口不同名、基线自红属前置错族（D202）" {
+    // A1 三枚真值独立手抄（改 hub 值须同动脚本赋值行，独改脚本则对面五十与真跑同红）。
+    try std.testing.expectEqualStrings("UPSTREAM_ZIG_BIN", upstream_zig_bin_env);
+    try std.testing.expectEqualStrings("UPSTREAM_BASE_EXE", upstream_base_exe_env);
+    try std.testing.expectEqualStrings("FAIL: 基线自身即红", upstream_base_red_marker);
+    // A2 五枚新针按名逐枚就座（[8] 上游侧入口／[9] 基线侧入口／[10] 基线自红标记／[11] 同构判词／
+    // [12] 分道标记）——只数基数的话，把 [9] 换成第二枚入口针，表长照然而基线侧重新无通道，本轮缺陷形
+    // 又回落到「只能读代码发现」。
+    try std.testing.expect(std.mem.startsWith(u8, upstream_watch_face[8].needle, "upstream_zig_bin="));
+    try std.testing.expect(std.mem.startsWith(u8, upstream_watch_face[9].needle, "base_exe="));
+    try std.testing.expect(std.mem.startsWith(u8, upstream_watch_face[10].needle, "base_red_marker="));
+    try std.testing.expect(std.mem.startsWith(u8, upstream_watch_face[11].needle, "parity_verdict="));
+    try std.testing.expect(std.mem.startsWith(u8, upstream_watch_face[12].needle, "diverge_marker="));
+    // A3 两枚入口皆须 `${<hub 名>:-}` 的取值形（漂成别形即脚本不再读注入值），且与 342 轮的快照入口同制。
+    for ([_]usize{ 8, 9 }) |i| {
+        try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[i].needle, "=\"${") != null);
+        try std.testing.expect(std.mem.endsWith(u8, upstream_watch_face[i].needle, ":-}\""));
+    }
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[8].needle, upstream_zig_bin_env) != null);
+    try std.testing.expect(std.mem.indexOf(u8, upstream_watch_face[9].needle, upstream_base_exe_env) != null);
+    // A4 三条本地演练通道三名分立，且皆 UPSTREAM_ 族前缀（一名一制，禁各起一名；也禁把两形合并成一枚）。
+    try std.testing.expect(!std.mem.eql(u8, upstream_zig_bin_env, upstream_base_exe_env));
+    try std.testing.expect(!std.mem.eql(u8, upstream_zig_bin_env, upstream_index_fixture_env));
+    try std.testing.expect(!std.mem.eql(u8, upstream_base_exe_env, upstream_index_fixture_env));
+    for ([_]@TypeOf(upstream_zig_bin_env){ upstream_zig_bin_env, upstream_base_exe_env, upstream_index_fixture_env }) |nm| {
+        try std.testing.expect(std.mem.startsWith(u8, nm, "UPSTREAM_"));
+    }
+    // A5 基线自红标记属**前置错族**（以 FAIL 起头，退 2）：它与三条方向态标记互不相同——同化成漂移语即
+    // 「本仓语料坏了」被读成「上游漂了该升钉」，同化成 PASS 语则整条周检静默。
+    try std.testing.expect(std.mem.startsWith(u8, upstream_base_red_marker, "FAIL"));
+    for ([_]@TypeOf(drift_marker){ drift_marker, upstream_pass_verdict, upstream_ahead_marker }) |m| {
+        try std.testing.expect(!std.mem.eql(u8, m, upstream_base_red_marker));
+    }
+    // A5续 五枚态名/判词两两不等（同构判词与无漂移判词同句即「合法同构」与「免跑」两形在臂里不可分辨；
+    // 分道标记与基线自红标记同句即「该升钉」与「该修本仓语料」两形不可分辨）。
+    const five = [_]@TypeOf(drift_marker){ drift_marker, upstream_pass_verdict, upstream_ahead_marker, upstream_parity_verdict, upstream_diverge_marker };
+    for (five, 0..) |x, i| {
+        for (five, 0..) |y, j| {
+            if (i != j) try std.testing.expect(!std.mem.eql(u8, x, y));
+        }
+    }
+    try std.testing.expect(std.mem.startsWith(u8, upstream_diverge_marker, "输出"));
+    try std.testing.expect(std.mem.startsWith(u8, upstream_parity_verdict, "语料回放"));
+    // A6 反形：三枚新针内不得出现版本字面量或发行位 URL（升钉只该动 ci.yml 那一处字面）。
+    for (upstream_watch_face[8..]) |f| {
+        try std.testing.expect(std.mem.indexOf(u8, f.needle, "0.17.") == null);
+        try std.testing.expect(std.mem.indexOf(u8, f.needle, "download/") == null);
+        try std.testing.expectEqual(@as(usize, 1), f.occ);
+        try std.testing.expect(f.why.len > 0);
+    }
 }
 
 // 第 338 轮 T0（D197）：许可证面。真值五枚（路径/SPDX/署名/年份/署名行）+ 四张表基数 +

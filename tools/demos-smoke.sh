@@ -24,7 +24,7 @@ if [ ! -x "$zzc" ]; then
   exit 1
 fi
 
-EXPECT_CHECKS=22
+EXPECT_CHECKS=23
 checks=0
 fails=0
 
@@ -321,6 +321,10 @@ fi
 checks=$((checks + 1))
 li_ok=0
 tmp_out="$(mktemp)"
+# 第 335 行的括号形（承第 343 轮 D202）：此处原写 `{ …; cd "$d_li" && …; }` 是**当前 shell 的花括号组**，
+# cd 会漏出来——下一行 `rm -rf "$d_li"` 随即把 cwd 删成悬空目录，此后所有臂都在 getcwd 失败的目录里跑。
+# 它静默了四轮（第 15～22 臂皆不依赖 cwd），到第 23 臂要 `bash` 一个内部会 `cd "$root"` 的脚本时才现形：
+# 那条臂整条走偏（基线回放 rc=1、构建版本号打空）。规矩：**臂内 cd 一律裹子 shell**，花括号组不得含 cd。
 d_li="$(mktemp -d)"; mkdir -p "$d_li/src"
 cp "$root/tools/fixtures/proj-ja/src/main.zz" "$d_li/src/"
 if (cd "$d_li" && "$zzc" lang) 2>&1 | grep -qF -- "kk-zz15a("; then
@@ -332,7 +336,7 @@ else
     echo "  [FAIL] add 成功后列播不收录新键（装得上看不见——314 边界旧病）"; li_ok=1
   # 第 319 轮 D178 随动：`lang add --as zh` 现已被装前拦截臂拒掉，改用手工 cp 造同名态
   # （列播去重闸仍须有被测物，否则该支空转成伪锚）。
-  elif { mkdir -p "$d_li/.zzc/lang"; cp "$root/tools/fixtures/external-min.txt" "$d_li/.zzc/lang/zh.txt"; cd "$d_li" && "$zzc" lang; } >/dev/null 2>&1 && [ "$( (cd "$d_li" && "$zzc" lang) 2>&1 | grep -o "zh(" | wc -l )" -ne 1 ]; then
+  elif ( mkdir -p "$d_li/.zzc/lang"; cp "$root/tools/fixtures/external-min.txt" "$d_li/.zzc/lang/zh.txt"; cd "$d_li" && "$zzc" lang; ) >/dev/null 2>&1 && [ "$( (cd "$d_li" && "$zzc" lang) 2>&1 | grep -o "zh(" | wc -l )" -ne 1 ]; then
     echo "  [FAIL] 内置同名去重破（--as zh 后列播 'zh(' 不恰一枚——双行歧义或收录失效）"; li_ok=1
   fi
 fi
@@ -593,6 +597,67 @@ fi
 rm -rf "$d_uw"
 if [ $uw_ok -eq 0 ]; then
   echo "  [ok] 周检判据三态离线真跑：eq 判绿／lt 判漂不触下载／gt 免跑退 0（本轮缺陷形）＋未知旗标即拒＋取版单源活"
+else
+  fails=$((fails + 1))
+fi
+
+# 第二十三臂 · 上游周检装版臂离线真跑（第 343 轮 D202）：342 轮把判据方向臂离线化之后，装版臂（下载发行包
+# →用上游版构建→两版语料回放对比→写 GITHUB_STEP_SUMMARY）整条臂仍是本地零通道——它要一枚真发行包，于是
+# 只能等下周 CI。落码前用临时注入的离线入口把它真跑了一遍，坐实其中一句话术在说谎：两版 rc 同为非零且输出
+# 逐字相同时，脚本打「语料回放逐字同构（报文文本未漂）」并把「同构」写进 summary——那是个**正向**读数，而
+# 事实是两边一样地坏（同构只蕴含「两边一样」，不蕴含「未漂」）。本臂走两枚新入口（上游侧 UPSTREAM_ZIG_BIN、
+# 基线侧 UPSTREAM_BASE_EXE）离线跑四断：合法同构／基线自身即红（本轮缺陷形，退 2 属前置错族）／输出分道／
+# 入口非可执行即前置错。极性闸排在分道对比之前，承第 340 轮 D199「速度闸前先过极性闸」同族形制；全程不下载。
+checks=$((checks + 1))
+ua_ok=0
+d_ua="$(mktemp -d)"
+ua_watch="$root/tools/upstream-watch.sh"
+printf '%s' '{"master":{},"0.16.1":{},"0.17.0":{}}' > "$d_ua/idx.json"
+cat > "$d_ua/bad-zzc" <<'UAEOF'
+#!/usr/bin/env bash
+echo "（桩产物）故意失败：模拟本仓语料表在当前钉版上已不对齐" >&2
+exit 3
+UAEOF
+cat > "$d_ua/fake-zig" <<'UAEOF'
+#!/usr/bin/env bash
+# 上游工具链桩：version 返一枚版号即可；build 只把 FAKE_ZZC_SRC 那枚产物搬进 --prefix/bin/zzc——搬基线
+# 本体即「两版逐字同」，搬坏桩即「两版分道」，两条对比臂由此可在本地构造出来。
+case "$1" in
+  version) echo "0.17.0-offline-probe" ;;
+  build)
+    prefix=""
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "--prefix" ]; then prefix="$2"; shift 2; else shift; fi
+    done
+    [ -n "$prefix" ] || exit 7
+    mkdir -p "$prefix/bin"
+    cp "$FAKE_ZZC_SRC" "$prefix/bin/zzc" || exit 8 ;;
+  *) exit 0 ;;
+esac
+UAEOF
+chmod +x "$d_ua/bad-zzc" "$d_ua/fake-zig"
+: > "$d_ua/sum_parity.md"
+ua_p="$(GITHUB_STEP_SUMMARY="$d_ua/sum_parity.md" UPSTREAM_PINNED_OVERRIDE=0.16.1 UPSTREAM_INDEX_FIXTURE="$d_ua/idx.json" UPSTREAM_ZIG_BIN="$d_ua/fake-zig" UPSTREAM_BASE_EXE="$zzc" FAKE_ZZC_SRC="$zzc" bash "$ua_watch" 2>&1)"; ua_p_rc=$?
+if [ $ua_p_rc -ne 1 ] || ! printf '%s' "$ua_p" | grep -qF -- "语料回放逐字同构（报文文本未漂）" || printf '%s' "$ua_p" | grep -qF -- "基线自身即红" || ! printf '%s' "$ua_p" | grep -qF -- "离线注入，未下载发行包" || ! grep -qF -- "同构（rc 一致且输出逐字相同）" "$d_ua/sum_parity.md"; then
+  echo "  [FAIL] 装版臂合法同构形未走通（实得 RC=$ua_p_rc／判据=RC 须 1 且输出含同构判词与「离线注入，未下载发行包」、不含基线自红、summary 含同构行，五者其一不合即红）——同构判词漂了或极性闸错位即此形红"; ua_ok=1
+fi
+: > "$d_ua/sum_base.md"
+ua_b="$(GITHUB_STEP_SUMMARY="$d_ua/sum_base.md" UPSTREAM_PINNED_OVERRIDE=0.16.1 UPSTREAM_INDEX_FIXTURE="$d_ua/idx.json" UPSTREAM_ZIG_BIN="$d_ua/fake-zig" UPSTREAM_BASE_EXE="$d_ua/bad-zzc" FAKE_ZZC_SRC="$d_ua/bad-zzc" bash "$ua_watch" 2>&1)"; ua_b_rc=$?
+if [ $ua_b_rc -ne 2 ] || ! printf '%s' "$ua_b" | grep -qF -- "基线自身即红" || printf '%s' "$ua_b" | grep -qF -- "逐字同构" || ! grep -qF -- "基线自红" "$d_ua/sum_base.md"; then
+  echo "  [FAIL] 两版一样地坏未被报成前置错（实得 RC=$ua_b_rc／判据=RC 须 2 且输出含「基线自身即红」且不含「逐字同构」、summary 含基线自红行，四者其一不合即红）——本轮缺陷形复活：基线自红被报成「报文文本未漂」的正向读数"; ua_ok=1
+fi
+: > "$d_ua/sum_div.md"
+ua_d="$(GITHUB_STEP_SUMMARY="$d_ua/sum_div.md" UPSTREAM_PINNED_OVERRIDE=0.16.1 UPSTREAM_INDEX_FIXTURE="$d_ua/idx.json" UPSTREAM_ZIG_BIN="$d_ua/fake-zig" UPSTREAM_BASE_EXE="$zzc" FAKE_ZZC_SRC="$d_ua/bad-zzc" bash "$ua_watch" 2>&1)"; ua_d_rc=$?
+if [ $ua_d_rc -ne 1 ] || ! printf '%s' "$ua_d" | grep -qF -- "输出分道" || ! grep -qF -- "分道" "$d_ua/sum_div.md"; then
+  echo "  [FAIL] 两版输出不同未被判成分道（实得 RC=$ua_d_rc／判据=RC 须 1 且输出含「输出分道」、summary 含分道行，三者其一不合即红）——分道是周检存在的动因，它不红即上游改了报文文本也无人知"; ua_ok=1
+fi
+ua_x="$(UPSTREAM_PINNED_OVERRIDE=0.16.1 UPSTREAM_INDEX_FIXTURE="$d_ua/idx.json" UPSTREAM_ZIG_BIN="$d_ua/no-such-zig" bash "$ua_watch" 2>&1)"; ua_x_rc=$?
+if [ $ua_x_rc -ne 2 ] || ! printf '%s' "$ua_x" | grep -qF -- "不是可执行文件"; then
+  echo "  [FAIL] 离线入口指向非可执行文件未即拒（实得 RC=$ua_x_rc／判据=RC 须 2 且输出含「不是可执行文件」）——入口值被静默吞即转而走真下载通道"; ua_ok=1
+fi
+rm -rf "$d_ua"
+if [ $ua_ok -eq 0 ]; then
+  echo "  [ok] 周检装版臂离线真跑：合法同构判绿／基线自红判前置错（本轮缺陷形）／分道判红／坏入口即拒，全程零下载"
 else
   fails=$((fails + 1))
 fi

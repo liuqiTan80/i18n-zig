@@ -14,13 +14,20 @@
 # 环境变量指向上游版本索引的本机快照文件时，改读该快照而不触网（第 342 轮 D201：判据的三条方向臂
 # 必须能在本地离线真跑——否则「落后／领先」两臂在无网机器上永远走不到，判据漂了要等下周 CI 才现形；
 # CI 一律不设，周检本体照旧走真索引）。
+# 环境变量 UPSTREAM_ZIG_BIN=<可执行文件> 时，把它当「上游工具链」而不下载、不解包（第 343 轮 D202：
+# 装版臂此前**整条臂本地零通道**——构建闸／语料分道对比／GITHUB_STEP_SUMMARY 写入三段只能等真发行包，
+# 而落码前的实跑坐实了其中一段确实在说谎，见下）。CI 一律不设。
+# 环境变量 UPSTREAM_BASE_EXE=<可执行文件> 时，用它当「钉死版产物」而不取 zig-out/bin/zzc（同轮：基线
+# 侧也须可注入，否则「基线自身即红」这形在任何本地与 CI 机器上都构造不出来，缺陷只能靠读代码发现）。
 #
 # 判定三态（第 342 轮 D201 补第三态）：钉版 == 上游最新稳定 → 无漂移；钉版 < 上游最新稳定 → 上游漂移
 # （须人来评估并升钉）；钉版 > 上游最新稳定 → 本仓钉的那一版还没进上游稳定索引，既无更新可跟，也不该
 # 去装一枚**更旧**的工具链「在旧版上重跑」。改前只有「相等 / 不等」两臂，领先态被吞进不等臂，于是实跑
 # 报出「DRIFT：上游已出 0.17.0，本仓仍钉 0.99.0」这种方向反了的红，还白拉一次发行包再退 1。
 #
-# 退出码：0 = 无漂移（含领先态）；1 = 有漂移（不论语料是否分道，皆须人来评估并升钉）；2 = 用法/前置错。
+# 退出码：0 = 无漂移（含领先态）；1 = 有漂移（不论语料是否分道，皆须人来评估并升钉）；2 = 用法/前置错
+# （含第 343 轮 D202 新立的「基线自身即红」——那是观测失效而非上游漂，报 1 会让人去评估升代，而真正
+# 该修的是本仓语料表）。
 set -uo pipefail
 
 # 旗标先验后动（承 D180「装前即拒」）：笔误旗标直接退 2，不静默吞掉旁参再按完整周检跑一遍。
@@ -43,6 +50,17 @@ pass_verdict="PASS：无上游漂移"
 ahead_marker="AHEAD(上游钉版领先)"
 index_fixture="${UPSTREAM_INDEX_FIXTURE:-}"
 corpus_sh="$root/tools/diag-corpus.sh"
+# 装版臂的两枚离线入口（第 343 轮 D202，CI 一律不设）：上游侧免下载、基线侧可注入。
+upstream_zig_bin="${UPSTREAM_ZIG_BIN:-}"
+base_exe="${UPSTREAM_BASE_EXE:-}"
+# 基线自红的态标记（与三条方向态标记同样由 hub 单源）：改前两版 rc 同为非零且输出逐字相同时，脚本
+# 打「语料回放逐字同构（报文文本未漂）」并把「同构」写进 summary——那是个正向读数，而事实是两边
+# 一样地坏。极性闸先于对比闸（承第 340 轮 D199「速度闸前先过极性闸」同族形制）。
+base_red_marker="FAIL: 基线自身即红"
+# 同构／分道两句话术同样收编为脚本内单源变量（第 343 轮 D202）：冒烟臂按这两枚判据读极性，独改其一即
+# 「红了读不出是哪类红」——与 339/342 轮的三态标记一个形制。
+parity_verdict="语料回放逐字同构（报文文本未漂）"
+diverge_marker="输出分道"
 # 钉版提取正则全脚本只此一枚且**必被消费**（第 342 轮 D201 消「一死一活同域两形」：改前本行位置躺着
 # 一枚从未被引用的 BRE 形探针，而真正在用的是 grep 行内的 ERE 字面量——升钉时若有人改的是死的那枚，
 # 活的仍按旧形取版，全部门禁零信号）。
@@ -104,22 +122,29 @@ fi
 summary="${GITHUB_STEP_SUMMARY:-}"
 [ -n "$summary" ] && { printf '## 上游漂移周检\n\n- %s：`%s` → `%s`\n\n' "$drift_marker" "$pinned" "$latest" >>"$summary"; }
 
-old_exe="$root/zig-out/bin/zzc"
+old_exe="${base_exe:-$root/zig-out/bin/zzc}"
 [ -x "$old_exe" ] || { echo "FAIL: 基线产物不存在（先跑 zig build 再周检）：$old_exe"; exit 2; }
 
 tmp="$(mktemp -d)"
 tar_name="zig-x86_64-linux-$latest"
-if ! curl -sfLo "$tmp/$tar_name.tar.xz" "https://ziglang.org/download/$latest/$tar_name.tar.xz"; then
-  echo "FAIL: 上游发行包下载失败：$tar_name.tar.xz"
-  rm -rf "$tmp"; exit 2
+tar_dir="$tmp/$tar_name"
+if [ -n "$upstream_zig_bin" ]; then
+  new_bin="$upstream_zig_bin"
+  [ -x "$new_bin" ] || { echo "FAIL: UPSTREAM_ZIG_BIN 指向的不是可执行文件：$new_bin"; rm -rf "$tmp"; exit 2; }
+  echo "已装上游工具链（离线注入，未下载发行包）：$("$new_bin" version)"
+else
+  if ! curl -sfLo "$tmp/$tar_name.tar.xz" "https://ziglang.org/download/$latest/$tar_name.tar.xz"; then
+    echo "FAIL: 上游发行包下载失败：$tar_name.tar.xz"
+    rm -rf "$tmp"; exit 2
+  fi
+  tar -xf "$tmp/$tar_name.tar.xz" -C "$tmp" || { echo "FAIL: 解包失败"; rm -rf "$tmp"; exit 2; }
+  new_bin="$tar_dir/zig"
+  [ -x "$new_bin" ] || { echo "FAIL: 解包后找不到 $new_bin"; rm -rf "$tmp"; exit 2; }
+  echo "已装上游工具链：$("$new_bin" version)"
 fi
-tar -xf "$tmp/$tar_name.tar.xz" -C "$tmp" || { echo "FAIL: 解包失败"; rm -rf "$tmp"; exit 2; }
-new_bin="$tmp/$tar_name/zig"
-[ -x "$new_bin" ] || { echo "FAIL: 解包后找不到 $new_bin"; rm -rf "$tmp"; exit 2; }
-echo "已装上游工具链：$("$new_bin" version)"
 
 echo "—— 用上游版构建 zzc（本仓源码是否还能编过，第一条信号）"
-if ! (cd "$root" && PATH="$tmp/$tar_name:$PATH" "$new_bin" build --cache-dir "$tmp/cache" --prefix "$tmp/out" >"$tmp/build.log" 2>&1); then
+if ! (cd "$root" && PATH="$tar_dir:$PATH" "$new_bin" build --cache-dir "$tmp/cache" --prefix "$tmp/out" >"$tmp/build.log" 2>&1); then
   echo "FAIL: 上游 $latest 编不过本仓源码——升代须先过编译关，日志首 20 行："
   head -20 "$tmp/build.log"
   [ -n "$summary" ] && printf -- '- 构建：**上游编不过**（日志首 20 行见运行器输出）\n' >>"$summary"
@@ -132,13 +157,19 @@ echo "—— 诊断语料回放：钉死版 vs 上游版"
 bash "$corpus_sh" "$old_exe" >"$tmp/corpus_old.txt" 2>&1; rc_old=$?
 bash "$corpus_sh" "$new_exe" >"$tmp/corpus_new.txt" 2>&1; rc_new=$?
 echo "钉死版回放 rc=$rc_old／上游版回放 rc=$rc_new"
+if [ "$rc_old" != 0 ]; then
+  echo "$base_red_marker：钉死版 $pinned 的语料回放本就退 $rc_old——此时两版输出相同只说明「两边一样地坏」，"
+  echo "  不说明上游报文未漂；分道对比失去参照系，本轮判定不作数（先修本仓语料表再周检）。"
+  [ -n "$summary" ] && printf -- '- 语料回放：**基线自红**（rc=%d，同构与否不作数）\n' "$rc_old" >>"$summary"
+  rm -rf "$tmp"; exit 2
+fi
 if [ "$rc_old" -ne "$rc_new" ] || ! diff -q "$tmp/corpus_old.txt" "$tmp/corpus_new.txt" >/dev/null; then
-  echo "FAIL: 同一批触发源码在两版上游下**输出分道**——回译表须按新文案重对齐。差异："
+  echo "FAIL: 同一批触发源码在两版上游下**$diverge_marker**——回译表须按新文案重对齐。差异："
   diff -u "$tmp/corpus_old.txt" "$tmp/corpus_new.txt" | head -40
   [ -n "$summary" ] && printf -- '- 语料回放：**分道**（rc %d → %d）\n' "$rc_old" "$rc_new" >>"$summary"
   rm -rf "$tmp"; exit 1
 fi
-echo "语料回放逐字同构（报文文本未漂）"
+echo "$parity_verdict"
 [ -n "$summary" ] && printf -- '- 语料回放：同构（rc 一致且输出逐字相同）\n- 结论：仍须人来评估升代\n' >>"$summary"
 rm -rf "$tmp"
 exit 1
