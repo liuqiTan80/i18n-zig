@@ -9,25 +9,52 @@
 # 用法：
 #   bash tools/upstream-watch.sh                 # 完整周检（漂移则装新版并复跑语料）
 #   bash tools/upstream-watch.sh --print-pinned  # 只打印钉死版本（CI 据此拼下载 URL，避免第三处手抄）
+#   bash tools/upstream-watch.sh --verdict-only  # 只出判定即退（不装工具链、不复跑语料；本地演练与冒烟臂用）
 # 环境变量 UPSTREAM_PINNED_OVERRIDE=<ver> 临时伪造钉死版本（本地演练漂移通道；CI 一律不设）。
+# 环境变量指向上游版本索引的本机快照文件时，改读该快照而不触网（第 342 轮 D201：判据的三条方向臂
+# 必须能在本地离线真跑——否则「落后／领先」两臂在无网机器上永远走不到，判据漂了要等下周 CI 才现形；
+# CI 一律不设，周检本体照旧走真索引）。
 #
-# 退出码：0 = 无漂移；1 = 有漂移（不论语料是否分道，皆须人来评估并升钉）；2 = 用法/前置错。
+# 判定三态（第 342 轮 D201 补第三态）：钉版 == 上游最新稳定 → 无漂移；钉版 < 上游最新稳定 → 上游漂移
+# （须人来评估并升钉）；钉版 > 上游最新稳定 → 本仓钉的那一版还没进上游稳定索引，既无更新可跟，也不该
+# 去装一枚**更旧**的工具链「在旧版上重跑」。改前只有「相等 / 不等」两臂，领先态被吞进不等臂，于是实跑
+# 报出「DRIFT：上游已出 0.17.0，本仓仍钉 0.99.0」这种方向反了的红，还白拉一次发行包再退 1。
+#
+# 退出码：0 = 无漂移（含领先态）；1 = 有漂移（不论语料是否分道，皆须人来评估并升钉）；2 = 用法/前置错。
 set -uo pipefail
+
+# 旗标先验后动（承 D180「装前即拒」）：笔误旗标直接退 2，不静默吞掉旁参再按完整周检跑一遍。
+print_pinned=0
+verdict_only=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --print-pinned) print_pinned=1 ;;
+    --verdict-only) verdict_only=1 ;;
+    *) echo "FAIL: 未知旗标「$1」——本脚本只认 --print-pinned 与 --verdict-only"; exit 2 ;;
+  esac
+  shift
+done
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 gh_ci="$root/.github/workflows/ci.yml"
 index_url="https://ziglang.org/download/index.json"
 drift_marker="DRIFT(上游漂移)"
+pass_verdict="PASS：无上游漂移"
+ahead_marker="AHEAD(上游钉版领先)"
+index_fixture="${UPSTREAM_INDEX_FIXTURE:-}"
 corpus_sh="$root/tools/diag-corpus.sh"
-pin_probe='download/[0-9]\+\.[0-9]\+\.[0-9]\+'
+# 钉版提取正则全脚本只此一枚且**必被消费**（第 342 轮 D201 消「一死一活同域两形」：改前本行位置躺着
+# 一枚从未被引用的 BRE 形探针，而真正在用的是 grep 行内的 ERE 字面量——升钉时若有人改的是死的那枚，
+# 活的仍按旧形取版，全部门禁零信号）。
+pin_re='download/[0-9]+\.[0-9]+\.[0-9]+'
 
-pinned="$(grep -oE 'download/[0-9]+\.[0-9]+\.[0-9]+' "$gh_ci" | head -1 | cut -d/ -f2)"
+pinned="$(grep -oE "$pin_re" "$gh_ci" | head -1 | cut -d/ -f2)"
 if [ -z "$pinned" ]; then
   echo "FAIL: 无法从 $gh_ci 取钉死版本（该面的 download/<ver>/ 形制漂了）"
   exit 2
 fi
 
-if [ "${1:-}" = "--print-pinned" ]; then
+if [ "$print_pinned" = 1 ]; then
   printf '%s\n' "$pinned"
   exit 0
 fi
@@ -36,22 +63,44 @@ if [ -n "${UPSTREAM_PINNED_OVERRIDE:-}" ]; then
   pinned="$UPSTREAM_PINNED_OVERRIDE"
 fi
 
-latest="$(curl -sfL "$index_url" | python3 -c '
+# 稳定版号抽取：只认形如 <maj>.<min>.<patch> 的键，排除 master，按三段数值升序取末位
+# （不用字符串序——"0.9.0" 字典序大于 "0.17.0"，据此判漂移会常年假红）。
+index_py='
 import json, re, sys
 d = json.load(sys.stdin)
 vs = [k for k in d if k != "master" and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", k)]
 if not vs:
     sys.exit(1)
 print(sorted(vs, key=lambda s: [int(x) for x in s.split(".")])[-1])
-')" || { echo "FAIL: 取不到上游版本（$index_url 不可达或形制变）"; exit 2; }
+'
 
-echo "钉死版本：$pinned　上游最新稳定：$latest"
-if [ "$pinned" = "$latest" ]; then
-  echo "PASS：无上游漂移（钉死版即最新稳定版），语料周检免跑"
-  exit 0
+if [ -n "$index_fixture" ]; then
+  if [ ! -r "$index_fixture" ]; then
+    echo "FAIL: 版本索引快照不可读：$index_fixture"
+    exit 2
+  fi
+  echo "NOTE: 走上游版本索引快照（离线判定，仅本地演练/冒烟臂用）：$index_fixture"
+  latest="$(python3 -c "$index_py" <"$index_fixture")" || { echo "FAIL: 快照里取不到稳定版（$index_fixture 形制变或无合法版本键）"; exit 2; }
+else
+  latest="$(curl -sfL "$index_url" | python3 -c "$index_py")" || { echo "FAIL: 取不到上游版本（$index_url 不可达或形制变）"; exit 2; }
 fi
 
+echo "钉死版本：$pinned　上游最新稳定：$latest"
+# 两版中较旧者（数值序，不是字典序）——它是三条方向臂的唯一判据机器。
+older="$(printf '%s\n%s\n' "$pinned" "$latest" | sort -V | head -1)"
+if [ "$pinned" = "$latest" ]; then
+  echo "$pass_verdict（钉死版即最新稳定版），语料周检免跑"
+  exit 0
+fi
+if [ "$older" = "$latest" ]; then
+  echo "$ahead_marker：钉死版 $pinned 比上游最新稳定 $latest 还新——上游稳定索引尚未收录本仓钉版，无更新可跟，也无从在更旧的工具链上重跑，本轮免跑"
+  exit 0
+fi
 echo "$drift_marker：上游已出 $latest，本仓仍钉 $pinned——以下为「在 $latest 上重跑」的结果"
+if [ "$verdict_only" = 1 ]; then
+  echo "NOTE: --verdict-only 已生效——只出判定，不装上游工具链、不复跑语料（退码仍为 1，与完整周检同判）"
+  exit 1
+fi
 summary="${GITHUB_STEP_SUMMARY:-}"
 [ -n "$summary" ] && { printf '## 上游漂移周检\n\n- %s：`%s` → `%s`\n\n' "$drift_marker" "$pinned" "$latest" >>"$summary"; }
 

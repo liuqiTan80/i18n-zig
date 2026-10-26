@@ -24,7 +24,7 @@ if [ ! -x "$zzc" ]; then
   exit 1
 fi
 
-EXPECT_CHECKS=21
+EXPECT_CHECKS=22
 checks=0
 fails=0
 
@@ -552,6 +552,51 @@ else
   fails=$((fails + 1))
 fi
 
+# 第二十二臂 · 上游周检判据三态离线真跑（第 342 轮 D201）：339 轮的周检四面针全是**声明面**（版本源/
+# 标记/回放器/钉版来源），判据表达式本身全仓零钉，且旧形须触网才走得到方向臂——落码前实跑坐实：伪造钉版
+# 0.99.0 竟报「DRIFT：上游已出 0.17.0，本仓仍钉 0.99.0」并去下载一枚**更旧**的工具链再退 1，即「不等
+# 即漂移」的二元旧形把领先态吞进了漂移臂（方向反了的红）。本臂走快照入口离线跑五断：eq 判绿／lt 判漂（并
+# 验 --verdict-only 未落入装工具链通道）／gt 判领先且**免跑退 0**（本轮缺陷定谳形，另不带旗标跑一次完整
+# 周检以证零下载）／未知旗标装前即拒／--print-pinned 仍从 ci 面取出三段版本号（钉版提取正则的**消费点**
+# 活着——旧脚本里那枚从未被消费的同域死正则由此形不再复现）。全程不触网，故 CI 冒烟网内可跑。
+checks=$((checks + 1))
+uw_ok=0
+d_uw="$(mktemp -d)"
+printf '%s' '{"master":{},"0.15.1":{},"0.16.1":{},"0.17.0":{}}' > "$d_uw/idx_eq.json"
+printf '%s' '{"master":{},"0.17.0":{},"0.99.0":{}}' > "$d_uw/idx_new.json"
+uw_watch="$root/tools/upstream-watch.sh"
+uw_eq="$(UPSTREAM_PINNED_OVERRIDE=0.17.0 UPSTREAM_INDEX_FIXTURE="$d_uw/idx_eq.json" bash "$uw_watch" --verdict-only 2>&1)"; uw_eq_rc=$?
+if [ $uw_eq_rc -ne 0 ] || ! printf '%s' "$uw_eq" | grep -qF -- "PASS：无上游漂移"; then
+  echo "  [FAIL] 周检 eq 态未判绿（实得 RC=$uw_eq_rc／判据=RC 须 0 且输出含「PASS：无上游漂移」，二者其一不合即红）——相等判定被翻成不等、或取版断供（正则消费点坏）皆落此形"; uw_ok=1
+fi
+uw_lt="$(UPSTREAM_PINNED_OVERRIDE=0.17.0 UPSTREAM_INDEX_FIXTURE="$d_uw/idx_new.json" bash "$uw_watch" --verdict-only 2>&1)"; uw_lt_rc=$?
+if [ $uw_lt_rc -ne 1 ] || ! printf '%s' "$uw_lt" | grep -qF -- "DRIFT(上游漂移)"; then
+  echo "  [FAIL] 周检落后态未判漂（实得 RC=$uw_lt_rc／判据=RC 须 1 且输出含漂移标记，二者其一不合即红）——上游真出新版却恒绿即周检整周空转"; uw_ok=1
+elif ! printf '%s' "$uw_lt" | grep -qF -- "--verdict-only 已生效"; then
+  echo "  [FAIL] --verdict-only 未生效（判漂后仍往下走装工具链、复跑语料的通道）"; uw_ok=1
+fi
+uw_gt="$(UPSTREAM_PINNED_OVERRIDE=0.99.0 UPSTREAM_INDEX_FIXTURE="$d_uw/idx_eq.json" bash "$uw_watch" --verdict-only 2>&1)"; uw_gt_rc=$?
+uw_full="$(UPSTREAM_PINNED_OVERRIDE=0.99.0 UPSTREAM_INDEX_FIXTURE="$d_uw/idx_eq.json" bash "$uw_watch" 2>&1)"; uw_full_rc=$?
+if [ $uw_gt_rc -ne 0 ] || ! printf '%s' "$uw_gt" | grep -qF -- "AHEAD(上游钉版领先)"; then
+  echo "  [FAIL] 周检领先态未判「免跑退 0」（实得 RC=$uw_gt_rc／判据=RC 须 0 且输出含领先态标记，二者其一不合即红）——第三态被吞回漂移臂即本轮缺陷复活"; uw_ok=1
+elif [ $uw_full_rc -ne 0 ] || printf '%s' "$uw_full" | grep -qF -- "已装上游工具链"; then
+  echo "  [FAIL] 领先态走完整周检仍在装更旧的工具链（RC=$uw_full_rc 期望 0）——方向判据机器（两版取较旧者）被删即此形红"; uw_ok=1
+fi
+uw_unk="$(bash "$uw_watch" --verdict-onlly 2>&1)"; uw_unk_rc=$?
+if [ $uw_unk_rc -ne 2 ] || ! printf '%s' "$uw_unk" | grep -qF -- "未知旗标"; then
+  echo "  [FAIL] 周检未知旗标未装前即拒（实得 RC=$uw_unk_rc／判据=RC 须 2 且输出含「未知旗标」）——笔误被静默吞即按完整周检白跑一遍"; uw_ok=1
+fi
+uw_pin="$(bash "$uw_watch" --print-pinned 2>&1)"; uw_pin_rc=$?
+if [ $uw_pin_rc -ne 0 ] || ! printf '%s' "$uw_pin" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "  [FAIL] --print-pinned 未从 ci 面取出三段版本号（实得 RC=$uw_pin_rc 输出「${uw_pin}」／判据=RC 须 0 且整行为三段号）——取版正则的消费点漂了，workflow 装工具链那步跟着塌"; uw_ok=1
+fi
+rm -rf "$d_uw"
+if [ $uw_ok -eq 0 ]; then
+  echo "  [ok] 周检判据三态离线真跑：eq 判绿／lt 判漂不触下载／gt 免跑退 0（本轮缺陷形）＋未知旗标即拒＋取版单源活"
+else
+  fails=$((fails + 1))
+fi
+
 if [ "$checks" -ne "$EXPECT_CHECKS" ]; then
   echo "FAIL: 断言条数 $checks ≠ 锚 $EXPECT_CHECKS（削臂/加臂须两处同动并随动 hub 下限）"
   exit 1
@@ -560,4 +605,4 @@ if [ "$fails" -ne 0 ]; then
   echo "FAIL: demos-smoke $fails/$checks 条未过"
   exit 1
 fi
-echo "PASS：${checks} 项断言全过（六枚 demo 全量编译/运行对拍＋纯母语/指定语言/叠加轴行为面真跑＋relocalize 回程孪生工程）"
+echo "PASS：${checks} 项断言全过（六枚 demo 全量编译/运行对拍＋纯母语/指定语言/叠加轴行为面真跑＋relocalize 回程孪生工程＋上游周检判据三态离线真跑）"
