@@ -84,13 +84,15 @@ assert_diag demo/fullwidth/src/main.zz "全角分号"
 # 候选」此前无任何通道验证——探针实锤拆去 main.zig 强制臂后五通道全绿而混写源报错错位成
 # 后端假语法错。两枚手抄话术词形与模板真值由守卫对面四十三胶合（`cli.pure_native_smoke_face`），
 # 方言词形首行复用 demo/hello 现行真值形（漂词即正形不持、本臂现红）。
+# 第 345 轮 D204 同臂扩两形：`[]const u8` 里的类型词 `u8` 须与 `const` 一并点名（改前只报
+# `const`——`prevIsDeclKeyword` 把类型修饰位的 const 误判成声明引导，其右侧英文词形静默过关），
+# 且全母语正形 `[]常数 字节` 须真编译通过（改前产出未声明的 `[]const z_N`、退 1）。
 checks=$((checks + 1))
 d_pn="$(mktemp -d)"
 mkdir -p "$d_pn/src"
-printf '常数 标准库 = 导入("std");\n\nconst 泄漏 = 1;\n' > "$d_pn/src/main.zz"
+printf '常数 标准库 = 导入("std");\n\nconst 泄漏 = 1;\n常数 指针: []const u8 = "x";\n' > "$d_pn/src/main.zz"
 (cd "$d_pn" && "$zzc" check --machine src/main.zz) > "$tmp_out" 2>&1
 rc=$?
-rm -rf "$d_pn"
 if [ $rc -eq 0 ]; then
   echo "  [FAIL] 纯母语反形被放行（混写 const 却退 0）——强制臂被拆即 AGENTS.md 铁律成虚假广告"
   fails=$((fails + 1))
@@ -98,8 +100,25 @@ elif ! grep -qF -- "纯母语" "$tmp_out" || ! grep -qF -- "请改用" "$tmp_out
   echo "  [FAIL] 纯母语反形被拦但话术不全（须含「纯母语」与「请改用」）——AI 无从自修即闭环断"
   sed 's/^/    | /' "$tmp_out"
   fails=$((fails + 1))
+elif ! grep -qF -- '英文 `u8`' "$tmp_out"; then
+  echo "  [FAIL] 混写形「[]const u8」的类型词未点名（输出不含「英文 ·u8·」）——声明名位避让越界到类型修饰位，英文词形静默过关"
+  sed 's/^/    | /' "$tmp_out"
+  fails=$((fails + 1))
 else
-  echo "  [ok] 纯母语反形拦截且给改词话术"
+  echo "  [ok] 纯母语反形拦截且给改词话术（const 与「[]const u8」的类型词皆点名）"
+fi
+# 正形：全母语指针/切片类型词须取词表义并真编过（第 345 轮 D204）
+printf '公开 函数 主函数() !空 {\n    常数 文本: []常数 字节 = "hi";\n    _ = 文本;\n}\n' > "$d_pn/src/main.zz"
+rm -rf "$d_pn/.zzc"
+(cd "$d_pn" && "$zzc" check --machine src/main.zz) > "$tmp_out" 2>&1
+rc=$?
+rm -rf "$d_pn"
+if [ $rc -ne 0 ]; then
+  echo "  [FAIL] 全母语正形「[]常数 字节」被拦（实得 RC=$rc）——类型修饰位的包内类型词被 intern 成未声明 z_N（本轮缺陷形复活）"
+  sed 's/^/    | /' "$tmp_out"
+  fails=$((fails + 1))
+else
+  echo "  [ok] 全母语正形「[]常数 字节」真编译通过"
 fi
 
 # 第八臂（第 308 轮 D167）·指定语言行为面三形互验：选包链（--lang-file → 外部包装载 → 选表）

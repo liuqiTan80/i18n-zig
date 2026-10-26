@@ -74,19 +74,31 @@ fn isDeclVerb(mapped: []const u8) bool {
         std.mem.eql(u8, mapped, "fn");
 }
 
+/// 该 punct 词元是否为类型构造符：`]`（切片 `[]`、不定长 `[*]`/`[*:0]` 的闭合）、`?`（可空）、
+/// `*`（单个指针）。三者右侧的 `常数` 是**类型修饰符**而非声明引导词（第 345 轮 D204 新增判据）。
+fn isTypeCtorPunct(toks: []const lexer.Token, src: []const u8, k: usize) bool {
+    const c = punctChar(toks, src, k) orelse return false;
+    return c == ']' or c == '?' or c == '*';
+}
+
 /// 当前词元是否处于“被声明的名字”位置：前一词元是声明关键字（`常数`/`变量`/`函数`
 /// 的映射值恰为 const/var/fn，或直通 ASCII 写法）。该位置的母语词即便恰与关键字/
 /// 类型别名词全等，也必须按标识符转码而非查表替换，否则产出非法代码（台账 D1）。
+/// 第 345 轮 D204 收窄：该声明动词**自身**贴在类型构造符（`]`/`?`/`*`）右侧时，它是
+/// 类型修饰符而非声明引导——`[]const T`/`[*:0]const T`/`[*]const T`/`?[*:0]const T`/
+/// `*const T` 的 `T` 不在此避让之列。改前真值：这里一律判声明名位，包内类型词被整体
+/// intern 成未声明的 `z_N`（`常数 甲: []常数 字节` 产出 `const z_1: []const z_2`），且同形
+/// 写英文时纯度门（`findEnglishWordForms` 共用本判据）也放过 `u8`——一处判据、两道失守。
 fn prevIsDeclKeyword(lang: Pack, src: []const u8, toks: []const lexer.Token, i: usize) bool {
     if (i == 0) return false;
     const prev = toks[i - 1];
     const pt = prev.text(src);
-    if (prev.kind == .nonascii_word) {
-        if (lang.keywords.get(pt)) |mapped| return isDeclVerb(mapped);
-        return false;
-    }
-    if (prev.kind == .ascii_word) return isDeclVerb(pt);
-    return false;
+    const verb = if (prev.kind == .nonascii_word)
+        (if (lang.keywords.get(pt)) |mapped| isDeclVerb(mapped) else false)
+    else if (prev.kind == .ascii_word) isDeclVerb(pt) else false;
+    if (!verb) return false;
+    if (i >= 2 and isTypeCtorPunct(toks, src, i - 2)) return false; // 类型修饰位，非声明引导
+    return true;
 }
 
 /// 紧邻前词元是否为 punct `:`（类型标注位）：`名字: 类型` 的类型侧仍应取词表义，
@@ -948,6 +960,35 @@ test "纯母语强制：英文关键字/类型词混入方言源被坐实（先�
     try std.testing.expectEqualStrings("fn", v3.items[0].word);
     try std.testing.expectEqualStrings("@embedFile", v3.items[1].word);
     try std.testing.expectEqualStrings("嵌入文件", v3.items[1].native);
+}
+
+test "纯度门：`[]const u8`/`[*:0]const u8` 同位双报——const 与 u8 皆英文词形（第 345 轮 D204 收口）" {
+    // 与上一同族测块不同轴：这里钉的是**类型修饰位**——改前 `prevIsDeclKeyword` 把 `[]const`
+    // 的 `const` 误判为声明引导，于是其右侧的 `u8` 走了声明名位豁免、英文词形静默过关。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    var v1 = try findEnglishWordForms(gpa, lang, "常数 甲: []const u8 = \"hi\";\n");
+    defer v1.deinit();
+    try std.testing.expectEqual(@as(usize, 2), v1.items.len);
+    try std.testing.expectEqualStrings("const", v1.items[0].word);
+    try std.testing.expectEqualStrings("u8", v1.items[1].word);
+    // 母语建议形多词形以 `/` 连接（包内简繁同值），不断完整串、只钉必须含简体形
+    try std.testing.expect(std.mem.indexOf(u8, v1.items[1].native, "字节") != null);
+
+    var v2 = try findEnglishWordForms(gpa, lang, "常数 甲: [*:0]const u8 = \"hi\";\n");
+    defer v2.deinit();
+    try std.testing.expectEqual(@as(usize, 2), v2.items.len);
+    try std.testing.expectEqualStrings("u8", v2.items[1].word);
+
+    // 全母语形零违例（豁免面未扩到误伤）
+    var v3 = try findEnglishWordForms(gpa, lang, "常数 甲: []常数 字节 = \"hi\";\n");
+    defer v3.deinit();
+    try std.testing.expectEqual(@as(usize, 0), v3.items.len);
 }
 
 test "翻译 + 纯度门：最大/最小 方言词 ↔ 内建 @max/@min（第 144 轮·承 143 删死路径的活替代）" {
@@ -2011,6 +2052,117 @@ test "prevIsDeclKeyword：D1 避让查链两形——非 ASCII keywords-only（�
         defer gpa.free(toks);
         try std.testing.expect(!prevIsDeclKeyword(lang2, s, toks, 1));
     }
+}
+
+test "prevIsDeclKeyword：类型修饰位豁免三 punct（`]`/`?`/`*`）+ 真声明位与 i<2 边界不误伤（第 345 轮 D204）" {
+    // 缺陷面：`[]const T`/`[*:0]const T`/`[*]const T`/`?[*:0]const T`/`*const T` 里的 `const` 贴在
+    // 类型构造符右侧、是修饰符而非声明引导；旧判据只看前一 token 是否 const/var/fn，于是
+    // 其右侧的包内类型词被判成声明名位、整体 intern（生成码 `[]const z_2` 未声明）。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    const T = struct {
+        fn idx(toks: []const lexer.Token, src: []const u8, word: []const u8) usize {
+            for (toks, 0..) |t, j| {
+                if (std.mem.eql(u8, t.text(src), word)) return j;
+            }
+            unreachable; // 测内固定源，词元必在
+        }
+    };
+
+    // ---- 方言正形五式：修饰位右侧的 `字节` 皆不再是声明名（真则本测直接坐实回归）----
+    for ([_][]const u8{
+        "常数 甲: []常数 字节 = \"hi\";",
+        "常数 甲: [*:0]常数 字节 = \"hi\";",
+        "常数 甲: [*]常数 字节 = 乙;",
+        "常数 甲: ?[*:0]常数 字节 = 空值;",
+        "常数 甲: *常数 字节 = &乙;",
+    }) |s| {
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!prevIsDeclKeyword(lang, s, toks, T.idx(toks, s, "字节")));
+    }
+    // ---- ASCII 直通同位（纯度门走这条）：`[]const u8` 的 `u8` 不再被当声明名 ----
+    {
+        const s = "const x: []const u8 = \"hi\";";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(!prevIsDeclKeyword(lang, s, toks, T.idx(toks, s, "u8")));
+    }
+    // ---- 反形：真声明引导位仍须避让（新增豁免不得失守）----
+    for ([_][]const u8{
+        "常数 字节 = 1;", // 句首声明动词——i<2 下溢门即此形（旧形回归）
+        "x; 常数 字节 = 1;", // 动词前是 punct `;`
+        "{ 常数 字节 = 1; }", // 动词前是 punct `{`
+        "公开 变量 字节: 整数 = 1;", // 动词前另有修饰词（非 punct）
+    }) |s| {
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expect(prevIsDeclKeyword(lang, s, toks, T.idx(toks, s, "字节")));
+    }
+    // ---- 集恰值：`]`/`?`/`*` 三真、其余 punct 与非 punct 皆假（新增核直调）----
+    {
+        const s = "] ? * ) , ;";
+        const toks = try lexer.scan(gpa, s);
+        defer gpa.free(toks);
+        try std.testing.expectEqual(@as(usize, 6), toks.len);
+        try std.testing.expect(isTypeCtorPunct(toks, s, 0));
+        try std.testing.expect(isTypeCtorPunct(toks, s, 1));
+        try std.testing.expect(isTypeCtorPunct(toks, s, 2));
+        try std.testing.expect(!isTypeCtorPunct(toks, s, 3));
+        try std.testing.expect(!isTypeCtorPunct(toks, s, 4));
+        try std.testing.expect(!isTypeCtorPunct(toks, s, 5));
+        try std.testing.expect(!isTypeCtorPunct(toks, s, 99)); // 越界门
+        const s2 = "字节 * 甲"; // 词元位（非 punct）即假
+        const toks2 = try lexer.scan(gpa, s2);
+        defer gpa.free(toks2);
+        try std.testing.expect(!isTypeCtorPunct(toks2, s2, T.idx(toks2, s2, "甲")));
+    }
+}
+
+test "translate：类型修饰位后的包内类型词取词表义（五形不再 intern），真声明名位照旧避让（第 345 轮 D204）" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const src =
+        \\公开 函数 主函数() !空 {
+        \\    常数 文本: []常数 字节 = "hi";
+        \\    常数 哨兵: [*:0]常数 字节 = "hi";
+        \\    常数 元素: [*]常数 字节 = &[_]字节{ 1 };
+        \\    常数 可空: ?[*:0]常数 字节 = 空值;
+        \\    变量 单: 字节 = 1;
+        \\    常数 指向: *常数 字节 = &单;
+        \\    _ = 文本;
+        \\}
+        \\
+    ;
+    const out = (try translate(gpa, src, lang, &table)).zig_str;
+    for ([_][]const u8{ "[]const u8", "[*:0]const u8", "[*]const u8", "?[*:0]const u8", "*const u8" }) |want| {
+        if (std.mem.indexOf(u8, out, want) == null) {
+            std.debug.print("生成码缺形 {s}：\n{s}\n", .{ want, out });
+            return error.TestExpectedEqual;
+        }
+    }
+    // 反向铁证：`字节` 一旦被写进符号表即本缺陷复活——五形的类型侧不得出现 intern 名 `z_N`
+    for ([_][]const u8{ "[]const z_", "[*:0]const z_", "[*]const z_", "?[*:0]const z_", "*const z_" }) |bad| {
+        try std.testing.expect(std.mem.indexOf(u8, out, bad) == null);
+    }
+
+    // 真声明名位不受累：名字恰为包内类型词时照旧避让 intern（台账 D1 哲学不变）
+    var table2 = Mangle.init(gpa);
+    defer table2.deinit();
+    const res2 = try translate(gpa, "常数 字节 = 1;\n", lang, &table2);
+    try std.testing.expectEqualStrings("const z_1 = 1;\n", res2.zig_str);
 }
 
 test "mappedIs：词元映射值目标词全等——非 ASCII keywords-only / ASCII 全等 / 非词类拒（D42·D47 共享核，第 180 轮）" {
