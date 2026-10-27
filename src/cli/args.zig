@@ -1673,8 +1673,12 @@ pub fn zigDriftNote(major: u32, minor: u32, buf: []u8) ?[]const u8 {
 pub const tl_zig: []const u8 = "zig";
 /// 深检/产物臂子命令词（check ① 臂与 cmdBuild 非 test 臂）。
 pub const tl_build_exe: []const u8 = "build-exe";
-/// 浅检臂子命令词（check ② 臂：不含 main 的模块只解名字）。
+/// 浅检臂子命令词（check ② 臂：不含 main 的模块先解名字与语法）。
 pub const tl_ast_check: []const u8 = "ast-check";
+/// 深检探针臂子命令词（第 347 轮 D206 check ③ 臂：`ast-check` **从不做类型检查**，无 main 的
+/// 模块光靠它会把 `字节 = 300`、未引用函数体里的类型错静默放过；补一路 `build-lib` 才是
+/// 完整语义分析，且不要求根文件含 main（`build-exe` 对库模块会误报「无 member named 'main'」）。
+pub const tl_build_lib: []const u8 = "build-lib";
 /// `zzc test` 臂子命令词（cmdBuild 的 .test_ 分支）。
 pub const tl_test: []const u8 = "test";
 /// eject 探纹/验建两臂子命令词（probeFingerprint 与 verifyBuild）。
@@ -1694,6 +1698,7 @@ pub const tl_emit_bin_fmt: []const u8 = zzc.emit_bin_prefix ++ "{s}";
 pub const tl_face = [_]zzc.BuildFace{
     .{ .needle = "&.{ cli.tl_zig, cli.tl_build_exe, u.gen_rel, cli.tl_no_emit_bin }", .occ = 1, .why = "check 深检臂：含 main 的根走 build-exe 传递性语义深检且 -fno-emit-bin 零残留，漂即 check 入口断裂" },
     .{ .needle = "&.{ cli.tl_zig, cli.tl_ast_check, u.gen_rel }", .occ = 1, .why = "check 浅检臂：不含 main 的模块只 ast-check，漂即库模块检查断裂" },
+    .{ .needle = "&.{ cli.tl_zig, cli.tl_build_lib, probe_rel, cli.tl_no_emit_bin }", .occ = 1, .why = "check 深检探针臂（第 347 轮 D206）：无 main 的模块除 ast-check 外再走一次 build-lib 才做类型检查，删臂即回到零类型检查的假绿通道" },
     .{ .needle = "try argv.append(gpa_, cli.tl_zig);", .occ = 1, .why = "cmdBuild spawn 首词：run/build/test 三入口共用，漂即三入口全断" },
     .{ .needle = "if (mode == .test_) cli.tl_test else cli.tl_build_exe", .occ = 1, .why = "cmdBuild 模式分支词：test 与 build-exe 两臂同源，漂即对应入口断" },
     .{ .needle = "cli.tl_emit_bin_fmt, .{bin_full}", .occ = 1, .why = "cmdBuild 发射旗标模板：前缀由 zzc_paths 派生，漂即产物落点失控" },
@@ -1706,6 +1711,7 @@ test "224 T0：工具链 spawn argv 词族单一真值＋委派形双向钉（�
     try std.testing.expectEqualStrings("zig", tl_zig);
     try std.testing.expectEqualStrings("build-exe", tl_build_exe);
     try std.testing.expectEqualStrings("ast-check", tl_ast_check);
+    try std.testing.expectEqualStrings("build-lib", tl_build_lib);
     try std.testing.expectEqualStrings("test", tl_test);
     try std.testing.expectEqualStrings("build", tl_build);
     try std.testing.expectEqualStrings("version", tl_version);
@@ -1713,7 +1719,8 @@ test "224 T0：工具链 spawn argv 词族单一真值＋委派形双向钉（�
     try std.testing.expectEqualStrings("-femit-bin=", zzc.emit_bin_prefix);
     try std.testing.expectEqualStrings("-femit-bin={s}", tl_emit_bin_fmt);
     // A2：对面十六清单自身钉（成员数与对面十五形制同骨：一面对多针）。
-    try std.testing.expectEqual(@as(usize, 7), tl_face.len);
+    // 第 347 轮 D206：七→八（新增 check ③ 深检探针臂的委派形针）。
+    try std.testing.expectEqual(@as(usize, 8), tl_face.len);
     // A3：委派形双向钉——@embedFile 直读 src/main.zig（真 source dependency：改 main.zig
     // 必重编本测），逐 needle 命中且频次全等：消费侧改回手抄字面量（委派形消失）或
     // hub 改名而接线不随动，皆在测试图直接红，不必等守卫步。
@@ -3471,11 +3478,11 @@ test "第 322 轮 T0 面针名实相符元判据＋面表清单基数钉（D181�
 // `count` 精确、守卫步却宽松，**两套语义并存**。本轮统一为 `[_]zzc.BuildFace`＋`occ`，豁免撤销。
 test "第 324 轮 T0 .count 收编 occ：三表值钉＋形制回流反形（D183）" {
     // A1 三表基数与收紧值钉（针文本＋occ 双钉，防表序调整张冠李戴）。
-    try std.testing.expectEqual(@as(usize, 7), tl_face.len);
+    try std.testing.expectEqual(@as(usize, 8), tl_face.len); // 第 347 轮 D206：七→八（check ③ 深检探针臂）
     try std.testing.expectEqual(@as(usize, 2), exit_code_face.len);
     try std.testing.expectEqual(@as(usize, 1), version_main_face.len);
-    try std.testing.expectEqualStrings("&.{ cli.tl_zig, cli.tl_build }", tl_face[5].needle);
-    try std.testing.expectEqual(@as(usize, 2), tl_face[5].occ); // eject 探纹/验建两址
+    try std.testing.expectEqualStrings("&.{ cli.tl_zig, cli.tl_build }", tl_face[6].needle);
+    try std.testing.expectEqual(@as(usize, 2), tl_face[6].occ); // eject 探纹/验建两址
     try std.testing.expectEqualStrings("std.process.exit(cli.usage_exit_code);", exit_code_face[0].needle);
     // D184 三闸各一处（9→12）；D185 前置闸扩为四分类分派（12→15）；D186 未知子命令分支改直退（15→16）。
     // D187 叠加层点名分支再增一处 usage 退出臂（16→17）。
@@ -3491,7 +3498,7 @@ test "第 324 轮 T0 .count 收编 occ：三表值钉＋形制回流反形（D18
     const legacy_field = ".count" ++ " = ";
     try std.testing.expectEqual(@as(usize, 0), countOccurrences(self_src, legacy_field));
     // A3 反向：三表形制确为 `[_]zzc.BuildFace`（非匿名 tuple）——匿名 tuple 无法被守卫按字段取 occ。
-    try std.testing.expectEqual(@as(usize, 7 * @sizeOf(zzc.BuildFace)), @sizeOf(@TypeOf(tl_face)));
+    try std.testing.expectEqual(@as(usize, 8 * @sizeOf(zzc.BuildFace)), @sizeOf(@TypeOf(tl_face))); // 第 347 轮 D206：7→8（新增 check ③ 探针臂委派形针）
 }
 
 // 第 325 轮 T0（D184）：旗标形制三闸判据。活体真值（改前）：`check --lang` 尾随缺值 RC=0 静默按默认

@@ -173,6 +173,8 @@ fn auditAllFaces() void {
     seen_paths += 1;
     auditTable("paths.entry_root_face", paths.entry_root_face, &a); // 第 337 轮 D196：工程根解析委派四针
     seen_paths += 1;
+    auditTable("paths.probe_face", paths.probe_face, &a); // 第 347 轮 D206：深检探针臂路径名委派一针
+    seen_paths += 1;
     auditTable("paths.license_face", paths.license_face, &a); // 第 338 轮 D197：许可证正文四针（署名派生 + MIT 三句）
     seen_paths += 1;
     auditTable("paths.license_readme_face", paths.license_readme_face, &a); // 第 338 轮 D197：README 链接形一针
@@ -261,7 +263,7 @@ fn auditAllFaces() void {
     // 豁免登记撤销、全 20 表一律入闸——此前 matcher 侧 `checkFace` 只读 `occ` 并回落 1，声明「九处/两处」
     // 的针在真跑对账里只被要求 1 枚（测试图按 count 精确、守卫步却宽松，两套语义）。
     expectTableCount("src/cli/args.zig", 25, seen_cli);
-    expectTableCount("src/zzc_paths.zig", 31, seen_paths); // 第 346 轮 D205：28→31（教程逐块闸三张面）
+    expectTableCount("src/zzc_paths.zig", 32, seen_paths); // 第 347 轮 D206：31→32（深检探针臂 probe_face）
     expectTableCount("src/lsp/server.zig", 12, seen_lsp_srv);
     expectTableCount("src/editor/lsp_config.zig", 5, seen_lcfg);
     expectTableCount("src/editor/lang_identity.zig", 5, seen_lid);
@@ -595,6 +597,11 @@ pub fn main(init: std.process.Init) !void {
     //   `pickEntry` 只认 `.zz`，其余实参被静默无视并回落缺省入口：`zzc check demo/hello` 报的是
     //   「目录 `src` 下未找到」——报错路径与用户给的路径毫不相干（复用本面已读的 main_txt，零新增 I/O）。
     checkFace(main_path, &paths.entry_root_face, main_txt);
+
+    // —— 对面十六第四清单：`src/main.zig` 的深检探针臂路径名委派形（第 347 轮 D206）。
+    //   探针副本名须由 hub 的 `probe_file_prefix` 拼出、落 `.zzc/` 树内方能被 isInternalPath 隐藏其
+    //   自身形制错；消费侧改回手抄 `.zzc_probe` 即本面红（复用本面已读的 main_txt，零新增 I/O）。
+    checkFace(main_path, &paths.probe_face, main_txt);
 
     // —— 对面十七：`package.json` 的 problemMatcher pattern 字段映射五枚（第 225 轮 D93）。
     //   「file/location/column/code/message 各取第几捕获组」与机读行段序（line_fmt 占位符序）同骨，
@@ -1271,7 +1278,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     std.debug.print(
-        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族十一/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/十四 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族二十三 枚 needle 在客户端面命中、消息本体键族十三 枚 needle 在客户端面命中、结果字段族廿七 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族七 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族十四 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、ps1 客户端节 Contains 针族{s} 在 ps1 与客户端两面逐枚对账命中、冒烟脚本 {s} 的帧协议词族{d} 枚与 capability 断言族{d} 枚逐枚对账命中、客户端 e2e {s} 的断言条数锚（{d} 条）与 capability 键名族{d} 枚命中、恒真谓词 {d} 处（上限 {d}）、客户端日志文案族写侧{d} 枚与断言侧{d} 枚双侧逐枚对账命中、provider 注册核验族{d} 枚 needle 在客户端 e2e 面命中、kind 值域断言族{d} 枚 needle 在客户端 e2e 面命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源、对照表 {s} 与内置默认包 {s} 双向零漂（aliases 域抽出 {d} 枚 ≥ 独立下限 {d}／keywords 域抽出 {d} 枚 ≥ 包内 {d} 枚，ghost/wrong/hidden 皆 0）",
+        "OK: {s}／{s} 与机读契约同源，{s} 产出的 CLI exe 名 =「{s}」（正则同骨、示例命令 =「{s}」），且 {s} 客户端图例与 LSP 语义图例同源、语言标识族十一/一/一 枚 needle 在清单／客户端／示例三面皆命中、LSP 客户端接线族三/十四 枚 needle 在清单／客户端两面皆命中、协议帧族五 枚 needle 在帧客户端面命中、方法名族二十三 枚 needle 在客户端面命中、消息本体键族十三 枚 needle 在客户端面命中、结果字段族廿七 枚 needle 在客户端面命中、严重度码值族四 枚 needle 在客户端映射面命中、错误码族一 枚 needle 在客户端应答面命中、工具链词族八 枚委派形 needle 在 {s} 消费面命中、pattern 字段映射族五 枚 needle 在清单面对账命中、ps1 命令词族十七 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 码点文案断言族廿一 枚 needle 在同面对账命中、注释标记族四/二 枚 needle 在 {s} 声明面与 {s} 生成物面各自对账命中、LSP capability 协商形串族十四 枚 needle 在 e2e 基线脚本 {s} 面命中、ps1 内嵌 LSP 帧协议词族十 枚 needle 在同面逐字节对账命中、ps1 客户端节 Contains 针族{s} 在 ps1 与客户端两面逐枚对账命中、冒烟脚本 {s} 的帧协议词族{d} 枚与 capability 断言族{d} 枚逐枚对账命中、客户端 e2e {s} 的断言条数锚（{d} 条）与 capability 键名族{d} 枚命中、恒真谓词 {d} 处（上限 {d}）、客户端日志文案族写侧{d} 枚与断言侧{d} 枚双侧逐枚对账命中、provider 注册核验族{d} 枚 needle 在客户端 e2e 面命中、kind 值域断言族{d} 枚 needle 在客户端 e2e 面命中、build.zig 内置默认包 addFileArg 路径一枚 needle 与 hub 同源、对照表 {s} 与内置默认包 {s} 双向零漂（aliases 域抽出 {d} 枚 ≥ 独立下限 {d}／keywords 域抽出 {d} 枚 ≥ 包内 {d} 枚，ghost/wrong/hidden 皆 0）",
         .{ pkg_path, tasks_path, build_path, paths.prog_name, mcon.tasks_command, ext_path, main_path, ps1_path, langconf_path, tm_path, ps1_path, pin_word, smoke_path, @as(usize, lsp_srv.smoke_frame_face.len), @as(usize, lsp_srv.smoke_cap_face.len), esm_path, cli_hub.smoke_js_floor, @as(usize, lsp_srv.smoke_js_cap_face.len), taut_n, cli_hub.js_tautology_ceiling, @as(usize, lcfg.log_writer_face.len), @as(usize, lcfg.log_assert_face.len), @as(usize, lsp_srv.smoke_js_provider_face.len), @as(usize, lsp_srv.kinds_smoke_face.len), kw_doc_path, zh_pack_path, aud.alias_rows, pack_hub.kwtable_alias_floor, aud.kw_rows, zh_pack.keywords.count() },
     );
     // 书稿与 README 回执另式：单次 format call 逾 32 枚实参即 compileError，故拆续式接力同一行。

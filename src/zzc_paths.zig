@@ -169,6 +169,12 @@ pub const symbols_pack_head: []const u8 = "# @pack ";
 /// 旧工程遗留的该路径仍不得外泄为诊断）。
 pub const check_root: []const u8 = root ++ "/tmp_check_root";
 
+/// 深检探针副本的**文件名前缀**（第 347 轮 D206）：探针副本与被检模块同目录落盘（相对 `@import`
+/// 只在同目录下才能解析），名字由本前缀拼出。前缀含 `.` 开头的 `root` 段无关——真正把它归入内部
+/// 路径的是其目录段 `.zzc/`：`diag.isInternalPath` 既有判据按 `root` 子串命中，故探针**自身**形制
+/// 错不会以英文噪声外泄给用户，而真缺陷仍按原行列经回译报出（只增尾行、不插中行）。
+pub const probe_file_prefix: []const u8 = ".zzc_probe";
+
 /// zig 产物发射旗标前缀（第 224 轮 D92：`cmdBuild` 的 `-femit-bin={s}` argv 拼装模板由它
 /// 派生；旧完整旗标派生形随 D129 改 `-fno-emit-bin` 删除）。
 pub const emit_bin_prefix: []const u8 = "-femit-bin=";
@@ -741,6 +747,14 @@ pub const entry_root_face = [_]BuildFace{
     .{ .needle = "const pick = try pickEntryOrRoot(zig_args);", .why = "cmdBuild/run/test 的入口解析同走一支——各走一套则目录形只修一半（第 337 轮 D196）" },
     .{ .needle = "if (file_io.pathExists(io_, as_root)) return .{ .entry = as_root", .why = "工程根形候选的判盘留在 I/O 层、cli 侧只纯拼串——把存在性判断塞进 cli 即纯函数面失守（第 337 轮 D196）" },
     .{ .needle = "if (file_io.pathExists(io_, as_src)) return .{ .entry = as_src", .why = "「实参即源目录」形候选须在工程根形之后判——e2e 冒烟两例用 `zzc check src`，判序颠倒或摘臂即该形转红（第 337 轮 D196）" },
+};
+
+/// 第 347 轮 D206：`zzc check` 深检探针臂（对 `src/main.zig` 消费面）的路径名单源面。
+/// 存在动因：探针副本文件名系 `cmdCheck` ③ 臂据 hub 的 `probe_file_prefix` 拼出——它落在 `.zzc/` 树内
+/// 才能被 `diag.isInternalPath` 归为内部路径（探针自身形制错不外泄英文噪声）。若消费侧改回手抄
+/// `.zzc_probe` 字面量，本 hub 改名而 main 静默用旧名、两文件不同址——副本落出树外即内部路径隐藏失效。
+pub const probe_face = [_]BuildFace{
+    .{ .needle = "zzc.probe_file_prefix", .occ = 1, .why = "探针副本路径名须由 hub 的 probe_file_prefix 派生——手抄即改名不同址、`.zzc/` 内部路径隐藏失效（第 347 轮 D206）" },
 };
 
 // —— 第 338 轮 D197：许可证面（LICENSE 正文 + 三处声明面）——
@@ -1808,7 +1822,7 @@ pub fn countFaceDecls(src: []const u8) usize {
 test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     const specs = [_]struct { path: []const u8, src: []const u8, n: usize }{
         .{ .path = "cli/args.zig", .src = @embedFile("cli/args.zig"), .n = 25 },
-        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 31 }, // 第 346 轮 D205：28→31（教程逐块闸三张面：文档路径/块数锚与标记/build 依赖）
+        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 32 }, // 第 347 轮 D206：31→32（深检探针臂新增 probe_face）
         .{ .path = "lsp/server.zig", .src = @embedFile("lsp/server.zig"), .n = 12 },
         .{ .path = "editor/lsp_config.zig", .src = @embedFile("editor/lsp_config.zig"), .n = 5 },
         .{ .path = "editor/lang_identity.zig", .src = @embedFile("editor/lang_identity.zig"), .n = 5 },
@@ -1826,10 +1840,11 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     }
     // 第 341 轮 D200：自巨型 hub 下沉的**实现模块**不得持面表——面表须与其词汇同源，否则「谁持针」
     // 失去单源（matcher 侧的 `checkFace` 只能按文件读文本）。下沉模块在此逐枚登记为零枚：长出第一张
-    // 未审面表即本测红，而不需同步改 matcher 的分项清单（两边仍共 9 hub／85 表）。
+    // 未审面表即本测红，而不需同步改 matcher 的分项清单（两边仍共 9 hub／86 表）。
     const split_impls = [_]struct { path: []const u8, src: []const u8 }{
         .{ .path = "cli/embed_scan.zig", .src = @embedFile("cli/embed_scan.zig") },
         .{ .path = "lsp/server_query.zig", .src = @embedFile("lsp/server_query.zig") },
+        .{ .path = "check_probe.zig", .src = @embedFile("check_probe.zig") }, // 第 347 轮 D206：深检探针实现模块须持零面表（其针归位 cli.tl_face＋zzc_paths.probe_face）
     };
     for (split_impls) |im| {
         const got = countFaceDecls(im.src);
@@ -1837,7 +1852,7 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
         try std.testing.expectEqual(@as(usize, 0), got);
     }
     // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+22+12+5+5+1+4+1+1）独立手抄对拍。
-    try std.testing.expectEqual(@as(usize, 85), total); // 第 346 轮 D205：82→85（zzc_paths 增教程逐块闸三张面）
+    try std.testing.expectEqual(@as(usize, 86), total); // 第 347 轮 D206：85→86（zzc_paths 增深检探针臂 probe_face）
 }
 
 // 第 340 轮 T0（D199）：量化收益面。上下限与语料形制皆独立手抄值钉（改 hub 必同动本测，否则
@@ -2178,6 +2193,18 @@ test "第 337 轮 T0 工程根解析面：基数四针与委派形针面（D196�
         // 不取 `src_dir` 短名——候选变量名 `as_src` 里就含 "src"，短名判据会假红）。
         try std.testing.expect(std.mem.indexOf(u8, f.needle, default_entry) == null);
     }
+}
+
+// 第 347 轮 T0（D206）：深检探针路径名委派面。单枚针守 main ③ 臂据 hub 单源拼探针副本名——
+// 针内必含 `probe_file_prefix` 名（即本 hub 常量名），且 `probe_file_prefix` 值钉不得漂。
+test "第 347 轮 T0 深检探针面：基数单针＋值钉＋委派名形（D206）" {
+    try std.testing.expectEqual(@as(usize, 1), probe_face.len);
+    try std.testing.expectEqual(@as(usize, 1), probe_face[0].occ);
+    try std.testing.expect(probe_face[0].why.len > 0);
+    // 针须委派本 hub 常量名（而非手抄 `.zzc_probe` 值）——改 hub 名而针不随动即本测红。
+    try std.testing.expectEqualStrings("zzc.probe_file_prefix", probe_face[0].needle);
+    // 值钉：探针文件前缀恰为 `.zzc_probe`（含 `.` 前缀与 `root` 无关，内部路径归类靠目录段 `.zzc/`）。
+    try std.testing.expectEqualStrings(".zzc_probe", probe_file_prefix);
 }
 
 // 第 334 轮 T0（D193）：CI 镜像面。GitHub 仓加建后本仓出现**第二个** CI 面，两面各持一份「该跑哪

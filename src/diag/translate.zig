@@ -291,10 +291,30 @@ pub fn machineLines(gpa: std.mem.Allocator, text: []const u8) ![]const u8 {
 
 const NativeLoc = struct { path: []const u8, line: usize, col: usize, snippet: []const u8 };
 
+/// 报错路径与某单元 gen 路径是否相配：常规 `pathsMatch`，或（第 347 轮 D206）深检探针副本——
+/// 探针副本 `<dir>/.zzc_probe<stem>.zig` 系源 gen 文件的**同目录忠实副本**（仅在尾部追加一枚
+/// comptime 探针、原行号分毫不动），故去探针前缀后的 basename 与单元 gen basename 相等、目录段亦相配
+/// 时，其报错应映射回该源单元——既补回 `-->` 方言定位，又与 build-exe 的同错按方言位置去重（否则
+/// 同一错既重复报又丢位置行，退化为无定位噪声）。仅命中探针前缀，常规文件走原 pathsMatch 不变。
+fn genPathMatch(err_path: []const u8, gen_path: []const u8) bool {
+    if (pathsMatch(err_path, gen_path)) return true;
+    const eb = std.fs.path.basename(err_path);
+    if (eb.len <= zzc.probe_file_prefix.len) return false;
+    if (!std.mem.startsWith(u8, eb, zzc.probe_file_prefix)) return false;
+    if (!std.mem.eql(u8, eb[zzc.probe_file_prefix.len..], std.fs.path.basename(gen_path))) return false;
+    const ed = std.fs.path.dirname(err_path) orelse "";
+    const gd = std.fs.path.dirname(gen_path) orelse "";
+    // 探针副本恒与源单元**同目录**落盘（生成侧 `probe_dir = dirname(gen_rel)`）；任一方无目录段
+    // 即非「同目录忠实副本」关系，不配——此闸兼挡 `pathsMatch` 对空 needle 恒真的宽松性：否则
+    // 裸探针名 `.zzc_probe.zig`（去前缀余 `.zig`）会误吞 `.zig` 结尾的任意单元而假配（347 轮测反形四）。
+    if (ed.len == 0 or gd.len == 0) return false;
+    return std.mem.eql(u8, ed, gd) or pathsMatch(ed, gd);
+}
+
 /// 若 file 命中某方言单元，返回其方言路径/行列/源码片段；否则 null（如 stdlib 帧）。
 fn nativeLoc(units: []const Unit, file_path: []const u8, line: usize, col: usize) ?NativeLoc {
     for (units) |u| {
-        if (!pathsMatch(file_path, u.gen_path)) continue;
+        if (!genPathMatch(file_path, u.gen_path)) continue;
         // 行号在两端一致（逐字节保留换行），但行内字节宽度不同，
         // 必须先在生成源码中定位字节偏移，再经 ColumnMap 反查方言偏移。
         var goff: usize = 0;
@@ -1988,6 +2008,51 @@ test "去重 seen：跨两次 zig 调用（同位置同消息）仅输出一次�
     const out_c = try translateStderr(gpa, lang, table, &units, c, &seen, null);
     defer gpa.free(out_c);
     try std.testing.expect(out_c.len > 0);
+}
+
+test "第 347 轮 genPathMatch：探针副本映射回源单元、跨目录/异名/非探针不配（D206）" {
+    // 正形：同目录、去探针前缀 basename 等单元 gen basename → 相配（补定位 + 去重依赖此判据）。
+    try std.testing.expect(genPathMatch(".zzc/gen/src/" ++ zzc.probe_file_prefix ++ "main.zig", ".zzc/gen/src/main.zig"));
+    // 带 ./ 前缀亦配（dirname 经 pathsMatch 归一）。
+    try std.testing.expect(genPathMatch("./.zzc/gen/src/" ++ zzc.probe_file_prefix ++ "lib.zig", ".zzc/gen/src/lib.zig"));
+    // 反形一：跨目录同名串位不得配（防 a/.zzc_probe_main 误映射到 b/main）。
+    try std.testing.expect(!genPathMatch(".zzc/gen/a/" ++ zzc.probe_file_prefix ++ "main.zig", ".zzc/gen/b/main.zig"));
+    // 反形二：去前缀后异名不得配。
+    try std.testing.expect(!genPathMatch(".zzc/gen/src/" ++ zzc.probe_file_prefix ++ "lib.zig", ".zzc/gen/src/main.zig"));
+    // 反形三：非探针前缀的普通文件不走本支（仍由 pathsMatch 常规判，此处不相等即不配）。
+    try std.testing.expect(!genPathMatch(".zzc/gen/src/other.zig", ".zzc/gen/src/main.zig"));
+    // 反形四：basename 恰等于探针前缀（无 stem）不得配。
+    try std.testing.expect(!genPathMatch(zzc.probe_file_prefix ++ ".zig", ".zzc/gen/src/.zig"));
+}
+
+test "第 347 轮 nativeLoc 接线探针副本回译（D206 盲区堵口）——摘 genPathMatch 接线即红" {
+    // 盲区坐实：上方 genPathMatch 纯函数测只锁判据本体，锁不到 nativeLoc 是否**用它**；若接线
+    // 漂回裸 pathsMatch，探针副本错误丢 `-->` 定位、demo/errors 重复报（同一错既报 2 次又无位置），
+    // 而 demos-smoke 只验错误串在场、不验条数/定位 → 全通道零信号（本轮探针实锤）。本测直喂探针
+    // 副本路径给 nativeLoc，钉「命中且回译到方言单元」，把代理判据升级为接线判据。
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const gpa = arena.allocator();
+    var lang = try Pack.parse(gpa, zh_pack);
+    defer lang.deinit();
+    var table = Mangle.init(gpa);
+    defer table.deinit();
+    const tr = @import("../transpiler/translate.zig");
+    const src = "常数 甲 = 1;\n";
+    const res = try tr.translate(gpa, src, lang, &table);
+    const units = [_]Unit{.{
+        .native_path = "src/main.zz",
+        .gen_path = ".zzc/gen/src/main.zig",
+        .gen_src = res.zig_str,
+        .nat_src = src,
+        .map = res.map,
+    }};
+    // 正形：同目录、前缀 + gen basename 的探针副本路径 → 必命中且回译到方言单元。
+    const probe_path = ".zzc/gen/src/" ++ zzc.probe_file_prefix ++ "main.zig";
+    const L = nativeLoc(&units, probe_path, 1, 1) orelse return error.ProbeNotMapped;
+    try std.testing.expectEqualStrings("src/main.zz", L.path);
+    // 反形：异目录探针副本不得命中（防越界串位映回他单元）。
+    try std.testing.expect(nativeLoc(&units, ".zzc/gen/other/" ++ zzc.probe_file_prefix ++ "main.zig", 1, 1) == null);
 }
 
 test "裸 CLI 诊断回译：unrecognized parameter 不泄漏英文、保留非法参数名" {

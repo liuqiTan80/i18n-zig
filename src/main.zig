@@ -37,6 +37,7 @@ const zzc = @import("zzc_paths.zig"); // 第 200 轮 D68：内部状态/产物�
 const mcon = @import("machine_contract.zig"); // 第 203 轮 D71：机读出口契约族（旗标名/子命令名/单行骨架）取单一真值
 const kdiag = @import("diag/kind.zig"); // 第 208 轮 D76：机读 kind 词→LSP severity 取单一真值 hub（与生成侧 kind_zh 同源）
 const file_io = @import("file_io.zig");
+const check_probe = @import("check_probe.zig"); // 第 347 轮 D206：深检探针 hub（无 main 模块补 build-lib 类型检查的判据单源）
 const registry = @import("lang/registry.zig");
 const userpack = @import("lang/userpack.zig");
 const lsp = @import("lsp/server.zig");
@@ -749,6 +750,32 @@ fn cmdCheck(lang: Pack, table: *Mangle, args: []const []const u8) !void {
             if (e == error.Failed) {
                 any_fail = true;
                 continue; // 继续检查其余文件，汇总所有报错
+            }
+            return e;
+        };
+    }
+    // ③ 深检探针臂（第 347 轮 D206）：`ast-check` **从不做类型检查**，无 main 的库模块光靠它
+    // 会把 `结构 { 上限: 字节 = 300 }`、未引用函数体里的 `甲 + "字符串"` 一类类型错静默放过
+    //（`zzc check` 报「✔ 通过」而 `zzc build` 在同一行崩）。对**每枚**单元（用户拍板「全量模块
+    // 一律深检」，含 main 的根也补）在生成 Zig 尾部追加一枚 comptime 探针、写同目录探针副本，
+    // 再以 build-lib -fno-emit-bin 做完整语义分析（build-exe 对库根会误报「无 member named 'main'」，
+    // 故用 build-lib）。副本名由 hub 的 probe_file_prefix 派生、落 `.zzc/` 树内，故其**自身**形制错由
+    // isInternalPath 归内部路径不外泄，真缺陷按原行列经回译报出（只增尾行、不插中行）。跑毕删副本零残留；
+    // 跨臂同错由 seen 去重（① build-exe 传递性已覆盖者不重复报）。
+    for (proj.units.items) |u| {
+        const probe_src = (check_probe.probeSource(gpa_, u.zig_str) catch continue) orelse continue;
+        defer gpa_.free(probe_src);
+        const stem = std.fs.path.stem(std.fs.path.basename(u.gen_rel));
+        const probe_dir = std.fs.path.dirname(u.gen_rel) orelse zzc.gen_dir;
+        const probe_rel = std.fmt.allocPrint(gpa_, "{s}/{s}{s}" ++ zzc.std_ext, .{ probe_dir, zzc.probe_file_prefix, stem }) catch continue;
+        defer gpa_.free(probe_rel);
+        writeWhole(probe_rel, probe_src) catch continue;
+        defer std.Io.Dir.cwd().deleteFile(io_, probe_rel) catch {};
+        const argv: []const []const u8 = &.{ cli.tl_zig, cli.tl_build_lib, probe_rel, cli.tl_no_emit_bin };
+        zigCompile(lang, table.*, proj, argv, &seen) catch |e| {
+            if (e == error.Failed) {
+                any_fail = true;
+                continue; // 继续检查其余模块，汇总所有报错
             }
             return e;
         };
