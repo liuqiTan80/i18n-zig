@@ -351,6 +351,11 @@ pub fn zonDeclaresVersion(text: []const u8) bool {
 /// needle 由此派生，文档改名不留第二处手抄。
 pub const readme_path: []const u8 = "README.md";
 
+/// 书稿《母语编写 Zig——中文版》的相对路径（第 346 轮 D205 提到本 hub）：此前它只以
+/// `lang/pack.zig` 的 `book_path` 存形，而逐块闸不需依赖包层——两边各持一份即退坡成
+/// 「第二份手抄」（跨侧手抄漂移族），故在此立单源并以测块全等钉住与 `pack.book_path` 同源。
+pub const book_doc_path: []const u8 = "docs/母语编写zig-中文版.md";
+
 /// 对面三十二·`README.md` 版本族 needle 清单（第 296 轮 D155）：README 以多点位手抄产品版本
 /// （本模块 `zzc_version`）与工具链版本（`zig_version`/`zig_series`），而全仓门禁从不读 README——
 /// t2 探针（落码前）五形注入（当前版本 0.1.0→0.2.0／基线 0.17.0→0.16.0 两处／环境表行／
@@ -554,12 +559,124 @@ pub const diag_corpus_sh: []const u8 = "tools/diag-corpus.sh";
 /// 以及 `323 T0` 的目录实计三处互锁；删/增 case 只改一处即分道转红。
 pub const diag_corpus_floor: usize = 3;
 
-/// 对面三十四·ci.yml 调用面：三枚脚本的执行针形（解释器词＋空格＋路径）全由 hub 路径常量
+// —— 教程逐块编译/运行闸（第 346 轮 D205）——
+//
+// 书稿与 README 的 ```zz 代码块是**读者照抄面**，而全仓 `grep '```zz'` 在 tools/ src/ build.zig
+// 零命中——没有任何通道读过 fence：4 枚完整程序从未被机器验过「可编＋输出等值」（书稿 11.3 还写着
+// 「已实测」），19 枚碎片里有 10 枚连 `zzc check` 都过不了（语句片段被当整文件喂出的构造性假错），
+// 9 枚声明碎片只走 `zig ast-check` 浅路（`main.zig` 的 cmdCheck：无 main 的模块不 build-exe）——
+// 类型从未检查。自动包装器两档皆实测不可用（补 main 使完整程序反报 `duplicate struct member name`；
+// 塞函数体使 19 块红在 `expected statement, found 'pub'`／`local constant shadows…`），故块形制
+// **必须写在块自己头上**（fence 信息串标记），未标记的整批建账棘轮，禁新增未标注块。
+
+/// 教程逐块闸脚本路径（守卫对面五十二输入·CI 两面皆须按此调用）。
+pub const book_blocks_smoke_path: []const u8 = "tools/book-blocks-smoke.sh";
+
+/// 文档侧「真跑程序块」的 fence 信息串标记：` ```zz+ `（`+` 作后缀而非新语言名，GitHub 仍按 `zz`
+/// 高亮）。脚本按「行以本串起头」认块——故标记须**逐字**入 hub 单源，脚本与守卫两面共读。
+pub const book_prog_marker: []const u8 = "```zz+";
+
+/// ` ```zz ` 族块总数下限（**独立手设**，承 `diag_corpus_floor` 形制，不从文档抽取——抽取即自证）：
+/// 22 枚（书稿）＋ 1 枚（README）＝ 23。闸按实计与本数**全等**判：新增块即逼作者当场定形制
+/// （标 `zz+` 或入册本数），棘轮只许升不许降。
+pub const book_zz_floor: usize = 23;
+
+/// 一枚真跑程序块的账：文件＋块序号（该文件内 ```zz+ 的第几块，1 基）＋期望输出（逐字节，不含尾换行）。
+/// 行号会随书稿编辑漂移，故定位键用「文件＋序号」而非行号。
+pub const BookProg = struct {
+    file: []const u8,
+    idx: usize,
+    want: []const u8,
+};
+
+/// 真跑程序块表（**独立手抄**：期望输出取自第 346 轮落码前 `zzc run` 活体读数，非从文档正文抽取
+/// ——判据不取自被校文本，承 294/295 轮 T0 与 `demo_entries` 形制）。四枚即取证时仅有的四枚自带
+/// `pub fn main` 的块；序号按各块在文档内的**出现序**数（与脚本抽块同一判据），不是章节号。
+pub const book_prog_entries = [_]BookProg{
+    .{ .file = "docs/母语编写zig-中文版.md", .idx = 1, .want = "数量是：11" }, // 0.2 第一个程序
+    .{ .file = "docs/母语编写zig-中文版.md", .idx = 2, .want = "5" }, // 11.3 三条铁律同框
+    .{ .file = "docs/母语编写zig-中文版.md", .idx = 3, .want = "n=2 首=90" }, // 13.4 ArrayList 正确写法
+    .{ .file = "README.md", .idx = 1, .want = "结果是 11" }, // 快跑示例
+};
+
+/// 真跑块枚数锚（**独立手设**，不可从 `book_prog_entries.len` 抽——抽了就退坡不成）：脚本内
+/// `EXPECT_BLOCKS` 与本节面针、闸内实计三处互锁；标了 `zz+` 而表不随动即分道转红。
+pub const book_prog_floor: usize = 4;
+
+/// 闸脚本里书稿路径变量的引用形（带双引号的 shell 变量名）：`book_prog_face` 的接线针由此派生。
+/// 脚本以 `assert_block "名" "$BOOK_DOC" 序号 "期望"` 逐枚点名，故本串的命中次数就是
+/// 「表内该文件块枚数」的硬账——删一枚接线即 `occ` 不足转红（第 346 轮 D205）。
+pub const book_doc_var_ref: []const u8 = "\"$BOOK_DOC\"";
+
+/// 对面五十二·文档侧命名针：表内每个**不同文件**须被闸脚本按 hub 单源点名，`occ` 取该文件在表
+/// 内的块枚数——文档改名/换文件而表不随动，或脚本只点名一处而表内该文件尚有多块，皆分道转红
+/// （第 346 轮 D205；针串由 `book_doc_path`/`readme_path`/`book_doc_var_ref` 派生，不另立第二份手抄）。
+/// 两枚不同形：路径针只钉**赋值行**（脚本文里裸路径只写一次，钉不住接线数）；接线针钉
+/// `assert_block` 实参位的变量引用形，命中数 = 表内该文件块数——所以下限能咬住删接线。
+pub const book_prog_face = [_]BuildFace{
+    .{ .needle = book_doc_path, .occ = 1, .why = "书稿路径须由 hub 的 book_doc_path 派生入脚本赋值行——文档改名而表/脚本漏随即闸吃旧路径、静默数零块（第 346 轮 D205）" },
+    .{ .needle = readme_path, .occ = 1, .why = "README 路径须由 hub 的 readme_path 派生入脚本赋值行——同上（第 346 轮 D205）" },
+    .{ .needle = book_doc_var_ref, .occ = 3, .why = "书稿侧 `assert_block` 实参位的变量引用形须与表内该文件块枚数同随（三址：0.2／11.3／13.4 各一枚）——删一枚接线即命中不足，闸不得把「少跑一块」报成全过（第 346 轮 D205）" },
+};
+
+/// 对面五十二·脚本面针：条数锚＋认块标记逐字（文档路径两枚另见 `book_prog_face`）。
+pub const book_prog_count_face = [_]BuildFace{
+    .{ .needle = "EXPECT_BLOCKS=" ++ std.fmt.comptimePrint("{d}", .{book_prog_floor}), .why = "脚本块数锚须等于 hub 真跑块锚——分道即块被削或表与锚脱钩（承 D140 空转防线判例，第 346 轮 D205）" },
+    .{ .needle = book_prog_marker, .why = "脚本认块标记须逐字等于 hub 的 book_prog_marker——标记改形而文档不随动即零块可抽，闸空转自绿（第 346 轮 D205）" },
+};
+
+/// 对面五十二·`build.zig` 侧命名针：脚本须声明为守卫步文件依赖（同 202/297 轮跨文件判例）。
+pub const book_prog_build_face = [_]BuildFace{
+    .{ .needle = "check_matcher_run.addFileArg(b.path(\"" ++ book_blocks_smoke_path ++ "\"))", .why = "逐块闸须对 matcher 步声明文件依赖——不声明即改闸脚本不触发重跑，202 轮假绿判例重播（第 346 轮 D205）" },
+};
+
+/// fence 信息串行是否是一枚 `zz` 族块开栏：只认反引号三枚起头且紧接 `zz`
+/// （`zz`/`zz+`/`zz+ prog` 皆算）；**不含**闭合栏（裸 ` ``` ` 不带语言名不算 zz 块）。
+/// 纯函数、零 I/O，计数与抽块共用本判据不另立第二套（第 346 轮 D205）。
+pub fn isZzFenceOpen(line: []const u8) bool {
+    const t = std.mem.trimStart(u8, line, " \t");
+    if (!std.mem.startsWith(u8, t, "```")) return false;
+    return std.mem.startsWith(u8, t[3..], "zz");
+}
+
+/// fence 信息串行是否是**真跑程序块**（`zz+`）开栏：`zz` 后紧跟 `+`，且 `+` 后为行尾或空白
+/// （`zz+x` 不算）。纯函数。
+pub fn isZzProgFenceOpen(line: []const u8) bool {
+    if (!isZzFenceOpen(line)) return false;
+    const t = std.mem.trimStart(u8, line, " \t");
+    const rest = t[5..]; // 跳过 "```zz"
+    if (rest.len == 0 or rest[0] != '+') return false;
+    const after = rest[1..];
+    return after.len == 0 or after[0] == ' ' or after[0] == '\t';
+}
+
+/// 一份 markdown 里的 `zz` 族块总数（逐行扫开栏行，棘轮计数用）。纯函数。
+pub fn countZzFences(txt: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, txt, '\n');
+    while (it.next()) |raw| {
+        if (isZzFenceOpen(raw)) n += 1;
+    }
+    return n;
+}
+
+/// 一份 markdown 里的真跑程序块（`zz+`）总数。纯函数。
+pub fn countZzProgFences(txt: []const u8) usize {
+    var n: usize = 0;
+    var it = std.mem.splitScalar(u8, txt, '\n');
+    while (it.next()) |raw| {
+        if (isZzProgFenceOpen(raw)) n += 1;
+    }
+    return n;
+}
+
+/// 对面三十四·ci.yml 调用面：四枚脚本的执行针形（解释器词＋空格＋路径）全由 hub 路径常量
 /// comptime 派生——脚本改名/移位而 ci.yml 不随动（或反之）即分道转红。
 pub const ci_tools_face = [_]BuildFace{
     .{ .needle = "sh " ++ smoke_sh_path, .why = "CI 须按 hub 路径调用 LSP 长连接冒烟脚本——分道即本地防线与 CI 防线脱钩，CI 到推即断而本地恒绿（281 轮顶注自警在册，第 298 轮 D157）" },
     .{ .needle = "node " ++ esm_js_path, .why = "CI 须按 hub 路径调用客户端 e2e——同上形制（D98 Linux 盲区的唯一客户端通道，失联即双盲回潮，第 298 轮 D157）" },
     .{ .needle = "bash " ++ demos_smoke_path, .why = "CI 须按 hub 路径调用 demo 冒烟——上轮（D156）刚落地的编译防线若改名不随动即静默断链（第 298 轮 D157）" },
+    .{ .needle = "bash " ++ book_blocks_smoke_path, .why = "CI 须按 hub 路径调用教程逐块闸——文档里的照抄面若无通道编译，书稿一漂即静默（第 346 轮 D205）" },
 };
 
 /// 对面三十四·`build.zig` 侧命名针：ci.yml 须被 **matcher 步**（而非只 D73 步）声明为文件依赖——
@@ -872,6 +989,7 @@ pub const ci_gate_cmds = [_][]const u8{
     "zig build -Dtarget=x86_64-windows",
     "zig build -Dtarget=aarch64-macos",
     "bash " ++ demos_smoke_path,
+    "bash " ++ book_blocks_smoke_path,
     "sh " ++ smoke_sh_path,
     "node " ++ esm_js_path,
     "zig build", // 裸构建：必须最后（见上「表序即最长匹配优先」）
@@ -913,7 +1031,7 @@ fn ciGateHits(txt: []const u8) [ci_gate_cmds.len]bool {
     return hit;
 }
 
-/// 一个 CI 面里缺失的命令核枚数（0 = 九条俱全）。纯函数，供守卫与 T0 共用。
+/// 一个 CI 面里缺失的命令核枚数（0 = 逐条俱全）。纯函数，供守卫与 T0 共用。
 pub fn ciGateMissing(txt: []const u8) usize {
     var miss: usize = 0;
     for (ciGateHits(txt)) |h| {
@@ -1502,10 +1620,13 @@ test "第 298 轮 T0 CI 调用面：三枚路径值钉＋执行针与独立 want
     try std.testing.expectEqualStrings("tools/extension-smoke.js", esm_js_path);
     // A2 执行针派生形对拍：want 表独立手抄（与 ci.yml 盘上调用行同源而不经 hub）——
     //    hub 路径/解释器词任一分道即此钉红；盘上 ci.yml 独漂由守卫对面三十四捕。
+    //    第 346 轮 D205 添第四核（教程逐块闸）：表序须与 hub `ci_tools_face` 同序。本钉只保
+    //    「派生不错」；**盘上添步**由 `ciGateMissing`（缺任一核即非 0）捕，故漏写不会静默。
     const want = [_][]const u8{
         "sh tools/lsp-live-smoke.sh",
         "node tools/extension-smoke.js",
         "bash tools/demos-smoke.sh",
+        "bash tools/book-blocks-smoke.sh",
     };
     try std.testing.expectEqual(want.len, ci_tools_face.len); // A3 基数钉
     inline for (ci_tools_face, 0..) |c, i| {
@@ -1687,7 +1808,7 @@ pub fn countFaceDecls(src: []const u8) usize {
 test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     const specs = [_]struct { path: []const u8, src: []const u8, n: usize }{
         .{ .path = "cli/args.zig", .src = @embedFile("cli/args.zig"), .n = 25 },
-        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 28 }, // 第 340 轮 D199：27→28（量化收益两步步名钩子面）
+        .{ .path = "zzc_paths.zig", .src = @embedFile("zzc_paths.zig"), .n = 31 }, // 第 346 轮 D205：28→31（教程逐块闸三张面：文档路径/块数锚与标记/build 依赖）
         .{ .path = "lsp/server.zig", .src = @embedFile("lsp/server.zig"), .n = 12 },
         .{ .path = "editor/lsp_config.zig", .src = @embedFile("editor/lsp_config.zig"), .n = 5 },
         .{ .path = "editor/lang_identity.zig", .src = @embedFile("editor/lang_identity.zig"), .n = 5 },
@@ -1705,7 +1826,7 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
     }
     // 第 341 轮 D200：自巨型 hub 下沉的**实现模块**不得持面表——面表须与其词汇同源，否则「谁持针」
     // 失去单源（matcher 侧的 `checkFace` 只能按文件读文本）。下沉模块在此逐枚登记为零枚：长出第一张
-    // 未审面表即本测红，而不需同步改 matcher 的分项清单（两边仍共 9 hub／82 表）。
+    // 未审面表即本测红，而不需同步改 matcher 的分项清单（两边仍共 9 hub／85 表）。
     const split_impls = [_]struct { path: []const u8, src: []const u8 }{
         .{ .path = "cli/embed_scan.zig", .src = @embedFile("cli/embed_scan.zig") },
         .{ .path = "lsp/server_query.zig", .src = @embedFile("lsp/server_query.zig") },
@@ -1715,8 +1836,8 @@ test "第 323 轮 T0 面表声明数双源夹逼（D182）" {
         if (got != 0) std.debug.print("面表漂位：下沉实现模块 {s} 持有 {d} 张——须迁回其词汇所属 hub\n", .{ im.path, got });
         try std.testing.expectEqual(@as(usize, 0), got);
     }
-    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+19+12+5+5+1+4+1+1）独立手抄对拍。
-    try std.testing.expectEqual(@as(usize, 82), total); // 第 340 轮 D199：81→82（zzc_paths 增量化收益钩子面）
+    // 总数钉：与 matcher 侧 `expectTableCount` 分项之和（25+22+12+5+5+1+4+1+1）独立手抄对拍。
+    try std.testing.expectEqual(@as(usize, 85), total); // 第 346 轮 D205：82→85（zzc_paths 增教程逐块闸三张面）
 }
 
 // 第 340 轮 T0（D199）：量化收益面。上下限与语料形制皆独立手抄值钉（改 hub 必同动本测，否则
@@ -2075,6 +2196,7 @@ test "第 334 轮 T0 CI 镜像面：命令核表序不变量＋归一器正反�
         "zig build -Dtarget=x86_64-windows",
         "zig build -Dtarget=aarch64-macos",
         "bash tools/demos-smoke.sh",
+        "bash tools/book-blocks-smoke.sh",
         "sh tools/lsp-live-smoke.sh",
         "node tools/extension-smoke.js",
         "zig build",
@@ -2090,13 +2212,14 @@ test "第 334 轮 T0 CI 镜像面：命令核表序不变量＋归一器正反�
             try std.testing.expect(!(a.len < b.len and std.mem.startsWith(u8, b, a)));
         }
     }
-    // A4 归一器正形：九条俱全且在带 timeout 前缀/尾参数的现实形下 → 0 缺。
+    // A4 归一器正形：十条俱全且在带 timeout 前缀/尾参数的现实形下 → 0 缺。
     const all = "zig fmt --check src/ build.zig\n" ++
         "timeout 900 zig build test --summary all\n" ++
         "zig build -Doptimize=ReleaseSafe --prefix /tmp/ci-rel\n" ++
         "zig build -Dtarget=x86_64-windows --prefix /tmp/ci-win\n" ++
         "zig build -Dtarget=aarch64-macos --prefix /tmp/ci-mac\n" ++
         "timeout 120 bash tools/demos-smoke.sh\n" ++
+        "timeout 120 bash tools/book-blocks-smoke.sh\n" ++
         "timeout 30 sh tools/lsp-live-smoke.sh\n" ++
         "timeout 300 node tools/extension-smoke.js\n" ++
         "zig build\n";
@@ -2109,6 +2232,7 @@ test "第 334 轮 T0 CI 镜像面：命令核表序不变量＋归一器正反�
         "zig build -Dtarget=x86_64-windows --prefix /tmp/ci-win\n" ++
         "zig build -Dtarget=aarch64-macos --prefix /tmp/ci-mac\n" ++
         "timeout 120 bash tools/demos-smoke.sh\n" ++
+        "timeout 120 bash tools/book-blocks-smoke.sh\n" ++
         "timeout 30 sh tools/lsp-live-smoke.sh\n" ++
         "timeout 300 node tools/extension-smoke.js\n" ++
         "zig build\n";
@@ -2122,7 +2246,7 @@ test "第 334 轮 T0 CI 镜像面：命令核表序不变量＋归一器正反�
         ciGateMissing("# zig build test --summary all\nzig build\n"),
     );
     // A6b 两面宿主形制归一：GitHub 面的 `- run: <命令>` 与 GitCode `run: |` 块内的平铺行归一后同形
-    //     （不剥这两层，镜像面会被误报「九条全缺」——本轮首跑即撞）。
+    //     （不剥这两层，镜像面会被误报「十条全缺」——本轮首跑即撞）。
     try std.testing.expectEqual(
         ci_gate_cmds.len - 2,
         ciGateMissing("      - run: timeout 900 zig build test --summary all\n        run: zig build\n"),
@@ -2211,4 +2335,98 @@ test "第 336 轮 T0 语料面：条数锚＋语料根＋build 依赖三钉与�
     // A6 实名面：三枚针都得写清防什么（无理由的针删了也无从判断）。
     for (diag_corpus_face) |c| try std.testing.expect(c.why.len > 0);
     for (diag_corpus_build_face) |c| try std.testing.expect(c.why.len > 0);
+}
+
+test "第 346 轮 T0 教程逐块闸面：两枚路径单源＋真跑块表与三个纯函数正反形（D205）" {
+    // A1 独立手设值钉（没有一条从被校文档抽）。
+    try std.testing.expectEqual(@as(usize, 23), book_zz_floor);
+    try std.testing.expectEqual(@as(usize, 4), book_prog_floor);
+    // A2 棘轮关系钉：zz 族 ⊇ 真跑块，两轴相等即「全部块都被当真跑要」——那会把 19 枚教材
+    // 片段整批弄红，而它们本就不是完整工程（取证已实锤其中 10 枚连浅检都过不了）。
+    try std.testing.expect(book_zz_floor > book_prog_floor);
+    // A3 路径/标记单源值钉。
+    try std.testing.expectEqualStrings("tools/book-blocks-smoke.sh", book_blocks_smoke_path);
+    try std.testing.expect(std.mem.startsWith(u8, book_blocks_smoke_path, "tools/"));
+    try std.testing.expect(std.mem.endsWith(u8, book_blocks_smoke_path, ".sh"));
+    try std.testing.expectEqualStrings("docs/母语编写zig-中文版.md", book_doc_path);
+    try std.testing.expectEqualStrings("README.md", readme_path);
+    try std.testing.expectEqualStrings("```zz+", book_prog_marker);
+    // 标记与族名两轴不得合写成一枚（`zz` 与 `zz+` 同形即未标记块也被拉进真跑账，19 枚碎片当场全红）。
+    try std.testing.expect(!std.mem.eql(u8, book_prog_marker, "```zz"));
+    // A4 表基数等于独立锚，且 (文件,序号) 键两两不同——同文件同号即抽块会拿同一块对两个期望。
+    try std.testing.expectEqual(book_prog_floor, book_prog_entries.len);
+    for (book_prog_entries, 0..) |a, ai| {
+        for (book_prog_entries[ai + 1 ..]) |b| {
+            if (std.mem.eql(u8, a.file, b.file) and a.idx == b.idx) {
+                return error.DuplicateBookProgKey;
+            }
+        }
+        try std.testing.expect(a.want.len > 0); // 空期望即「跑什码都算对」，闸形同已拆
+        if (!std.mem.eql(u8, a.file, book_doc_path) and !std.mem.eql(u8, a.file, readme_path)) {
+            return error.BookProgFileUnknown;
+        }
+    }
+    // A5 表内按文件分组重数，与面针基数对账（面针基数不从表抽，此处只对）：书稿三枚 → 接线针
+    // `occ = 3`；路径针只钉赋值行（命中 1），故 `occ` 恒 1而与块数无关——两侧各司两轴。
+    var book_n: usize = 0;
+    var readme_n: usize = 0;
+    for (book_prog_entries) |e| {
+        if (std.mem.eql(u8, e.file, book_doc_path)) book_n += 1;
+        if (std.mem.eql(u8, e.file, readme_path)) readme_n += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), book_n);
+    try std.testing.expectEqual(@as(usize, 1), readme_n);
+    try std.testing.expectEqual(book_n, book_prog_face[2].occ);
+    try std.testing.expectEqualStrings(book_doc_path, book_prog_face[0].needle);
+    try std.testing.expectEqualStrings(readme_path, book_prog_face[1].needle);
+    try std.testing.expectEqualStrings(book_doc_var_ref, book_prog_face[2].needle);
+    // 接线针形必须真能钉住 `assert_block` 的实参位：引用形携 shell 双引号，改形即钉不中（反形自校）。
+    try std.testing.expectEqualStrings("\"$BOOK_DOC\"", book_doc_var_ref);
+    // A6 其余派生针形逐字全等（形手抄在此，真值从 hub 走）。
+    try std.testing.expectEqualStrings(
+        "EXPECT_BLOCKS=" ++ std.fmt.comptimePrint("{d}", .{book_prog_floor}),
+        book_prog_count_face[0].needle,
+    );
+    try std.testing.expectEqualStrings(book_prog_marker, book_prog_count_face[1].needle);
+    try std.testing.expectEqualStrings(
+        "check_matcher_run.addFileArg(b.path(\"" ++ book_blocks_smoke_path ++ "\"))",
+        book_prog_build_face[0].needle,
+    );
+    for (book_prog_face ++ book_prog_count_face ++ book_prog_build_face) |c| {
+        try std.testing.expect(c.why.len > 0); // 实名面：无理由的针删了无从判断
+    }
+    // A7 判据纯函数：合成小样正反形（不读仓内文档——那与被校面同源，成自证）。
+    const sample =
+        \\```zz
+        \\const a = 1;
+        \\```
+        \\```zz+
+        \\pub fn main() void {}
+        \\```
+        \\```zz+ prog
+        \\x
+        \\```
+        \\```zig
+        \\const b = 2;
+        \\```
+        \\  ```zz
+        \\y
+        \\```
+    ;
+    try std.testing.expectEqual(@as(usize, 4), countZzFences(sample)); // zz / zz+ / zz+ prog / 缩进 zz（zig 块不计）
+    try std.testing.expectEqual(@as(usize, 2), countZzProgFences(sample)); // zz+ / zz+ prog
+    try std.testing.expect(isZzFenceOpen("```zz"));
+    try std.testing.expect(isZzFenceOpen("```zz+"));
+    try std.testing.expect(isZzFenceOpen("   ```zz json"));
+    try std.testing.expect(!isZzFenceOpen("```")); // 闭合栏不带语言名
+    try std.testing.expect(!isZzFenceOpen("```zig")); // 'i' 不是 'z'——前缀误抢即 zig 块被拉进 zz 账
+    try std.testing.expect(!isZzFenceOpen("~~~zz"));
+    try std.testing.expect(isZzProgFenceOpen("```zz+"));
+    try std.testing.expect(isZzProgFenceOpen("```zz+ prog"));
+    try std.testing.expect(!isZzProgFenceOpen("```zz"));
+    try std.testing.expect(!isZzProgFenceOpen("```zz+prog")); // `+` 后无空白即非本族标记
+    try std.testing.expect(!isZzProgFenceOpen("```zzx"));
+    try std.testing.expectEqual(@as(usize, 0), countZzFences("no fences here"));
+    // A8 零块文档不得报成满账（闸的「一块也没抽到」与「全过」必须可分辨）。
+    try std.testing.expectEqual(@as(usize, 0), countZzProgFences("```zz\nx\n```\n"));
 }

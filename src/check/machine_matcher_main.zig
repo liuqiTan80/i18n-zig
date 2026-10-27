@@ -193,6 +193,12 @@ fn auditAllFaces() void {
     seen_paths += 1;
     auditTable("paths.bookdemo_build_face", paths.bookdemo_build_face, &a);
     seen_paths += 1;
+    auditTable("paths.book_prog_face", paths.book_prog_face, &a); // 第 346 轮 D205：逐块闸读两枚文档路径（occ 取表内该文件块数）
+    seen_paths += 1;
+    auditTable("paths.book_prog_count_face", paths.book_prog_count_face, &a); // 第 346 轮 D205：块数锚＋认块标记两针
+    seen_paths += 1;
+    auditTable("paths.book_prog_build_face", paths.book_prog_build_face, &a); // 第 346 轮 D205：闸脚本对 matcher 步的 addFileArg 针
+    seen_paths += 1;
     auditTable("lsp_srv.methods_face", lsp_srv.methods_face, &a);
     seen_lsp_srv += 1;
     auditTable("lsp_srv.cap_face", lsp_srv.cap_face, &a);
@@ -255,7 +261,7 @@ fn auditAllFaces() void {
     // 豁免登记撤销、全 20 表一律入闸——此前 matcher 侧 `checkFace` 只读 `occ` 并回落 1，声明「九处/两处」
     // 的针在真跑对账里只被要求 1 枚（测试图按 count 精确、守卫步却宽松，两套语义）。
     expectTableCount("src/cli/args.zig", 25, seen_cli);
-    expectTableCount("src/zzc_paths.zig", 28, seen_paths); // 第 340 轮 D199：27→28（量化收益两步步名钩子面）
+    expectTableCount("src/zzc_paths.zig", 31, seen_paths); // 第 346 轮 D205：28→31（教程逐块闸三张面）
     expectTableCount("src/lsp/server.zig", 12, seen_lsp_srv);
     expectTableCount("src/editor/lsp_config.zig", 5, seen_lcfg);
     expectTableCount("src/editor/lang_identity.zig", 5, seen_lid);
@@ -955,20 +961,20 @@ pub fn main(init: std.process.Init) !void {
         fail("FAIL: 无法读取 {s}（{s}）\n", .{ ci_arg, @errorName(e) });
     defer gpa.free(ci_txt);
     checkFace(build_path, &paths.ci_build_face, build); // ci.yml 须对 matcher 步声明文件依赖（步名限定针）
-    checkFace(ci_arg, &paths.ci_tools_face, ci_txt); // 三枚脚本执行针由 hub 路径派生
+    checkFace(ci_arg, &paths.ci_tools_face, ci_txt); // 四枚脚本执行针由 hub 路径派生（第 346 轮 D205 添逐块闸）
     checkFace(readme_arg, &cli_hub.readme_cmd_face, readme); // 八枚命令词针由 sub_* 派生（复用已读 README·零新增 I/O）
 
     // —— 对面四十七：CI 镜像面（第 334 轮 D193）。GitHub 仓加建后本仓有了两个 CI 面：`.gitcode/` 在
     // GitHub 侧从不执行、`.github/` 又不被任何本地守卫读——两面各持一份「该跑哪些门禁」的手抄清单，
     // 改一面忘另一面即「本地全绿、推到某侧才发现少跑」（D157 同根，那时只一个面）。本面把命令核收编
     // 为 hub 单源表 `ci_gate_cmds`，两面逐条必须各含一份；归一器（timeout 秒数/注释/空行）亦在 hub，
-    // 本处只读文、比对与报错。镜像面顺带过 `ci_tools_face` 三枚执行针（两面脚本调用亦须同源）。
+    // 本处只读文、比对与报错。镜像面顺带过 `ci_tools_face` 四枚执行针（两面脚本调用亦须同源）。
     const gh_ci_arg = if (args.len >= 26) args[25] else paths.github_ci_path;
     const gh_ci_txt = std.Io.Dir.cwd().readFileAlloc(io, gh_ci_arg, gpa, .unlimited) catch |e|
         fail("FAIL: 无法读取 {s}（{s}）\n", .{ gh_ci_arg, @errorName(e) });
     defer gpa.free(gh_ci_txt);
     checkFace(build_path, &paths.github_ci_build_face, build); // 两枚步名限定针（matcher 步＋D73 版本步）
-    checkFace(gh_ci_arg, &paths.ci_tools_face, gh_ci_txt); // 三枚脚本执行针在镜像面亦须同源
+    checkFace(gh_ci_arg, &paths.ci_tools_face, gh_ci_txt); // 四枚脚本执行针在镜像面亦须同源
     // 发布面（第 335 轮 D194）：同一份 GitHub CI 文本里的发版 job——tag 触发、写权限、gh 出口、
     // 打包器路径四针；四者缺一即「门禁绿但无人能产出发行件」，与 D193 同根（清单只活在 CI 里）。
     checkFace(gh_ci_arg, &paths.github_release_face, gh_ci_txt);
@@ -1026,6 +1032,36 @@ pub fn main(init: std.process.Init) !void {
     // 的量化防线：一旦有人把依赖摘掉，两面 CI 永不跑它们而本地全绿——本面三枚针只钉住「步存在且入 test」，
     // 读数本身（测块数/占比/每千行毫秒）由两步自校，上限与下限住 hub。
     checkFace(build_path, &paths.metric_build_face, build);
+
+    // —— 对面五十二：教程逐块编译/运行闸（第 346 轮 D205）。书稿与 README 的 ```zz 块是读者照抄面，
+    // 而取证实锤全仓从无通道读过 fence（`grep '```zz'` 在 tools/ src/ build.zig 零命中）：四枚自带 main
+    // 的程序从未被机器验过「可编＋输出等值」（书稿 11.3 还顶着「已实测」），九枚声明碎片只走
+    // `zig ast-check` 浅路（无 main 不 build-exe——类型从未检查），十枚语句碎片连 `zzc check` 都过不了。
+    // 本面只做**声明面与账**：闸脚本自身的 addFileArg／脚本里的块数锚与认块标记／表内四枚期望输出在
+    // 脚本手抄侧逐字在场／zz 族块实计与 hub 锚全等（棘轮）——真编译与输出等值由 `tools/book-blocks-smoke.sh`
+    // 自己跑（行为道）。两面文档不另读：书稿（第 16 片）与 README（第 17 片）已在册，零新增文件读。
+    const book_blocks_arg = if (args.len >= 32) args[31] else paths.book_blocks_smoke_path;
+    const book_blocks_txt = std.Io.Dir.cwd().readFileAlloc(io, book_blocks_arg, gpa, .unlimited) catch |e|
+        fail("FAIL: 无法读取 {s}（{s}）\n", .{ book_blocks_arg, @errorName(e) });
+    defer gpa.free(book_blocks_txt);
+    checkFace(build_path, &paths.book_prog_build_face, build);
+    checkFace(book_blocks_arg, &paths.book_prog_face, book_blocks_txt); // 两枚路径钉赋值行＋一枚接线针钉 assert_block 实参位
+    checkFace(book_blocks_arg, &paths.book_prog_count_face, book_blocks_txt); // 块数锚＋认块标记逐字
+    // 表内每枚期望输出须在脚本文里逐字在场（胶合形制承对面四十五/五十一）：脚本被改成另一串
+    // 而 hub 表不动，即「跑自己的输出、比自己的期望」，闸对文档再无约束力。
+    // `inline for`：`countOccurrences` 的 needle 形参是 comptime（lang_identity:190），逐枚展开方能使
+    // `e.want` 成为编译期已知串——非 inline 的 `for` 会把它降成运行期值而闸红在编译前。
+    inline for (paths.book_prog_entries) |e| {
+        if (lid.countOccurrences(book_blocks_txt, e.want) < 1) {
+            fail("FAIL: 教程逐块闸 {s} 里找不到表内期望输出「{s}」（来自 {s} 第 {d} 枚块）——脚本手抄侧与 hub `book_prog_entries` 分道，闸比的不再是账上的值（第 346 轮 D205）。\n", .{ book_blocks_arg, e.want, e.file, e.idx });
+        }
+    }
+    // 文档侧实计与两枚锚全等：棘轮只许同动。实计走 hub 的纯函数（与闸内 grep 同一判据不另立第二套）。
+    const zz_real = paths.countZzFences(book_txt) + paths.countZzFences(readme);
+    const prog_real = paths.countZzProgFences(book_txt) + paths.countZzProgFences(readme);
+    if (zz_real != paths.book_zz_floor or prog_real != paths.book_prog_floor) {
+        fail("FAIL: 文档侧 zz 族块实计 {d}（锚 {d}）／真跑块 zz+ 实计 {d}（锚 {d}）不同——新增未标注块即当场定形制（标 {s} 或入册 hub `book_zz_floor`），旧块被删/拆标记亦须同动锚；两边分道即「账上有块而文档无块」或「文档有块而账上无名」（第 346 轮 D205）。\n", .{ zz_real, paths.book_zz_floor, prog_real, paths.book_prog_floor, paths.book_prog_marker });
+    }
     const ci_faces = .{ .{ ci_arg, ci_txt }, .{ gh_ci_arg, gh_ci_txt } };
     inline for (ci_faces) |face| {
         var miss_buf: [paths.ci_gate_cmds.len][]const u8 = undefined;
@@ -1252,7 +1288,7 @@ pub fn main(init: std.process.Init) !void {
         .{ smoke_arg, @as(usize, paths.demo_entries.len), @as(usize, paths.demo_entries.len), paths.demos_smoke_path },
     );
     std.debug.print(
-        "、CI 调用面 {s} 三枚脚本执行针（sh／node／bash）与 hub 路径同源且其对 matcher 步 addFileArg 在位，README {s} 八枚命令词针与 cli.sub_* 真值同源",
+        "、CI 调用面 {s} 四枚脚本执行针（sh／node／两枚 bash）与 hub 路径同源且其对 matcher 步 addFileArg 在位，README {s} 八枚命令词针与 cli.sub_* 真值同源",
         .{ ci_arg, readme_arg },
     );
     std.debug.print(
@@ -1282,6 +1318,10 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print(
         "、量化收益两面步名钩子在位 {s}：测映闸的 src/ 输入依赖与两步均挂 test——摘依赖即量化防线退化成手动跑的附件",
         .{build_path},
+    );
+    std.debug.print(
+        "、教程逐块闸 {s} 三面同源（块数锚 {d}／zz 族锚 {d}／认块标记 {s}）：表内 {d} 枚期望输出在脚本手抄侧逐字在场，文档实计 zz {d} 枚·zz+ {d} 枚与两锚全等（真编真跑由脚本自己跑）",
+        .{ book_blocks_arg, paths.book_prog_floor, paths.book_zz_floor, paths.book_prog_marker, @as(usize, paths.book_prog_entries.len), zz_real, prog_real },
     );
     std.debug.print(
         "、书稿图片面 {s} 引用实计 {d} 枚与盘上 {s} svg {d} 枚双向零漂（hidden=ghost=0，独立手设下限 {d}，未逐枚 addFileArg 则盘上增量靠下次他变/CI 全新 cache 兼保）",

@@ -256,6 +256,11 @@ pub fn build(b: *std.Build) void {
     // workflow 的调用与频率、build 侧的依赖声明——三处任一改名不随动即周检静默退化成空转。
     check_matcher_run.addFileArg(b.path("tools/upstream-watch.sh"));
     check_matcher_run.addFileArg(b.path(".github/workflows/upstream-watch.yml"));
+    // 第 346 轮 D205：教程逐块编译/运行闸纳入 matcher 步输入——第 31 片（**仍垫底**，前 30 片
+    // 的 argv 位已被各面对固定）。闸脚本里手抄了四枚期望输出与两枚锚，而文档侧的 `zz+` 标记是
+    // 形制唯一来源；不声明即改闸脚本不触发重跑（202 轮假绿判例），而闸一旦与文档/表分道就只会
+    // 在 CI 上红。两面文档（书稿/README）早已在册（第 16/17 片），本片只需补脚本自身。
+    check_matcher_run.addFileArg(b.path("tools/book-blocks-smoke.sh"));
     check_matcher_step.dependOn(&check_matcher_run.step);
     test_step.dependOn(&check_matcher_run.step);
 

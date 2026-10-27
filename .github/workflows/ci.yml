@@ -55,6 +55,10 @@ jobs:
       - name: demo 冒烟
         run: timeout 120 bash tools/demos-smoke.sh
 
+      # 3.6) 教程逐块编译/运行闸（D205/第 346 轮）：标 `zz+` 的四枚完整程序真编译、真运行、逐字节比对输出
+      - name: 教程逐块闸
+        run: timeout 120 bash tools/book-blocks-smoke.sh
+
       # 4) LSP 长连接 e2e（保持 stdin 打开，覆盖真实客户端路径）
       - name: LSP 长连接 e2e
         run: timeout 30 sh tools/lsp-live-smoke.sh
