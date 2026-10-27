@@ -56,6 +56,19 @@
 - **第三方库母语翻译叠加包 `--lang-overlay`（第 265 轮）**：新增运行期「外部叠加层语言包」接缝——`zzc run/build/check <源> --lang-overlay <包.txt>` 把一份只带自身 `[aliases]/[docs]` 的第三方库叠加层（形如 `contrib/packs/httpz-中文.txt`）经 `Pack.parseInto` **累积并入所选基包之上**（缺省即中文），合并后统一 `validate`（叠加层无须自含 B6 13 契约，由基包撑），与 `--lang`/`--lang-file` 可组合、旗标不透传 zig。首个赞助库叠加包 `contrib/packs/httpz-中文.txt`：把网络/服务端库 `httpz`（karlseguin/http.zig）的公共类型/静态函数限定路径译为中文（`网络服务=httpz`、`网络服务.请求=httpz.Request` 等 11 条，一一对应 `[docs]`）；沿用既有保守翻译边界——模块根/类型限定路径/静态函数只译，实例方法与字段留 ASCII 透传。每条路径均经 `demo/httpz` 真依赖工程 `zig build`（Zig 0.17 + httpz dev）编译坐实（铁律：扩展翻译须经编译器存在性验证，编不过不入库）。本轮为**功能新增**、非消缺；给 `args` 加 `--lang-overlay` 旗标解析/剔除/前缀互不误匹测，给 `registry` 加叠加层运行时并入/`validate` 通过/`$code` 不变测。当前边界：补全仍为声明式、不读叠加层（悬停已于第 267 轮经 `zzc.langOverlay` 补齐）。
 
 ### 修复
+- **`matchDiag` 取最长/最精确命中，过宽模式不再盖掉根因（D208，第 349 轮）**：
+  - 现象（探针实跑）：`matchDiag`（`src/diag/translate.zig`）按包内顺序取**首个**英文子串命中并整条替换。提取 96 条诊断模式互为子串对，查得过宽 `declared here` 与更精确的 `struct declared here`／`function declared here` 互为子串——一旦某条消息同时含二者且宽项排列靠前，就会拿到泛化译文、把真实病因（结构体/函数声明位置）抹平。内置包因精确项恰列在宽项之前而今日侥幸不出错，属**潜在顺序脆性**（新添一条宽模式、或重排即触发）。另用户原话另有一层（未命中后 `localizeRunner` 半译可过 `detectEnglish` 而不再附原文）——但把未命中默认改吐原文会违反本仓最高原则「零英文泄漏」（回退历次 leak-sweep），且 `--raw` 旗标需连带 args 单源/help/near-miss/usage/退码/文档三面/matcher 面表一大轮守卫随动→**缓行**，本轮只取最精确命中这一自包含面。
+  - 修：`matchDiag` 改为遍历全表取 **pattern 最长**的命中（仅严格更长才替换、等长保留先列者）——使精确度不再取决于作者书写顺序。内置 96 条模式下行为与改前逐字全同（唯一互子串族精确项本就更长）→现有译结测／demo 零回归；空 pattern 已由包解析拒收（`len==0` 永不过 `best_len` 初值 0）。
+  - 测：新增一枚命名测块（合成包故意把宽 `declared here` 列在精确 `struct declared here` 之前 → 断最长命中取精确保根因；反证仅含宽时仍命中宽；miss 路仍返原消息）。演漂＝改前先跑红（首个命中取到泛化译文、TestExpectedEqual）→改后转绿，非永真伪钉。
+  - 门禁：`zig build test` rc=0（无真实红测）、`zig build` 0、`check-machine-matcher` rc=0（**9 hub／86 表／457 针**、本轮零新针）、`zig fmt` 0、`demos-smoke` **PASS: 24 项**。
+
+- **`@TypeOf(undefined)` 这类内建类型表达式不再被纯母语过滤器误伤（D207，第 348 轮）**：
+  - 现象（改前探针实跑 `.scratch/d207`）：`detectEnglish("@TypeOf(undefined)")` 返 TRUE，`"类型须编译期已知：@TypeOf(undefined)"` 亦 TRUE——一个刻意保留的 ASCII 内建表达式把整条母语消息拖进 `filterMessage` 兑底，输出被包成未翻译兑底形＋`原文:`。而 `@as(u8, 1)`、`Optional(u8)` 却不误判。
+  - 根因（`src/diag/pure_filter.zig` 的 `detectEnglish` 词链启发）：`@` 属断链符、会把前一长词的链清零，但**紧随 `@` 的内建名（`TypeOf` ≥ min）自己又会新起链**，再借 `(` 属「保链标点」把参数里的 `undefined`（≥ min）接上 → 两长词成链即误判。旧顶注早已把「内建 @constCast」列为不拦截的操作数实体（B2 边界），但仅在孤立形下成立，一旦内建带括号参数就穿帮。（注：用户原话「进白名单」不可行——`Whitelist.check` 是整条消息全等匹配，无法豁免嵌在句中的子表达式；按意图应将 `@` 紧邻词归操作数领土，故修在 `detectEnglish`。）
+  - 修：`detectEnglish` 在非 ASCII 字母词分支前加一查——字母run 的直接前驱为 `@` 即判为 Zig 内建操作数，既不续前链也不起新链（`chain=false` 后跳过）。英文散文恒不含 `@`，按操作数处理无漏判真实泄漏的风险；严格模式 `detectAnyRun` 没有本路径、不受影响。
+  - 测：新增一枚命名测块（`@TypeOf(undefined)` 孤立／嵌入母语句／前置动词三形皆放行 + 反形 `expected type found undefined here` 仍拦 + 承 B2 边界的 `@constCast` 放行）。演漂＝落码前先跑红（断言在旧码上 TestUnexpectedResult）、落码后转绿，非永真伪钉。
+  - 陷阱入册：本测初版注释里写了 `[未翻译]` 方括号字面量，触发 D107「未翻译标记族反锚」（该字面量全源码只允出现在定义行＋值钉行共 2 次）而附带红——注释提及标记名时不得内联方括号字面量。门禁：`zig build test` rc=0（日志现 0.17 已知 `failed command` 行、按 341 轮口径不当失败）、`zig build` 0、`check-machine-matcher` rc=0（**9 hub／86 表／457 针**全名实相符、本轮零新针）、`demos-smoke` **PASS: 24 项**（端到端报错输出无回归）。
+
 - **最常撞见的三族报错还是英文：未使用值 / 丢弃值 / 局部遮蔽（D192，第 333 轮）**
   - 现象（改前真跑）：`危險(0);` 把非 `空`（void）值当语句丢掉时，首行是 `错误: value of 类型 'i64' ignored`（半中半英），紧跟两条 `说明: [未翻译] 此报错暂未提供中文翻译`，再各附一行 `原文: all non-void values must be used` / `to discard the value, assign it to '_'`；`對於 (0..3) |i|` 捕获不用只报 `unused capture`；内层绑定遮蔽外层同名时 8 形全英文（`local variable 'x' shadows local constant from outer scope` 一族）。
   - 根因：D190 把 parser 族按 `Ast.zig` 的 `writeAll` 全集对账补齐，但 AstGen/Sema 的报文不在 shipped 源码里，没有可枚举清单，只能逐形造真值；三族因此一直缺席。另 `runner_pairs` 只有 `type '` 单段短语，把 `value of type 'i64' ignored` 译成 `value of 类型 'i64' ignored`——中英混排且不带「未翻译」标记，读者两头都不顺。

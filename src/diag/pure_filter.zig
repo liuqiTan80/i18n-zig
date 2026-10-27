@@ -233,6 +233,15 @@ pub const PureFilter = struct {
             if (std.ascii.isAlphabetic(c)) {
                 var j = i;
                 while (j < text.len and std.ascii.isAlphabetic(text[j])) j += 1;
+                // `@` 紧邻的字母词是 Zig 内建（@TypeOf/@constCast/@memcpy…）——按 B2 边界属操作数领土，
+                // 既不续前链也不起新链（第 348 轮 D207：旧此位仅靠 `@` 自身断链，但紧随的内建名仍会
+                // 新起链、再借 `(` 保链把内建参数里的长词接上，致 `@TypeOf(undefined)` 这类类型表达式
+                // 被误判英文残留。英文散文恒不含 `@`，故按操作数处理无漏判真实泄漏的风险）。
+                if (i > 0 and text[i - 1] == '@') {
+                    chain = false;
+                    i = j;
+                    continue;
+                }
                 if (j - i >= self.config.min_english_length) {
                     if (chain) return true;
                     chain = true;
@@ -419,6 +428,24 @@ test "detectEnglish - B2 边界：孤立操作数不误拦" {
     // 注：点号 `.` 属句读标点、保持链（非断链），行为与用例见下方「点号保持链」专项测。
     try std.testing.expect(!filter.detectEnglish("值 comptime_int 无效"));
     try std.testing.expect(!filter.detectEnglish("字段 my_variable 缺失"));
+}
+
+// 第 348 轮 D207：`@TypeOf(undefined)` 这类 Zig 内建类型表达式是刻意保留的 ASCII 操作数，
+// 不应被 detectEnglish 误判为英文残留（否则整条母语消息被兜底译文套住，即用户所指「误伤」）。
+test "detectEnglish - Zig 内建类型表达式 @TypeOf(undefined) 属操作数领土·不误判英文残留（第 348 轮 D207）" {
+    const gpa = std.testing.allocator;
+    var filter = try PureFilter.init(gpa, .{}, null);
+    defer filter.deinit();
+
+    // 内建名(≥min) 旧仅靠前置 `@` 断链，但内建名自身仍会新起链、再借 `(` 保链把参数里的 ≥min 词接成链
+    // → `@TypeOf(undefined)` 被误判。修后 `@` 紧邻词作操作数、既不续前链也不起新链。
+    try std.testing.expect(!filter.detectEnglish("@TypeOf(undefined)"));
+    try std.testing.expect(!filter.detectEnglish("类型须编译期已知：@TypeOf(undefined)"));
+    try std.testing.expect(!filter.detectEnglish("使用 @TypeOf(undefined) 求类型"));
+    // 反形：不含 `@` 的真英文句仍须判残留——改动不得放过真实泄漏。
+    try std.testing.expect(filter.detectEnglish("expected type found undefined here"));
+    // 既有孤立内建操作数放行不变（承 B2 边界与点号保链两测）。
+    try std.testing.expect(!filter.detectEnglish("建议使用 @constCast 处理"));
 }
 
 test "detectEnglish - 点号属句读标点·保持链（刻意·零英文泄漏优先；防按旧误注改码致漏检回归）" {

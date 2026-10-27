@@ -87,12 +87,19 @@ pub fn unmangleText(gpa: std.mem.Allocator, text: []const u8, table: Mangle) ![]
 /// 按语言包 diagnostics 表匹配消息译文模板与提示；未命中返回原消息。
 /// 采用子串匹配（而非仅前缀）：zig 常把诊断短语嵌在主题之后，
 /// 如 `root source file struct 'main' has no member named 'x'`，仅前缀会漏匹、造成英文泄漏。
+/// 取**最长（最精确）**命中而非首个（第 349 轮 D208）：多个模式同时命中时，短/宽模式不得因
+/// 排列靠前而盖掉更精确项、把真实病因替换成误导译文（「次级模式覆盖根因」）。等长时保留
+/// 先列者（仅严格更长才替换），使既有同长条目的顺序语义不变。空 pattern 已由包解析拒收。
 fn matchDiag(lang: Pack, msg: []const u8) struct { message: []const u8, tip: []const u8, matched: bool } {
+    var best: ?Pack.Entry = null;
+    var best_len: usize = 0;
     for (lang.diagnostics.items) |e| {
-        if (std.mem.indexOf(u8, msg, e.pattern) != null) {
-            return .{ .message = e.message, .tip = e.tip, .matched = true };
+        if (e.pattern.len > best_len and std.mem.indexOf(u8, msg, e.pattern) != null) {
+            best = e;
+            best_len = e.pattern.len;
         }
     }
+    if (best) |b| return .{ .message = b.message, .tip = b.tip, .matched = true };
     return .{ .message = msg, .tip = "", .matched = false };
 }
 
@@ -3483,4 +3490,33 @@ test "第 333 轮 T0 局部遮蔽八形：短语保名且无中英混排（D192�
     const inv = try localizeRunner(std.testing.allocator, "'struct 甲' is invalid");
     defer std.testing.allocator.free(inv);
     try std.testing.expectEqualStrings("'struct 甲' 无效", inv);
+}
+
+// 第 349 轮 D208：matchDiag 取最长（最精确）命中，而非首个——消除过宽模式因排列靠前而盖掉
+// 精确项、把真实病因替换成误导译文的「次级模式覆盖根因」。内置包中 `declared here`（宽）与
+// `struct/function declared here`（精确）互为子串，旧仅靠精确项列在前列幸免——本轮把该顺序脆性根除。
+test "matchDiag 取最长/最精确命中，过宽模式不因排列靠前盖掉精确项（第 349 轮 D208）" {
+    const gpa = std.testing.allocator;
+    // 合成包：故意把过宽模式 `declared here` 列在精确模式 `struct declared here` 之前。
+    const raw =
+        \\$code = zh
+        \\[keywords]
+        \\常数 = const
+        \\[diagnostics]
+        \\宽 = declared here|泛化译文|泛化提示
+        \\精 = struct declared here|结构体声明在此|结构体提示
+    ;
+    var pack = try Pack.parse(gpa, raw);
+    defer pack.deinit();
+    // 消息同时含二者：首个命中会取「宽」（错），最长命中须取「精」（保根因）。
+    const m = matchDiag(pack, "struct declared here");
+    try std.testing.expect(m.matched);
+    try std.testing.expectEqualStrings("结构体声明在此", m.message);
+    // 反证：只含宽模式、精确项不在其中时，仍命中宽（不得因为「最长优先」而无精确项就漏判）。
+    const m2 = matchDiag(pack, "variable declared here");
+    try std.testing.expect(m2.matched);
+    try std.testing.expectEqualStrings("泛化译文", m2.message);
+    // 未命中仍返原消息（matched=false），本轮改动不影响 miss 路。
+    const m3 = matchDiag(pack, "totally unrelated");
+    try std.testing.expect(!m3.matched);
 }
